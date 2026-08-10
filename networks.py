@@ -21,20 +21,6 @@ class LambdaLayer(nn.Module):
         return self.lambd(x)
 
 
-class RMSNorm(nn.RMSNorm):
-    """DreamerV3-style RMSNorm with float32 statistics and output casting."""
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dtype = x.dtype
-        value = x.float()
-        dims = tuple(range(-len(self.normalized_shape), 0))
-        mean_square = value.square().mean(dims, keepdim=True)
-        value = value * torch.rsqrt(mean_square + self.eps)
-        if self.weight is not None:
-            value = value * self.weight.float()
-        return value.to(dtype)
-
-
 class BlockLinear(nn.Module):
     """Block-wise linear layer.
 
@@ -67,7 +53,7 @@ class BlockLinear(nn.Module):
         # Merge block dimension back.
         # (..., G, O/G) -> (..., O)
         x = x.reshape(*batch_shape, self.out_ch)
-        return x + self.bias.to(x.dtype)
+        return x + self.bias
 
 
 class Conv2dSamePad(nn.Conv2d):
@@ -99,7 +85,7 @@ class Conv2dSamePad(nn.Conv2d):
         )
 
 
-class RMSNorm2D(RMSNorm):
+class RMSNorm2D(nn.RMSNorm):
     """RMSNorm over channel-last format applied to 4D tensors."""
 
     def __init__(self, ch: int, eps: float = 1e-3, dtype=None):
@@ -270,10 +256,10 @@ class ConvDecoder(nn.Module):
         u, g = math.prod(self.min_shape), self.bspace
         self.sp0 = BlockLinear(deter, u, g)
         self.sp1 = nn.Sequential(
-            nn.Linear(flat_stoch, 2 * self.units), RMSNorm(2 * self.units, eps=1e-04, dtype=torch.float32), act()
+            nn.Linear(flat_stoch, 2 * self.units), nn.RMSNorm(2 * self.units, eps=1e-04, dtype=torch.float32), act()
         )
         self.sp2 = nn.Linear(2 * self.units, math.prod(self.min_shape))
-        self.sp_norm = nn.Sequential(RMSNorm(self.depths[-1], eps=1e-04, dtype=torch.float32), act())
+        self.sp_norm = nn.Sequential(nn.RMSNorm(self.depths[-1], eps=1e-04, dtype=torch.float32), act())
         layers = []
         in_dim = self.depths[-1]
         for depth in reversed(self.depths[:-1]):
@@ -380,7 +366,7 @@ class MLP(nn.Module):
         self.layers = nn.Sequential()
         for i in range(config.layers):
             self.layers.add_module(f"{config.name}_linear{i}", nn.Linear(inp_dim, config.units, bias=True))
-            self.layers.add_module(f"{config.name}_norm{i}", RMSNorm(config.units, eps=1e-04, dtype=torch.float32))
+            self.layers.add_module(f"{config.name}_norm{i}", nn.RMSNorm(config.units, eps=1e-04, dtype=torch.float32))
             self.layers.add_module(f"{config.name}_act{i}", act())
             inp_dim = config.units
         self.out_dim = config.units

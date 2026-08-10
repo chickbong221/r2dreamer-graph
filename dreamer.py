@@ -96,7 +96,6 @@ class Dreamer(nn.Module):
             self.act_dim,
             semantic=self.graph_enabled,
             graph_token_size=int(config.graph.units) if self.graph_enabled else 0,
-            compute_dtype=self._amp_dtype,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -124,7 +123,6 @@ class Dreamer(nn.Module):
 
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
-        self._skipped_updates = 0
         self._replay_input_checked = False
 
         modules = {
@@ -217,9 +215,8 @@ class Dreamer(nn.Module):
             betas=(config.beta1, config.beta2),
             eps=config.eps,
         )
-        # bfloat16 has float32's exponent range and does not need loss scaling.
-        # DreamerV3's reference configuration also uses bfloat16. FP16 causes
-        # the 100M recurrent rollout to overflow before the first optimizer step.
+        # Match the working r2dreamer AMP path: FP16 training uses dynamic loss
+        # scaling; full-precision acting does not use the scaler.
         self._scaler = GradScaler(
             enabled=self.device.type == "cuda" and self._amp_dtype == torch.float16
         )
@@ -247,14 +244,6 @@ class Dreamer(nn.Module):
                 for v, s in zip(self.value.parameters(), self._slow_value.parameters()):
                     s.data.copy_(mix * v.data + (1 - mix) * s.data)
         self._slow_value_updates += 1
-
-    def _amp_context(self):
-        """Shared DreamerV3 compute policy for acting, training, and reports."""
-        return autocast(
-            device_type=self.device.type,
-            dtype=self._amp_dtype,
-            enabled=self.device.type in ("cpu", "cuda"),
-        )
 
     def train(self, mode=True):
         super().train(mode)
@@ -342,43 +331,37 @@ class Dreamer(nn.Module):
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
         p_obs = self.preprocess(obs)
-        with self._amp_context():
-            # (B, E)
-            embed = self._frozen_encoder(p_obs)
-            graph_token = (
-                self._frozen_graph_encoder(graph_from(p_obs)).token
-                if self.graph_enabled
-                else None
-            )
-            if graph_token is not None:
-                graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
-            prev_stoch = state["stoch"]
-            prev_deter = state["deter"]
-            prev_action = state["prev_action"]
-            # (B, S, K), (B, D)
-            result = self._frozen_rssm.obs_step(
-                prev_stoch,
-                prev_deter,
-                prev_action,
-                embed,
-                obs["is_first"],
-                sem=state.get("sem") if self.graph_enabled else None,
-                graph_token=graph_token,
-            )
-            if self.graph_enabled:
-                stoch, deter, _, sem, _ = result
-            else:
-                stoch, deter, _ = result
-                sem = None
-            # (B, F)
-            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
-            action_dist = self._frozen_actor(feat)
-            # (B, A)
-            action = action_dist.mode if eval else action_dist.rsample()
+        # Keep policy collection in float32, matching the working r2dreamer
+        # implementation. AMP is used only by the training update.
+        embed = self._frozen_encoder(p_obs)
+        graph_token = (
+            self._frozen_graph_encoder(graph_from(p_obs)).token
+            if self.graph_enabled
+            else None
+        )
+        if graph_token is not None:
+            graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
+        prev_stoch = state["stoch"]
+        prev_deter = state["deter"]
+        prev_action = state["prev_action"]
+        result = self._frozen_rssm.obs_step(
+            prev_stoch,
+            prev_deter,
+            prev_action,
+            embed,
+            obs["is_first"],
+            sem=state.get("sem") if self.graph_enabled else None,
+            graph_token=graph_token,
+        )
+        if self.graph_enabled:
+            stoch, deter, _, sem, _ = result
+        else:
+            stoch, deter, _ = result
+            sem = None
+        feat = self._frozen_rssm.get_feat(stoch, deter, sem)
+        action_dist = self._frozen_actor(feat)
+        action = action_dist.mode if eval else action_dist.rsample()
 
-        # Match the original JAX host/replay boundary: compute in bfloat16,
-        # expose recurrent state and actions as float32, and cast them back on
-        # entry to the next policy or training call.
         action = to_f32(action)
         entries = {
             "stoch": to_f32(stoch),
@@ -403,9 +386,7 @@ class Dreamer(nn.Module):
     def video_pred(self, data, initial):
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        with self._amp_context():
-            result = self._video_pred(p_data, initial)
-        return to_f32(result)
+        return self._video_pred(p_data, initial)
 
     def _video_pred(self, data, initial):
         """Video prediction utility."""
@@ -460,19 +441,12 @@ class Dreamer(nn.Module):
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
-        with self._amp_context():
+        with autocast(
+            device_type=self.device.type,
+            dtype=self._amp_dtype,
+            enabled=self.device.type in ("cpu", "cuda"),
+        ):
             posterior, mets = self._cal_grad(p_data, initial)
-        # bfloat16 runs without a loss scaler, so nothing else screens this out.
-        finite = bool(torch.isfinite(mets["opt/loss"]))
-        if not finite:
-            self._skipped_updates += 1
-            if self._skipped_updates == 1:
-                print(
-                    "[dreamer] non-finite loss on a training batch; skipping the "
-                    "optimizer step. Check episode/nonfinite_obs for a diverged "
-                    "simulator scene.",
-                    flush=True,
-                )
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
             self._prototypes.grad.zero_()
@@ -484,14 +458,12 @@ class Dreamer(nn.Module):
             mets["opt/grad_norm"] = grad_norm
             mets["opt/grad_rms"] = grad_rms
         self._agc(self._named_params.values())  # clipping
-        if finite:
-            self._scaler.step(self._optimizer)  # update params
+        self._scaler.step(self._optimizer)  # update params, or skip on non-finite gradients
         self._scaler.update()  # adjust scale
         self._scheduler.step()  # increment scheduler
         self._optimizer.zero_grad(set_to_none=True)  # reset grads
         mets["opt/lr"] = self._scheduler.get_lr()[0]
         mets["opt/grad_scale"] = self._scaler.get_scale()
-        mets["opt/skipped"] = self._skipped_updates
         if self._log_grads:
             updates = [(new - old) for (new, old) in zip(self._named_params.values(), old_params)]
             update_rms = tools.compute_rms(updates)
@@ -500,8 +472,7 @@ class Dreamer(nn.Module):
             mets["opt/update_rms"] = update_rms
         metrics.update(mets)
         # update latent vectors in replay buffer
-        if finite:
-            replay_buffer.update(index, *(value.detach() for value in posterior))
+        replay_buffer.update(index, *(value.detach() for value in posterior))
         return metrics
 
     def _cal_grad(self, data, initial):

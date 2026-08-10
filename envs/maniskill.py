@@ -41,8 +41,6 @@ def _select_build_configs(task_plans, count: int):
 class ManiSkillVecEnv:
     """OnlineTrainer-compatible wrapper around one ManiSkill GPU vector env."""
 
-    _nonfinite_seen = False
-
     def __init__(self, config: Any):
         import mani_skill.envs  # noqa: F401 - register ManiSkill tasks
         import mshab.envs  # noqa: F401 - register MS-HAB tasks
@@ -210,7 +208,6 @@ class ManiSkillVecEnv:
             "log_success_once",
             "log_success_at_end",
             "log_fail_once",
-            "log_nonfinite_obs",
         ):
             spaces[key] = gym.spaces.Box(
                 -np.inf, np.inf, shape=(1,), dtype=np.float32
@@ -279,29 +276,6 @@ class ManiSkillVecEnv:
             )
         return logs
 
-    def _clip_nonfinite(self, data):
-        """Clip inf/NaN from a diverged scene and count the scenes it hits."""
-        checked = {key: ~torch.isfinite(data[key]) for key in ("state", "reward")}
-        flags = torch.zeros(self._num_envs, 1, dtype=torch.bool, device=self._device)
-        for mask in checked.values():
-            flags |= mask.reshape(self._num_envs, -1).any(-1, keepdim=True)
-        if not ManiSkillVecEnv._nonfinite_seen and bool(flags.any()):
-            ManiSkillVecEnv._nonfinite_seen = True
-            for key, mask in checked.items():
-                where = torch.nonzero(mask.reshape(self._num_envs, -1))
-                if not len(where):
-                    continue
-                print(
-                    f"[env] non-finite {key}: {len(where)} value(s), first in "
-                    f"env {int(where[0, 0])} column {int(where[0, 1])}; clipped "
-                    "and counted as log_nonfinite_obs",
-                    flush=True,
-                )
-        for key in checked:
-            data[key] = torch.nan_to_num(data[key], nan=0.0, posinf=1e6, neginf=-1e6)
-        data["log_nonfinite_obs"] = flags.to(torch.float32)
-        return data
-
     def _transition(self, obs, reward, terminated, truncated, is_first, logs=None):
         done = np.asarray(terminated, bool) | np.asarray(truncated, bool)
         data = {
@@ -337,7 +311,6 @@ class ManiSkillVecEnv:
                 float(self._graph.cache_entries),
                 device=self._device,
             )
-        self._clip_nonfinite(data)
         return TensorDict(data, batch_size=(self._num_envs,), device=self._device)
 
     def step(self, action: torch.Tensor, reset: torch.Tensor):

@@ -46,9 +46,9 @@ class Buffer:
         return data, index, initial
 
     def update(self, index, stoch, deter, sem=None):
-        # Acting/replay state is stored as float32, while DreamerV3 model
-        # compute returns bfloat16 latents. Restore the replay boundary before
-        # indexed assignment (TensorDict requires an exact dtype match).
+        # Replay state is float32. Move model outputs back to that storage
+        # boundary before indexed assignment (TensorDict requires exact dtype
+        # and device matches).
         stoch = stoch.to(device=self.storage_device, dtype=torch.float32)
         deter = deter.to(device=self.storage_device, dtype=torch.float32)
         if sem is not None:

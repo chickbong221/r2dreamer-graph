@@ -3,7 +3,7 @@ from torch import distributions as torchd
 from torch import nn
 
 import distributions as dists
-from networks import BlockLinear, LambdaLayer, RMSNorm
+from networks import BlockLinear, LambdaLayer
 from tools import rpad, weight_init_
 
 
@@ -16,18 +16,18 @@ class Deter(nn.Module):
         self.dynlayers = int(dynlayers)
         act = getattr(torch.nn, act)
         self._dyn_in0 = nn.Sequential(
-            nn.Linear(deter, hidden, bias=True), RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
+            nn.Linear(deter, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
         )
         self._dyn_in1 = nn.Sequential(
-            nn.Linear(stoch, hidden, bias=True), RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
+            nn.Linear(stoch, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
         )
         self._dyn_in2 = nn.Sequential(
-            nn.Linear(act_dim, hidden, bias=True), RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
+            nn.Linear(act_dim, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
         )
         self._dyn_in3 = (
             nn.Sequential(
                 nn.Linear(semantic_size, hidden, bias=True),
-                RMSNorm(hidden, eps=1e-04, dtype=torch.float32),
+                nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32),
                 act(),
             )
             if semantic_size
@@ -38,7 +38,7 @@ class Deter(nn.Module):
         in_ch = (input_count * hidden + deter // self.blocks) * self.blocks
         for i in range(self.dynlayers):
             self._dyn_hid.add_module(f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks))
-            self._dyn_hid.add_module(f"norm_{i}", RMSNorm(deter, eps=1e-04, dtype=torch.float32))
+            self._dyn_hid.add_module(f"norm_{i}", nn.RMSNorm(deter, eps=1e-04, dtype=torch.float32))
             self._dyn_hid.add_module(f"act_{i}", act())
             in_ch = deter
         self._dyn_gru = BlockLinear(in_ch, 3 * deter, self.blocks)
@@ -100,7 +100,6 @@ class RSSM(nn.Module):
         act_dim,
         semantic=False,
         graph_token_size=0,
-        compute_dtype=torch.bfloat16,
     ):
         super().__init__()
         self._stoch = int(config.stoch)
@@ -116,7 +115,6 @@ class RSSM(nn.Module):
         self._img_layers = int(config.img_layers)
         self._dyn_layers = int(config.dyn_layers)
         self._blocks = int(config.blocks)
-        self._compute_dtype = compute_dtype
         self.semantic = bool(semantic)
         self.flat_stoch = self._stoch * self._discrete
         if self.semantic:
@@ -143,7 +141,7 @@ class RSSM(nn.Module):
         inp_dim = self._deter + embed_size + self.flat_sem
         for i in range(self._obs_layers):
             self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._obs_net.add_module(f"obs_net_n_{i}", RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
             self._obs_net.add_module(f"obs_net_a_{i}", act())
             inp_dim = self._hidden
         self._obs_net.add_module("obs_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete, bias=True))
@@ -156,7 +154,7 @@ class RSSM(nn.Module):
         inp_dim = self._deter + self.flat_sem
         for i in range(self._img_layers):
             self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._img_net.add_module(f"img_net_n_{i}", RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
             self._img_net.add_module(f"img_net_a_{i}", act())
             inp_dim = self._hidden
         self._img_net.add_module("img_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete))
@@ -173,12 +171,6 @@ class RSSM(nn.Module):
             )
         self.apply(weight_init_)
 
-    def _cast_compute(self, value):
-        """Cast floating activations only while the shared AMP policy is active."""
-        if torch.is_autocast_enabled(value.device.type) and torch.is_floating_point(value):
-            return value.to(self._compute_dtype)
-        return value
-
     def _semantic_head(self, inp_dim, act_name, name):
         act = getattr(torch.nn, act_name)
         net = nn.Sequential()
@@ -186,7 +178,7 @@ class RSSM(nn.Module):
             net.add_module(f"{name}_{index}", nn.Linear(inp_dim, self._hidden, bias=True))
             net.add_module(
                 f"{name}_norm_{index}",
-                RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32),
+                nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32),
             )
             net.add_module(f"{name}_act_{index}", act())
             inp_dim = self._hidden
@@ -267,10 +259,6 @@ class RSSM(nn.Module):
     def obs_step(self, stoch, deter, prev_action, embed, reset, sem=None, graph_token=None):
         """Single posterior step."""
         # (B, S, K), (B, D), (B, A), (B, E), (B,)
-        stoch = self._cast_compute(stoch)
-        deter = self._cast_compute(deter)
-        prev_action = self._cast_compute(prev_action)
-        embed = self._cast_compute(embed)
         stoch = torch.where(rpad(reset, stoch.dim() - int(reset.dim())), torch.zeros_like(stoch), stoch)
         deter = torch.where(rpad(reset, deter.dim() - int(reset.dim())), torch.zeros_like(deter), deter)
         prev_action = torch.where(
@@ -279,8 +267,6 @@ class RSSM(nn.Module):
         if self.semantic:
             if sem is None or graph_token is None:
                 raise ValueError("semantic obs_step requires sem and graph_token")
-            sem = self._cast_compute(sem)
-            graph_token = self._cast_compute(graph_token)
             sem = torch.where(rpad(reset, sem.dim() - int(reset.dim())), torch.zeros_like(sem), sem)
 
         # Deterministic transition then posterior logits conditioned on embed.
@@ -290,7 +276,7 @@ class RSSM(nn.Module):
             sem_logit = self._sem_obs(
                 torch.cat([deter, sem.reshape(sem.shape[0], -1), graph_token], -1)
             )
-            sem = self._cast_compute(self.get_sem_dist(sem_logit).rsample())
+            sem = self.get_sem_dist(sem_logit).rsample()
         # (B, D + E)
         inputs = [deter]
         if self.semantic:
@@ -302,18 +288,13 @@ class RSSM(nn.Module):
 
         # Sample discrete stochastic state via straight-through Gumbel-Softmax.
         # (B, S, K)
-        stoch = self._cast_compute(self.get_dist(logit).rsample())
+        stoch = self.get_dist(logit).rsample()
         if self.semantic:
             return stoch, deter, logit, sem, sem_logit
         return stoch, deter, logit
 
     def img_step(self, stoch, deter, prev_action, sem=None):
         """Single prior step (no observation)."""
-
-        stoch = self._cast_compute(stoch)
-        deter = self._cast_compute(deter)
-        prev_action = self._cast_compute(prev_action)
-        sem = None if sem is None else self._cast_compute(sem)
 
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action, sem)
@@ -331,15 +312,13 @@ class RSSM(nn.Module):
         """Compute prior distribution parameters and sample stoch."""
 
         # (B, S, K)
-        deter = self._cast_compute(deter)
         inputs = [deter]
         if self.semantic:
             if sem is None:
                 raise ValueError("semantic prior requires sem")
-            sem = self._cast_compute(sem)
             inputs.append(sem.reshape(*sem.shape[:-2], -1))
         logit = self._img_net(torch.cat(inputs, -1))
-        stoch = self._cast_compute(self.get_dist(logit).rsample())
+        stoch = self.get_dist(logit).rsample()
         return stoch, logit
 
     def imagine_with_action(self, stoch, deter, actions, sem=None):
@@ -366,8 +345,6 @@ class RSSM(nn.Module):
     def get_feat(self, stoch, deter, sem=None):
         """Flatten stoch and concatenate with deter."""
         # (B, S, K), (B, D)
-        stoch = self._cast_compute(stoch)
-        deter = self._cast_compute(deter)
         # (B, S*K)
         stoch = stoch.reshape(*stoch.shape[:-2], self._stoch * self._discrete)
         # (B, S*K + D)
@@ -375,7 +352,6 @@ class RSSM(nn.Module):
         if self.semantic:
             if sem is None:
                 raise ValueError("semantic features require sem")
-            sem = self._cast_compute(sem)
             parts.append(sem.reshape(*sem.shape[:-2], self.flat_sem))
         parts.append(deter)
         return torch.cat(parts, -1)
@@ -391,17 +367,12 @@ class RSSM(nn.Module):
         )
 
     def semantic_prior(self, deter, prev_sem):
-        deter = self._cast_compute(deter)
-        prev_sem = self._cast_compute(prev_sem)
         logit = self._sem_img(
             torch.cat([deter, prev_sem.reshape(*prev_sem.shape[:-2], self.flat_sem)], -1)
         )
-        return self._cast_compute(self.get_sem_dist(logit).rsample()), logit
+        return self.get_sem_dist(logit).rsample(), logit
 
     def semantic_prior_logits(self, deter, post_sem, initial_sem, reset):
-        deter = self._cast_compute(deter)
-        post_sem = self._cast_compute(post_sem)
-        initial_sem = self._cast_compute(initial_sem)
         shifted = torch.cat([initial_sem[:, None], post_sem[:, :-1]], 1)
         shifted = torch.where(
             rpad(reset, shifted.dim() - reset.dim()), torch.zeros_like(shifted), shifted

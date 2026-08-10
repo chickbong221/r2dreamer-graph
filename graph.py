@@ -19,7 +19,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from networks import RMSNorm
 from tools import weight_init_
 
 
@@ -139,7 +138,7 @@ class GraphMLP(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(inp, out),
-            RMSNorm(out, eps=1e-4, dtype=torch.float32),
+            nn.RMSNorm(out, eps=1e-4, dtype=torch.float32),
             getattr(nn, act)(),
         )
 

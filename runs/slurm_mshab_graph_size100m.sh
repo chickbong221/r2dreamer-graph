@@ -84,6 +84,7 @@ python train.py \
   model=size100M_graph \
   model.graph.enabled=true \
   model.graph.n_max=12 \
+  model.amp_dtype=float16 \
   batch_size=32 \
   batch_length=64 \
   env.env_num=63 \
