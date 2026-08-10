@@ -42,12 +42,17 @@ export LD_LIBRARY_PATH="$NVIDIA_USERSPACE_DIR:${LD_LIBRARY_PATH:-}"
 export VK_DRIVER_FILES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 export VK_ICD_FILENAMES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 
-vulkaninfo --summary
+if command -v vulkaninfo >/dev/null 2>&1; then
+  vulkaninfo --summary
+else
+  echo "vulkaninfo is not installed; continuing with the configured EGL ICD."
+fi
 
 cd "$HOME/projects/r2dreamer-graph"
 
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
 export MS_ASSET_DIR=/mnt/data/tuannl
+export DINO_WEIGHTS=/home/tuannl/mnt_data/checkpoints/dinov2_vits14_reg4_pretrain.pth
 
 mkdir -p "$HOME/output" "$HOME/logdir/r2dreamer-graph"
 

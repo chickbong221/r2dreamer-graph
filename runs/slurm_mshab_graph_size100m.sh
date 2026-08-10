@@ -42,12 +42,25 @@ export LD_LIBRARY_PATH="$NVIDIA_USERSPACE_DIR:${LD_LIBRARY_PATH:-}"
 export VK_DRIVER_FILES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 export VK_ICD_FILENAMES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 
-vulkaninfo --summary
+if command -v vulkaninfo >/dev/null 2>&1; then
+  vulkaninfo --summary
+else
+  echo "vulkaninfo is not installed; continuing with the configured EGL ICD."
+fi
 
 cd "$HOME/projects/r2dreamer-graph"
 
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
 export MS_ASSET_DIR=/mnt/data/tuannl
+export DINO_WEIGHTS=/home/tuannl/mnt_data/checkpoints/dinov2_vits14_reg4_pretrain.pth
+
+# Compute nodes have no outbound network. This official DINOv2 checkpoint must
+# be placed at DINO_WEIGHTS before the graph job is submitted.
+if [[ ! -f "$DINO_WEIGHTS" ]]; then
+  echo "Missing DINOv2 checkpoint: $DINO_WEIGHTS" >&2
+  echo "Download dinov2_vits14_reg4_pretrain.pth to that path before sbatch." >&2
+  exit 1
+fi
 
 mkdir -p "$HOME/output" "$HOME/logdir/r2dreamer-graph"
 
@@ -78,6 +91,7 @@ python train.py \
   env.mshab_task=prepare_groceries \
   env.mshab_obj=all \
   env.num_build_configs=63 \
+  env.graph.dino_weights="$DINO_WEIGHTS" \
   buffer.storage_device=cpu \
   buffer.max_size=500000 \
   trainer.steps=10000000 \

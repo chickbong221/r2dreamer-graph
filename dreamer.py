@@ -41,6 +41,13 @@ class Dreamer(nn.Module):
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         self.graph_enabled = bool(config.graph.enabled)
+        amp_name = str(config.amp_dtype)
+        amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
+        if amp_name not in amp_dtypes:
+            raise ValueError(
+                f"Unknown model.amp_dtype={amp_name!r}; expected one of {sorted(amp_dtypes)}"
+            )
+        self._amp_dtype = amp_dtypes[amp_name]
         if self.graph_enabled and self.rep_loss != "dreamer":
             raise ValueError("graph.enabled is a DreamerV3 extension; set model.rep_loss=dreamer")
 
@@ -179,7 +186,12 @@ class Dreamer(nn.Module):
             betas=(config.beta1, config.beta2),
             eps=config.eps,
         )
-        self._scaler = GradScaler()
+        # bfloat16 has float32's exponent range and does not need loss scaling.
+        # DreamerV3's reference configuration also uses bfloat16. FP16 causes
+        # the 100M recurrent rollout to overflow before the first optimizer step.
+        self._scaler = GradScaler(
+            enabled=self.device.type == "cuda" and self._amp_dtype == torch.float16
+        )
 
         def lr_lambda(step):
             if config.warmup:
@@ -388,7 +400,11 @@ class Dreamer(nn.Module):
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
-        with autocast(device_type=self.device.type, dtype=torch.float16):
+        with autocast(
+            device_type=self.device.type,
+            dtype=self._amp_dtype,
+            enabled=self.device.type in ("cpu", "cuda"),
+        ):
             posterior, mets = self._cal_grad(p_data, initial)
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:

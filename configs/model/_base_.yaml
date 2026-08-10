@@ -4,6 +4,7 @@ imag_horizon: 15
 horizon: 333
 lamb: 0.95
 compile: True
+amp_dtype: bfloat16
 log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
