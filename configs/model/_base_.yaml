@@ -77,7 +77,7 @@ rssm:
 
 graph:
   enabled: False
-  n_max: 10
+  n_max: 12
   e_max: 270
   n_cams: 2
   app_dim: 384
