@@ -40,9 +40,9 @@ def make_config(enabled):
 def spaces():
     obs = {
         "image": gym.spaces.Box(0, 255, (16, 16, 3), np.uint8),
-        "is_first": gym.spaces.Box(False, True, (), bool),
-        "is_last": gym.spaces.Box(False, True, (), bool),
-        "is_terminal": gym.spaces.Box(False, True, (), bool),
+        "is_first": gym.spaces.Box(0, 1, (), np.bool_),
+        "is_last": gym.spaces.Box(0, 1, (), np.bool_),
+        "is_terminal": gym.spaces.Box(0, 1, (), np.bool_),
         "reward": gym.spaces.Box(-np.inf, np.inf, (1,), np.float32),
         "graph_node_ent": gym.spaces.Box(0, 65535, (10,), np.uint16),
         "graph_node_app": gym.spaces.Box(-np.inf, np.inf, (10, 2, 8), np.float16),
