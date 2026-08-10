@@ -81,6 +81,14 @@ pre-commit install
 pre-commit run --all-files
 ```
 
+## Compact scene-graph extension
+
+This fork includes an optional DreamerV3 semantic scene-graph branch using
+compact real-edge PyTorch message passing. See
+[`docs/graph_extension.md`](docs/graph_extension.md) for the observation
+contract, the single `model.graph.enabled` method switch, correctness tests,
+and the CUDA padding-width benchmark.
+
 ## Troubleshooting
 
 If you encounter installation or runtime issues, please refer to our [Troubleshooting Guide](docs/troubleshooting.md).

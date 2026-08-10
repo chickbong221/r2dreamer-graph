@@ -8,7 +8,9 @@ from tools import rpad, weight_init_
 
 
 class Deter(nn.Module):
-    def __init__(self, deter, stoch, act_dim, hidden, blocks, dynlayers, act="SiLU"):
+    def __init__(
+        self, deter, stoch, act_dim, hidden, blocks, dynlayers, act="SiLU", semantic_size=0
+    ):
         super().__init__()
         self.blocks = int(blocks)
         self.dynlayers = int(dynlayers)
@@ -22,8 +24,18 @@ class Deter(nn.Module):
         self._dyn_in2 = nn.Sequential(
             nn.Linear(act_dim, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
         )
+        self._dyn_in3 = (
+            nn.Sequential(
+                nn.Linear(semantic_size, hidden, bias=True),
+                nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32),
+                act(),
+            )
+            if semantic_size
+            else None
+        )
         self._dyn_hid = nn.Sequential()
-        in_ch = (3 * hidden + deter // self.blocks) * self.blocks
+        input_count = 4 if semantic_size else 3
+        in_ch = (input_count * hidden + deter // self.blocks) * self.blocks
         for i in range(self.dynlayers):
             self._dyn_hid.add_module(f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks))
             self._dyn_hid.add_module(f"norm_{i}", nn.RMSNorm(deter, eps=1e-04, dtype=torch.float32))
@@ -33,7 +45,7 @@ class Deter(nn.Module):
         self.flat2group = lambda x: x.reshape(*x.shape[:-1], self.blocks, -1)
         self.group2flat = lambda x: x.reshape(*x.shape[:-2], -1)
 
-    def forward(self, stoch, deter, action):
+    def forward(self, stoch, deter, action, sem=None):
         """Deterministic state transition (block-GRU style)."""
         # (B, S, K), (B, D), (B, A)
         B = action.shape[0]
@@ -49,7 +61,12 @@ class Deter(nn.Module):
 
         # Concatenate projected inputs and broadcast over blocks.
         # (B, 3*U)
-        x = torch.cat([x0, x1, x2], -1)
+        inputs = [x0, x1, x2]
+        if self._dyn_in3 is not None:
+            if sem is None:
+                raise ValueError("semantic dynamics require the previous semantic state")
+            inputs.append(self._dyn_in3(sem.reshape(sem.shape[0], -1)))
+        x = torch.cat(inputs, -1)
         # (B, G, 3*U)
         x = x.unsqueeze(-2).expand(-1, self.blocks, -1)
 
@@ -76,7 +93,7 @@ class Deter(nn.Module):
 
 
 class RSSM(nn.Module):
-    def __init__(self, config, embed_size, act_dim):
+    def __init__(self, config, embed_size, act_dim, semantic=False, graph_token_size=0):
         super().__init__()
         self._stoch = int(config.stoch)
         self._deter = int(config.deter)
@@ -91,8 +108,17 @@ class RSSM(nn.Module):
         self._img_layers = int(config.img_layers)
         self._dyn_layers = int(config.dyn_layers)
         self._blocks = int(config.blocks)
+        self.semantic = bool(semantic)
         self.flat_stoch = self._stoch * self._discrete
-        self.feat_size = self.flat_stoch + self._deter
+        if self.semantic:
+            self._sem_stoch = int(config.sem_stoch)
+            self._sem_discrete = int(config.sem_discrete)
+            self._sem_layers = int(config.sem_layers)
+            self.flat_sem = self._sem_stoch * self._sem_discrete
+        else:
+            self._sem_stoch = self._sem_discrete = self._sem_layers = 0
+            self.flat_sem = 0
+        self.feat_size = self.flat_stoch + self.flat_sem + self._deter
         self._deter_net = Deter(
             self._deter,
             self.flat_stoch,
@@ -101,10 +127,11 @@ class RSSM(nn.Module):
             blocks=self._blocks,
             dynlayers=self._dyn_layers,
             act=config.act,
+            semantic_size=self.flat_sem,
         )
 
         self._obs_net = nn.Sequential()
-        inp_dim = self._deter + embed_size
+        inp_dim = self._deter + embed_size + self.flat_sem
         for i in range(self._obs_layers):
             self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
             self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -117,7 +144,7 @@ class RSSM(nn.Module):
         )
 
         self._img_net = nn.Sequential()
-        inp_dim = self._deter
+        inp_dim = self._deter + self.flat_sem
         for i in range(self._img_layers):
             self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
             self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -128,24 +155,83 @@ class RSSM(nn.Module):
             "img_net_lambda",
             LambdaLayer(lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)),
         )
+        if self.semantic:
+            self._sem_obs = self._semantic_head(
+                self._deter + self.flat_sem + int(graph_token_size), config.act, "sem_obs"
+            )
+            self._sem_img = self._semantic_head(
+                self._deter + self.flat_sem, config.act, "sem_img"
+            )
         self.apply(weight_init_)
+
+    def _semantic_head(self, inp_dim, act_name, name):
+        act = getattr(torch.nn, act_name)
+        net = nn.Sequential()
+        for index in range(self._sem_layers):
+            net.add_module(f"{name}_{index}", nn.Linear(inp_dim, self._hidden, bias=True))
+            net.add_module(
+                f"{name}_norm_{index}",
+                nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32),
+            )
+            net.add_module(f"{name}_act_{index}", act())
+            inp_dim = self._hidden
+        net.add_module(
+            f"{name}_logit", nn.Linear(inp_dim, self._sem_stoch * self._sem_discrete)
+        )
+        net.add_module(
+            f"{name}_shape",
+            LambdaLayer(
+                lambda x: x.reshape(*x.shape[:-1], self._sem_stoch, self._sem_discrete)
+            ),
+        )
+        return net
 
     def initial(self, batch_size):
         """Return an initial latent state."""
         # (B, D), (B, S, K)
         deter = torch.zeros(batch_size, self._deter, dtype=torch.float32, device=self._device)
         stoch = torch.zeros(batch_size, self._stoch, self._discrete, dtype=torch.float32, device=self._device)
+        if self.semantic:
+            sem = torch.zeros(
+                batch_size,
+                self._sem_stoch,
+                self._sem_discrete,
+                dtype=torch.float32,
+                device=self._device,
+            )
+            return stoch, deter, sem
         return stoch, deter
 
-    def observe(self, embed, action, initial, reset):
+    def observe(self, embed, action, initial, reset, graph_token=None):
         """Posterior rollout using observations."""
         # (B, T, E), (B, T, A), ((B, S, K), (B, D)) (B, T)
         L = action.shape[1]
-        stoch, deter = initial
+        if self.semantic:
+            stoch, deter, sem = initial
+            if graph_token is None:
+                raise ValueError("semantic RSSM.observe requires graph_token")
+            sems, sem_logits = [], []
+        else:
+            stoch, deter = initial
+            sem = None
         stochs, deters, logits = [], [], []
         for i in range(L):
             # (B, S, K), (B, D), (B, S, K)
-            stoch, deter, logit = self.obs_step(stoch, deter, action[:, i], embed[:, i], reset[:, i])
+            result = self.obs_step(
+                stoch,
+                deter,
+                action[:, i],
+                embed[:, i],
+                reset[:, i],
+                sem=sem,
+                graph_token=None if graph_token is None else graph_token[:, i],
+            )
+            if self.semantic:
+                stoch, deter, logit, sem, sem_logit = result
+                sems.append(sem)
+                sem_logits.append(sem_logit)
+            else:
+                stoch, deter, logit = result
             stochs.append(stoch)
             deters.append(deter)
             logits.append(logit)
@@ -153,9 +239,17 @@ class RSSM(nn.Module):
         stochs = torch.stack(stochs, dim=1)
         deters = torch.stack(deters, dim=1)
         logits = torch.stack(logits, dim=1)
+        if self.semantic:
+            return (
+                stochs,
+                deters,
+                logits,
+                torch.stack(sems, dim=1),
+                torch.stack(sem_logits, dim=1),
+            )
         return stochs, deters, logits
 
-    def obs_step(self, stoch, deter, prev_action, embed, reset):
+    def obs_step(self, stoch, deter, prev_action, embed, reset, sem=None, graph_token=None):
         """Single posterior step."""
         # (B, S, K), (B, D), (B, A), (B, E), (B,)
         stoch = torch.where(rpad(reset, stoch.dim() - int(reset.dim())), torch.zeros_like(stoch), stoch)
@@ -163,61 +257,133 @@ class RSSM(nn.Module):
         prev_action = torch.where(
             rpad(reset, prev_action.dim() - int(reset.dim())), torch.zeros_like(prev_action), prev_action
         )
+        if self.semantic:
+            if sem is None or graph_token is None:
+                raise ValueError("semantic obs_step requires sem and graph_token")
+            sem = torch.where(rpad(reset, sem.dim() - int(reset.dim())), torch.zeros_like(sem), sem)
 
         # Deterministic transition then posterior logits conditioned on embed.
         # (B, D)
-        deter = self._deter_net(stoch, deter, prev_action)
+        deter = self._deter_net(stoch, deter, prev_action, sem)
+        if self.semantic:
+            sem_logit = self._sem_obs(
+                torch.cat([deter, sem.reshape(sem.shape[0], -1), graph_token], -1)
+            )
+            sem = self.get_sem_dist(sem_logit).rsample()
         # (B, D + E)
-        x = torch.cat([deter, embed], dim=-1)
+        inputs = [deter]
+        if self.semantic:
+            inputs.append(sem.reshape(sem.shape[0], -1))
+        inputs.append(embed)
+        x = torch.cat(inputs, dim=-1)
         # (B, S, K)
         logit = self._obs_net(x)
 
         # Sample discrete stochastic state via straight-through Gumbel-Softmax.
         # (B, S, K)
         stoch = self.get_dist(logit).rsample()
+        if self.semantic:
+            return stoch, deter, logit, sem, sem_logit
         return stoch, deter, logit
 
-    def img_step(self, stoch, deter, prev_action):
+    def img_step(self, stoch, deter, prev_action, sem=None):
         """Single prior step (no observation)."""
 
         # (B, D)
-        deter = self._deter_net(stoch, deter, prev_action)
+        deter = self._deter_net(stoch, deter, prev_action, sem)
+        if self.semantic:
+            if sem is None:
+                raise ValueError("semantic img_step requires sem")
+            sem, sem_logit = self.semantic_prior(deter, sem)
         # (B, S, K)
-        stoch, _ = self.prior(deter)
+        stoch, _ = self.prior(deter, sem)
+        if self.semantic:
+            return stoch, deter, sem, sem_logit
         return stoch, deter
 
-    def prior(self, deter):
+    def prior(self, deter, sem=None):
         """Compute prior distribution parameters and sample stoch."""
 
         # (B, S, K)
-        logit = self._img_net(deter)
+        inputs = [deter]
+        if self.semantic:
+            if sem is None:
+                raise ValueError("semantic prior requires sem")
+            inputs.append(sem.reshape(*sem.shape[:-2], -1))
+        logit = self._img_net(torch.cat(inputs, -1))
         stoch = self.get_dist(logit).rsample()
         return stoch, logit
 
-    def imagine_with_action(self, stoch, deter, actions):
+    def imagine_with_action(self, stoch, deter, actions, sem=None):
         """Roll out prior dynamics given a sequence of actions."""
         # (B, S, K), (B, D), (B, T, A)
         L = actions.shape[1]
-        stochs, deters = [], []
+        stochs, deters, sems = [], [], []
         for i in range(L):
-            stoch, deter = self.img_step(stoch, deter, actions[:, i])
+            result = self.img_step(stoch, deter, actions[:, i], sem)
+            if self.semantic:
+                stoch, deter, sem, _ = result
+                sems.append(sem)
+            else:
+                stoch, deter = result
             stochs.append(stoch)
             deters.append(deter)
         # (B, T, S, K), (B, T, D)
         stochs = torch.stack(stochs, dim=1)
         deters = torch.stack(deters, dim=1)
+        if self.semantic:
+            return stochs, deters, torch.stack(sems, dim=1)
         return stochs, deters
 
-    def get_feat(self, stoch, deter):
+    def get_feat(self, stoch, deter, sem=None):
         """Flatten stoch and concatenate with deter."""
         # (B, S, K), (B, D)
         # (B, S*K)
         stoch = stoch.reshape(*stoch.shape[:-2], self._stoch * self._discrete)
         # (B, S*K + D)
-        return torch.cat([stoch, deter], -1)
+        parts = [stoch]
+        if self.semantic:
+            if sem is None:
+                raise ValueError("semantic features require sem")
+            parts.append(sem.reshape(*sem.shape[:-2], self.flat_sem))
+        parts.append(deter)
+        return torch.cat(parts, -1)
 
     def get_dist(self, logit):
         return torchd.independent.Independent(dists.OneHotDist(logit, unimix_ratio=self._unimix_ratio), 1)
+
+    def get_sem_dist(self, logit):
+        if not self.semantic:
+            raise RuntimeError("semantic distribution requested from graph-free RSSM")
+        return torchd.independent.Independent(
+            dists.OneHotDist(logit, unimix_ratio=self._unimix_ratio), 1
+        )
+
+    def semantic_prior(self, deter, prev_sem):
+        logit = self._sem_img(
+            torch.cat([deter, prev_sem.reshape(*prev_sem.shape[:-2], self.flat_sem)], -1)
+        )
+        return self.get_sem_dist(logit).rsample(), logit
+
+    def semantic_prior_logits(self, deter, post_sem, initial_sem, reset):
+        shifted = torch.cat([initial_sem[:, None], post_sem[:, :-1]], 1)
+        shifted = torch.where(
+            rpad(reset, shifted.dim() - reset.dim()), torch.zeros_like(shifted), shifted
+        )
+        return self._sem_img(
+            torch.cat([deter, shifted.reshape(*shifted.shape[:-2], self.flat_sem)], -1)
+        )
+
+    def semantic_kl_loss(self, post_logit, prior_logit, free):
+        kld = dists.kl
+        raw_rep = kld(post_logit, prior_logit.detach()).sum(-1)
+        raw_dyn = kld(post_logit.detach(), prior_logit).sum(-1)
+        return (
+            torch.clip(raw_dyn, min=free),
+            torch.clip(raw_rep, min=free),
+            raw_dyn,
+            raw_rep,
+        )
 
     def kl_loss(self, post_logit, prior_logit, free):
         kld = dists.kl

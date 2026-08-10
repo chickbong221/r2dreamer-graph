@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import LambdaLR
 import networks
 import rssm
 import tools
+from graph import GRAPH_KEYS, GraphDecoder, GraphEncoder, graph_from
 from networks import Projector
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
@@ -29,15 +30,27 @@ class Dreamer(nn.Module):
         self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
+        self.graph_enabled = bool(config.graph.enabled)
+        if self.graph_enabled and self.rep_loss != "dreamer":
+            raise ValueError("graph.enabled is a DreamerV3 extension; set model.rep_loss=dreamer")
 
         # World model components
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
-        self.encoder = networks.MultiEncoder(config.encoder, shapes)
+        graph_present = [key for key in GRAPH_KEYS if key in shapes]
+        if self.graph_enabled and len(graph_present) != len(GRAPH_KEYS):
+            missing = [key for key in GRAPH_KEYS if key not in shapes]
+            raise ValueError(f"graph.enabled observation space is missing: {missing}")
+        model_shapes = {key: value for key, value in shapes.items() if key not in GRAPH_KEYS}
+        self.encoder = networks.MultiEncoder(config.encoder, model_shapes)
+        self.image_keys = tuple(self.encoder.cnn_shapes)
         self.embed_size = self.encoder.out_dim
+        self.graph_encoder = GraphEncoder(config.graph) if self.graph_enabled else None
         self.rssm = rssm.RSSM(
             config.rssm,
             self.embed_size,
             self.act_dim,
+            semantic=self.graph_enabled,
+            graph_token_size=int(config.graph.units) if self.graph_enabled else 0,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -74,13 +87,22 @@ class Dreamer(nn.Module):
             "cont": self.cont,
             "encoder": self.encoder,
         }
+        if self.graph_enabled:
+            self.graph_decoder = GraphDecoder(config.graph, self.rssm.flat_sem)
+            modules.update(
+                {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
+            )
 
         if self.rep_loss == "dreamer":
+            decoder_shapes = {
+                key: value for key, value in model_shapes.items() if key != "instruction"
+            }
             self.decoder = networks.MultiDecoder(
                 config.decoder,
                 self.rssm._deter,
                 self.rssm.flat_stoch,
-                shapes,
+                decoder_shapes,
+                flat_sem=self.rssm.flat_sem,
             )
             recon = self._loss_scales.pop("recon")
             self._loss_scales.update({k: recon for k in self.decoder.all_keys})
@@ -158,9 +180,11 @@ class Dreamer(nn.Module):
 
         self.train()
         self.clone_and_freeze()
-        if config.compile:
+        if config.compile and not self.graph_enabled:
             print("Compiling update function with torch.compile...")
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
+        elif config.compile and self.graph_enabled:
+            print("graph.enabled uses eager real-edge execution; skipping whole-update torch.compile")
 
     def _update_slow_target(self):
         """Update slow-moving value target network."""
@@ -187,6 +211,15 @@ class Dreamer(nn.Module):
             assert name_orig == name_new
             param_new.data = param_orig.data
             param_new.requires_grad_(False)
+
+        if self.graph_enabled:
+            self._frozen_graph_encoder = copy.deepcopy(self.graph_encoder)
+            for (name_orig, param_orig), (name_new, param_new) in zip(
+                self.graph_encoder.named_parameters(), self._frozen_graph_encoder.named_parameters()
+            ):
+                assert name_orig == name_new
+                param_new.data = param_orig.data
+                param_new.requires_grad_(False)
 
         self._frozen_rssm = copy.deepcopy(self.rssm)
         for (name_orig, param_orig), (name_new, param_new) in zip(
@@ -250,28 +283,46 @@ class Dreamer(nn.Module):
         p_obs = self.preprocess(obs)
         # (B, E)
         embed = self._frozen_encoder(p_obs)
-        prev_stoch, prev_deter, prev_action = (
-            state["stoch"],
-            state["deter"],
-            state["prev_action"],
+        graph_token = (
+            self._frozen_graph_encoder(graph_from(p_obs)).token
+            if self.graph_enabled
+            else None
         )
+        prev_stoch, prev_deter, prev_action = state["stoch"], state["deter"], state["prev_action"]
         # (B, S, K), (B, D)
-        stoch, deter, _ = self._frozen_rssm.obs_step(prev_stoch, prev_deter, prev_action, embed, obs["is_first"])
+        result = self._frozen_rssm.obs_step(
+            prev_stoch,
+            prev_deter,
+            prev_action,
+            embed,
+            obs["is_first"],
+            sem=state.get("sem") if self.graph_enabled else None,
+            graph_token=graph_token,
+        )
+        if self.graph_enabled:
+            stoch, deter, _, sem, _ = result
+        else:
+            stoch, deter, _ = result
+            sem = None
         # (B, F)
-        feat = self._frozen_rssm.get_feat(stoch, deter)
+        feat = self._frozen_rssm.get_feat(stoch, deter, sem)
         action_dist = self._frozen_actor(feat)
         # (B, A)
         action = action_dist.mode if eval else action_dist.rsample()
-        return action, TensorDict(
-            {"stoch": stoch, "deter": deter, "prev_action": action},
-            batch_size=state.batch_size,
-        )
+        entries = {"stoch": stoch, "deter": deter, "prev_action": action}
+        if self.graph_enabled:
+            entries["sem"] = sem
+        return action, TensorDict(entries, batch_size=state.batch_size)
 
     @torch.no_grad()
     def get_initial_state(self, B):
-        stoch, deter = self.rssm.initial(B)
+        initial = self.rssm.initial(B)
+        stoch, deter = initial[:2]
         action = torch.zeros(B, self.act_dim, dtype=torch.float32, device=self.device)
-        return TensorDict({"stoch": stoch, "deter": deter, "prev_action": action}, batch_size=(B,))
+        entries = {"stoch": stoch, "deter": deter, "prev_action": action}
+        if self.graph_enabled:
+            entries["sem"] = initial[2]
+        return TensorDict(entries, batch_size=(B,))
 
     @torch.no_grad()
     def video_pred(self, data, initial):
@@ -287,21 +338,29 @@ class Dreamer(nn.Module):
         B = min(data["action"].shape[0], 6)
         # (B, T, E)
         embed = self.encoder(data)
-
-        post_stoch, post_deter, _ = self.rssm.observe(
+        graph_token = None
+        if self.graph_enabled:
+            graph_token = self.graph_encoder(graph_from(data)).token
+        observed = self.rssm.observe(
             embed[:B, :5],
             data["action"][:B, :5],
             tuple(val[:B] for val in initial),
             data["is_first"][:B, :5],
+            None if graph_token is None else graph_token[:B, :5],
         )
-        recon = self.decoder(post_stoch, post_deter)["image"].mode()[:B]
+        post_stoch, post_deter = observed[:2]
+        post_sem = observed[3] if self.graph_enabled else None
+        recon = self.decoder(post_stoch, post_deter, post_sem)["image"].mode()[:B]
         init_stoch, init_deter = post_stoch[:, -1], post_deter[:, -1]
-        prior_stoch, prior_deter = self.rssm.imagine_with_action(
+        imagined = self.rssm.imagine_with_action(
             init_stoch,
             init_deter,
             data["action"][:B, 5:],
+            None if post_sem is None else post_sem[:, -1],
         )
-        openl = self.decoder(prior_stoch, prior_deter)["image"].mode()
+        prior_stoch, prior_deter = imagined[:2]
+        prior_sem = imagined[2] if self.graph_enabled else None
+        openl = self.decoder(prior_stoch, prior_deter, prior_sem)["image"].mode()
         model = torch.cat([recon[:, :5], openl], 1)
         truth = data["image"][:B]
         error = (model - truth + 1.0) / 2.0
@@ -317,7 +376,7 @@ class Dreamer(nn.Module):
             self.ema_update()
         metrics = {}
         with autocast(device_type=self.device.type, dtype=torch.float16):
-            (stoch, deter), mets = self._cal_grad(p_data, initial)
+            posterior, mets = self._cal_grad(p_data, initial)
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
             self._prototypes.grad.zero_()
@@ -343,7 +402,7 @@ class Dreamer(nn.Module):
             mets["opt/update_rms"] = update_rms
         metrics.update(mets)
         # update latent vectors in replay buffer
-        replay_buffer.update(index, stoch.detach(), deter.detach())
+        replay_buffer.update(index, *(value.detach() for value in posterior))
         return metrics
 
     def _cal_grad(self, data, initial):
@@ -365,19 +424,48 @@ class Dreamer(nn.Module):
         # === World model: posterior rollout and KL losses ===
         # (B, T, E)
         embed = self.encoder(data)
-        # (B, T, S, K), (B, T, D), (B, T, S, K)
-        post_stoch, post_deter, post_logit = self.rssm.observe(embed, data["action"], initial, data["is_first"])
+        graph_encoding = self.graph_encoder(graph_from(data)) if self.graph_enabled else None
+        graph_token = graph_encoding.token if graph_encoding is not None else None
+        observed = self.rssm.observe(
+            embed, data["action"], initial, data["is_first"], graph_token
+        )
+        post_stoch, post_deter, post_logit = observed[:3]
+        post_sem = observed[3] if self.graph_enabled else None
+        post_sem_logit = observed[4] if self.graph_enabled else None
         # (B, T, S, K)
-        _, prior_logit = self.rssm.prior(post_deter)
+        _, prior_logit = self.rssm.prior(post_deter, post_sem)
         dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
         losses["dyn"] = torch.mean(dyn_loss)
         losses["rep"] = torch.mean(rep_loss)
+        if self.graph_enabled:
+            step_valid = ~data["is_last"].bool()
+            if step_valid.ndim == 3 and step_valid.shape[-1] == 1:
+                step_valid = step_valid[..., 0]
+            sem_prior_logit = self.rssm.semantic_prior_logits(
+                post_deter, post_sem, initial[2], data["is_first"]
+            )
+            sem_dyn, sem_rep, raw_sem_dyn, raw_sem_rep = self.rssm.semantic_kl_loss(
+                post_sem_logit, sem_prior_logit, self.kl_free
+            )
+            step_float = step_valid.float()
+            losses["semdyn"] = (sem_dyn * step_float).mean()
+            losses["semrep"] = (sem_rep * step_float).mean()
+            denominator = step_float.sum().clamp_min(1)
+            metrics["semdyn_raw"] = (raw_sem_dyn * step_float).sum() / denominator
+            metrics["semrep_raw"] = (raw_sem_rep * step_float).sum() / denominator
+            metrics["sem_entropy"] = self.rssm.get_sem_dist(post_sem_logit).entropy().mean()
+            graph_losses, graph_metrics = self.graph_decoder(
+                graph_encoding, post_sem, step_valid
+            )
+            losses.update(graph_losses)
+            metrics.update(graph_metrics)
         # === Representation / auxiliary losses ===
         # (B, T, F)
-        feat = self.rssm.get_feat(post_stoch, post_deter)
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
         if self.rep_loss == "dreamer":
             recon_losses = {
-                key: torch.mean(-dist.log_prob(data[key])) for key, dist in self.decoder(post_stoch, post_deter).items()
+                key: torch.mean(-dist.log_prob(data[key]))
+                for key, dist in self.decoder(post_stoch, post_deter, post_sem).items()
             }
             losses.update(recon_losses)
         elif self.rep_loss == "r2dreamer":
@@ -440,6 +528,8 @@ class Dreamer(nn.Module):
             post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
             post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
         )
+        if self.graph_enabled:
+            start = start + (post_sem.reshape(-1, *post_sem.shape[2:]).detach(),)
         # (B, T, ...) -> (B*T, ...)
         imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
@@ -500,7 +590,7 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter)
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
         boot = ret[:, 0].reshape(B, T, 1)
         value = self._frozen_value(feat).mode()
         slow_value = self._frozen_slow_value(feat).mode()
@@ -527,7 +617,10 @@ class Dreamer(nn.Module):
 
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})
-        return (post_stoch, post_deter), metrics
+        posterior = (post_stoch, post_deter)
+        if self.graph_enabled:
+            posterior = posterior + (post_sem,)
+        return posterior, metrics
 
     @torch.no_grad()
     def _imagine(self, start, imag_horizon):
@@ -535,16 +628,21 @@ class Dreamer(nn.Module):
         # (B, S, K), (B, D)
         feats = []
         actions = []
-        stoch, deter = start
+        stoch, deter = start[:2]
+        sem = start[2] if self.graph_enabled else None
         for _ in range(imag_horizon):
             # (B, F)
-            feat = self._frozen_rssm.get_feat(stoch, deter)
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
             # (B, A)
             action = self._frozen_actor(feat).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)
-            stoch, deter = self._frozen_rssm.img_step(stoch, deter, action)
+            result = self._frozen_rssm.img_step(stoch, deter, action, sem)
+            if self.graph_enabled:
+                stoch, deter, sem, _ = result
+            else:
+                stoch, deter = result
 
         # Stack along sequence dim T_imag.
         # (B, T_imag, F), (B, T_imag, A)
@@ -567,8 +665,9 @@ class Dreamer(nn.Module):
 
     @torch.no_grad()
     def preprocess(self, data):
-        if "image" in data:
-            data["image"] = to_f32(data["image"]) / 255.0
+        for key in self.image_keys:
+            if key in data:
+                data[key] = to_f32(data[key]) / 255.0
         return data
 
     @torch.no_grad()

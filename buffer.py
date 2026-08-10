@@ -37,12 +37,14 @@ class Buffer:
             sample_td = sample_td.to(self.device, non_blocking=True)
         # The initial ones are used only to extract the latent vector
         initial = (sample_td["stoch"][:, 0], sample_td["deter"][:, 0])
+        if "sem" in sample_td:
+            initial = initial + (sample_td["sem"][:, 0],)
         data = sample_td[:, 1:]
         data.set_("action", sample_td["action"][:, :-1])  # action is 1 step back
         index = [ind.view(-1, self.batch_length + 1)[:, 1:] for ind in info["index"]]
         return data, index, initial
 
-    def update(self, index, stoch, deter):
+    def update(self, index, stoch, deter, sem=None):
         # Flatten the data
         index = [ind.reshape(-1) for ind in index]
         # (B, T, S, K) -> (B*T, S, K)
@@ -51,7 +53,10 @@ class Buffer:
         deter = deter.reshape(-1, *deter.shape[2:])
         # In storage, the length is the first dimension, and the batch (number of environments) is the second dimension.
         n = index[0].shape[0]
-        self._buffer[index[1], index[0]] = TensorDict({"stoch": stoch, "deter": deter}, batch_size=(n,))
+        values = {"stoch": stoch, "deter": deter}
+        if sem is not None:
+            values["sem"] = sem.reshape(-1, *sem.shape[2:])
+        self._buffer[index[1], index[0]] = TensorDict(values, batch_size=(n,))
 
     def count(self):
         if self._buffer.storage.shape is None:

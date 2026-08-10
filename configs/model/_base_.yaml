@@ -32,6 +32,12 @@ loss_scales:
   swav: 1.0
   temp: 1.0
   norm: 1.0
+  node: 1.0
+  relabs: 1.0
+  reltemp: 1.0
+  semtgt: 0.1
+  semdyn: 1.0
+  semrep: 0.1
 
 r2dreamer:
   lambd: 5e-4
@@ -65,6 +71,28 @@ rssm:
   unimix_ratio: 0.01
   initial: 'learned'
   device: ${device}
+  sem_stoch: 16
+  sem_discrete: 16
+  sem_layers: 1
+
+graph:
+  enabled: False
+  n_max: 10
+  e_max: 270
+  n_cams: 2
+  app_dim: 384
+  entity_vocab: 14
+  n_rel: 11
+  n_abs: 17
+  n_temp: 6
+  layers: 2
+  units: ${model.units}
+  embed: 64
+  app: 64
+  bbox: 8
+  bbox_beta: 0.1
+  reverse_edges: True
+  act: ${model.act}
 
 encoder:
   mlp_keys: ${env.encoder.mlp_keys}

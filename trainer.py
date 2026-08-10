@@ -85,12 +85,13 @@ class OnlineTrainer:
             self.logger.video("eval_video", tools.to_np(cache["image"][:1]))
         if self.video_pred_log and cache is not None:
             initial = agent.get_initial_state(1)
+            latent_keys = ["stoch", "deter"] + (["sem"] if "sem" in initial else [])
             self.logger.video(
                 "eval_open_loop",
                 tools.to_np(
                     agent.video_pred(
                         cache[:1],  # give only first batch
-                        (initial["stoch"], initial["deter"]),
+                        tuple(initial[key] for key in latent_keys),
                     )
                 ),
             )
@@ -161,6 +162,8 @@ class OnlineTrainer:
             trans["action"] = act * ~done.unsqueeze(-1)
             trans["stoch"] = agent_state["stoch"]
             trans["deter"] = agent_state["deter"]
+            if "sem" in agent_state:
+                trans["sem"] = agent_state["sem"]
             trans["episode"] = episode_ids  # Don't lift dim
             if "image" in trans:
                 video_cache.append(trans["image"][0])
