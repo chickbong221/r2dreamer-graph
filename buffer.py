@@ -40,7 +40,8 @@ class Buffer:
         if "sem" in sample_td:
             initial = initial + (sample_td["sem"][:, 0],)
         data = sample_td[:, 1:]
-        data.set_("action", sample_td["action"][:, :-1])  # action is 1 step back
+        # Action is 1 step back; clone because source and destination overlap.
+        data.set_("action", sample_td["action"][:, :-1].clone())
         index = [ind.view(-1, self.batch_length + 1)[:, 1:] for ind in info["index"]]
         return data, index, initial
 

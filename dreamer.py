@@ -95,6 +95,7 @@ class Dreamer(nn.Module):
 
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
+        self._skipped_updates = 0
 
         modules = {
             "rssm": self.rssm,
@@ -406,6 +407,17 @@ class Dreamer(nn.Module):
             enabled=self.device.type in ("cpu", "cuda"),
         ):
             posterior, mets = self._cal_grad(p_data, initial)
+        # bfloat16 runs without a loss scaler, so nothing else screens this out.
+        finite = bool(torch.isfinite(mets["opt/loss"]))
+        if not finite:
+            self._skipped_updates += 1
+            if self._skipped_updates == 1:
+                print(
+                    "[dreamer] non-finite loss on a training batch; skipping the "
+                    "optimizer step. Check episode/nonfinite_obs for a diverged "
+                    "simulator scene.",
+                    flush=True,
+                )
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
             self._prototypes.grad.zero_()
@@ -417,12 +429,14 @@ class Dreamer(nn.Module):
             mets["opt/grad_norm"] = grad_norm
             mets["opt/grad_rms"] = grad_rms
         self._agc(self._named_params.values())  # clipping
-        self._scaler.step(self._optimizer)  # update params
+        if finite:
+            self._scaler.step(self._optimizer)  # update params
         self._scaler.update()  # adjust scale
         self._scheduler.step()  # increment scheduler
         self._optimizer.zero_grad(set_to_none=True)  # reset grads
         mets["opt/lr"] = self._scheduler.get_lr()[0]
         mets["opt/grad_scale"] = self._scaler.get_scale()
+        mets["opt/skipped"] = self._skipped_updates
         if self._log_grads:
             updates = [(new - old) for (new, old) in zip(self._named_params.values(), old_params)]
             update_rms = tools.compute_rms(updates)
@@ -431,7 +445,8 @@ class Dreamer(nn.Module):
             mets["opt/update_rms"] = update_rms
         metrics.update(mets)
         # update latent vectors in replay buffer
-        replay_buffer.update(index, *(value.detach() for value in posterior))
+        if finite:
+            replay_buffer.update(index, *(value.detach() for value in posterior))
         return metrics
 
     def _cal_grad(self, data, initial):

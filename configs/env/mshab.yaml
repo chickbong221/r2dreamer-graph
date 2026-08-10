@@ -19,6 +19,7 @@ control_mode: ''
 reward_mode: normalized_dense
 shader_dir: minimal
 nonprivileged_obs: true
+sim_config: {}  # merged into ManiSkill's SimConfig, e.g. gpu_memory_config
 size: [112, 112]
 cameras: [fetch_head, fetch_hand]
 instruction_table: scenegraph/configs/instructions.npz
