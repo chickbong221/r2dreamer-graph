@@ -10,6 +10,14 @@ seed: 0
 deterministic_run: False
 device: 'cuda:0'
 
+wandb:
+  enabled: false
+  project: RelRL
+  entity: letuanhf-hanoi-university-of-science-and-technology
+  name: dreamerv3-mshab
+  group: na
+  mode: online
+
 hydra:
   run:
     dir: ${logdir}

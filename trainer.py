@@ -116,6 +116,8 @@ class OnlineTrainer:
         done = torch.ones(envs.env_num, dtype=torch.bool, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
         lengths = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
+        episode_log_sums = {}
+        episode_log_maxima = {}
         episode_ids = torch.arange(
             envs.env_num, dtype=torch.int32, device=agent.device
         )  # Kept constant so short episodes (< batch_length) remain sampable; RSSM resets via is_first.
@@ -129,16 +131,29 @@ class OnlineTrainer:
                 self.eval(agent, step)
             # Save metrics
             if done.any():
-                for i, d in enumerate(done):
-                    if d and lengths[i] > 0:
-                        if i == 0 and len(video_cache) > 0:
-                            video = torch.stack(video_cache, axis=0)
-                            self.logger.video("train_video", tools.to_np(video[None]))
-                            video_cache = []
-                        self.logger.scalar("episode/score", returns[i])
-                        self.logger.scalar("episode/length", lengths[i])
-                        self.logger.write(step + i)  # to show all values on tensorboard
-                        returns[i] = lengths[i] = 0
+                finished = done & lengths.gt(0)
+                if finished.any():
+                    if len(video_cache) > 0:
+                        video = torch.stack(video_cache, axis=0)
+                        self.logger.video("train_video", tools.to_np(video[None]))
+                        video_cache = []
+                    self.logger.scalar("episode/score", returns[finished].mean())
+                    self.logger.scalar(
+                        "episode/length", lengths[finished].float().mean()
+                    )
+                    for key, values in episode_log_maxima.items():
+                        if key == "log_graph_target_missing":
+                            per_env = episode_log_sums[key] / lengths.clamp_min(1)
+                        else:
+                            per_env = values
+                        self.logger.scalar(
+                            f"episode/{key[4:]}", per_env[finished].mean()
+                        )
+                        episode_log_sums[key][finished] = 0
+                        episode_log_maxima[key][finished] = 0
+                    self.logger.write(step)
+                    returns[finished] = 0
+                    lengths[finished] = 0
             step += int((~done).sum()) * self._action_repeat  # step is based on env side
             lengths += ~done
 
@@ -171,6 +186,18 @@ class OnlineTrainer:
                 video_cache.append(trans["image"][0])
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
+            active = ~trans["is_first"][:, 0].bool()
+            for key, value in trans.items():
+                if not key.startswith("log_"):
+                    continue
+                current = value[:, 0].float() * active
+                if key not in episode_log_sums:
+                    episode_log_sums[key] = torch.zeros_like(returns)
+                    episode_log_maxima[key] = torch.zeros_like(returns)
+                episode_log_sums[key] += current
+                episode_log_maxima[key] = torch.maximum(
+                    episode_log_maxima[key], current
+                )
             # Update models after enough data has accumulated
             if step // (envs.env_num * self._action_repeat) > self.batch_length + 1:
                 if self._should_pretrain():

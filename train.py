@@ -32,7 +32,8 @@ def main(config):
 
     print("Logdir", logdir)
 
-    logger = tools.Logger(logdir)
+    logger = tools.Logger(logdir, wandb_config=config.wandb)
+    atexit.register(logger.close)
     # save config
     logger.log_hydra_config(config)
 

@@ -153,11 +153,57 @@ class CudaBenchmark:
         print(self._comment, self._st.elapsed_time(self._nd) / 1000)
 
 
+_WANDB_DIAGNOSTICS = {
+    "train/semdyn_raw",
+    "train/semrep_raw",
+    "train/sem_entropy",
+    "train/node_app_cos",
+    "train/node_bbox_iou",
+    "train/node_vis_acc",
+    "train/relabs_acc",
+    "train/reltemp_acc",
+    "train/semtgt_acc",
+    "train/semtgt_frac",
+    "train/graph_real_edges",
+}
+
+
+def wandb_scalars(scalars):
+    """Keep only metrics needed to compare learning and graph health."""
+    return {
+        name: value
+        for name, value in scalars
+        if name.startswith("episode/")
+        or name.startswith("train/loss/")
+        or name.startswith("train/opt/")
+        or name == "fps/fps"
+        or name in _WANDB_DIAGNOSTICS
+    }
+
+
 class Logger:
-    def __init__(self, logdir, filename="metrics.jsonl"):
+    def __init__(self, logdir, filename="metrics.jsonl", wandb_config=None):
         self._logdir = logdir
         self._filename = filename
         self._writer = SummaryWriter(log_dir=str(logdir), max_queue=1000)
+        self._wandb_run = None
+        if wandb_config is not None and bool(wandb_config.enabled):
+            try:
+                import wandb
+            except ImportError as exc:
+                raise ImportError(
+                    "W&B logging is enabled but wandb is not installed"
+                ) from exc
+            self._wandb_run = wandb.init(
+                project=str(wandb_config.project),
+                name=str(wandb_config.name) or None,
+                group=str(wandb_config.group) or None,
+                entity=str(wandb_config.entity) or None,
+                mode=str(wandb_config.mode),
+                dir=str(logdir),
+            )
+            self._wandb_run.define_metric("env_step")
+            self._wandb_run.define_metric("*", step_metric="env_step")
         self._last_step = None
         self._last_time = None
         self._scalars = {}
@@ -201,10 +247,21 @@ class Logger:
         for name, value in self._histograms.items():
             self._writer.add_histogram(name, value, step)
 
+        if self._wandb_run is not None:
+            selected = wandb_scalars(scalars)
+            if selected:
+                self._wandb_run.log({"env_step": int(step), **selected})
+
         self._writer.flush()
         self._scalars = {}
         self._images = {}
         self._videos = {}
+
+    def close(self):
+        self._writer.close()
+        if self._wandb_run is not None:
+            self._wandb_run.finish()
+            self._wandb_run = None
 
     def _compute_fps(self, step):
         if self._last_step is None:

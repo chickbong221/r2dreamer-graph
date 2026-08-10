@@ -19,6 +19,7 @@ dependencies = [
     "gymnasium==1.2.0",
     "PyYAML>=6,<7",
     "tensorboard>=2.20,<3",
+    "wandb>=0.17,<1",
     "setuptools==77.0.3",
 ]
 

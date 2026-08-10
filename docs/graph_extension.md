@@ -87,3 +87,21 @@ python runs/smoke_mshab.py \
 
 The smoke performs no replay writes and no optimizer update. Use CPU replay
 storage for training so fixed-width RGB and graph records do not consume VRAM.
+
+## W&B logging
+
+Enable the optional scalar-only backend with `wandb.enabled=true`. It sends
+episode return/length/success, losses, optimizer state, throughput, and graph
+health diagnostics. Videos, histograms, gradients, observations, and the full
+resolved Hydra configuration remain local.
+
+Use the same project and group for matched comparisons, and a different name
+for each method:
+
+```bash
+wandb.enabled=true \
+wandb.project=RelRL \
+wandb.entity=letuanhf-hanoi-university-of-science-and-technology \
+wandb.group=na \
+wandb.name=graph
+```

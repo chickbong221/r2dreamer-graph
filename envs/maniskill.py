@@ -202,15 +202,20 @@ class ManiSkillVecEnv:
             "log_success_once",
             "log_success_at_end",
             "log_fail_once",
-            "log_graph_overflow_drops",
-            "log_graph_fact_drops",
-            "log_graph_target_missing",
-            "log_graph_cache_entries",
         ):
             spaces[key] = gym.spaces.Box(
                 -np.inf, np.inf, shape=(1,), dtype=np.float32
             )
         if self._graph is not None:
+            for key in (
+                "log_graph_overflow_drops",
+                "log_graph_fact_drops",
+                "log_graph_target_missing",
+                "log_graph_cache_entries",
+            ):
+                spaces[key] = gym.spaces.Box(
+                    -np.inf, np.inf, shape=(1,), dtype=np.float32
+                )
             for key, shape in self._graph.obs_spec_shapes.items():
                 dtype = self._graph.obs_spec_dtypes[key]
                 info = np.iinfo(dtype) if np.issubdtype(dtype, np.integer) else np.finfo(dtype)
@@ -300,14 +305,6 @@ class ManiSkillVecEnv:
                 float(self._graph.cache_entries),
                 device=self._device,
             )
-        else:
-            for key in (
-                "log_graph_overflow_drops",
-                "log_graph_fact_drops",
-                "log_graph_target_missing",
-                "log_graph_cache_entries",
-            ):
-                data[key] = zeros.clone()
         return TensorDict(data, batch_size=(self._num_envs,), device=self._device)
 
     def step(self, action: torch.Tensor, reset: torch.Tensor):
