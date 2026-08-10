@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=r2d-ms-b100
 #SBATCH --partition=main
-#SBATCH --nodelist=worker-0
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
