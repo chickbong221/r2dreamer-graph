@@ -61,6 +61,39 @@ class SemanticRSSMTest(unittest.TestCase):
         imagined = model.img_step(stoch[:, 0], deter[:, 0], self.action[:, 0], sem[:, 0])
         self.assertEqual(len(imagined), 4)
 
+    @unittest.skipUnless(
+        torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        "CUDA bfloat16 is required",
+    )
+    def test_rssm_uses_bfloat16_compute_with_float32_master_params(self):
+        cfg = config()
+        cfg.device = "cuda"
+        model = RSSM(
+            cfg, embed_size=5, act_dim=3, compute_dtype=torch.bfloat16
+        ).cuda()
+        stoch, deter = model.initial(self.batch)
+        action = self.action[:, 0].cuda()
+        embed = self.embed[:, 0].cuda()
+        reset = self.reset[:, 0].cuda()
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            next_stoch, next_deter, logit = model.obs_step(
+                stoch, deter, action, embed, reset
+            )
+        self.assertEqual(next_stoch.dtype, torch.bfloat16)
+        self.assertEqual(next_deter.dtype, torch.bfloat16)
+        self.assertEqual(logit.dtype, torch.bfloat16)
+        self.assertTrue(torch.isfinite(next_stoch).all())
+        self.assertTrue(torch.isfinite(next_deter).all())
+        self.assertTrue(torch.isfinite(logit).all())
+        self.assertTrue(all(param.dtype == torch.float32 for param in model.parameters()))
+        (next_deter.float().square().mean() + logit.float().square().mean()).backward()
+        grads = [
+            param.grad
+            for module in (model._deter_net, model._obs_net)
+            for param in module.parameters()
+        ]
+        self.assertTrue(all(grad is not None and torch.isfinite(grad).all() for grad in grads))
+
 
 if __name__ == "__main__":
     unittest.main()

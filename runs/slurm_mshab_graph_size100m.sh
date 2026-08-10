@@ -86,7 +86,7 @@ python train.py \
   model.graph.n_max=12 \
   batch_size=32 \
   batch_length=64 \
-  env.env_num=126 \
+  env.env_num=63 \
   env.train_ratio=64 \
   env.mshab_task=prepare_groceries \
   env.mshab_obj=all \

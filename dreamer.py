@@ -18,6 +18,34 @@ from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
 
+def _check_finite_replay(data, initial):
+    """Fail before model execution if a sampled replay tensor is non-finite."""
+    tensors = [(f"data/{key}", value) for key, value in data.items()]
+    latent_names = ("stoch", "deter", "sem")
+    tensors.extend(
+        (f"initial/{latent_names[index]}", value)
+        for index, value in enumerate(initial)
+    )
+    problems = []
+    for name, value in tensors:
+        if not (torch.is_floating_point(value) or torch.is_complex(value)):
+            continue
+        finite = torch.isfinite(value)
+        if bool(finite.all()):
+            continue
+        invalid = ~finite
+        first = torch.nonzero(invalid, as_tuple=False)[0].tolist()
+        problems.append(
+            f"{name}: {int(invalid.sum())} invalid value(s), first index {first}, "
+            f"shape={tuple(value.shape)}, dtype={value.dtype}"
+        )
+    if problems:
+        raise FloatingPointError(
+            "Replay sample is non-finite before preprocessing/autocast; the model "
+            "did not create these values:\n  " + "\n  ".join(problems)
+        )
+
+
 def _mask_terminal_graph(token, is_last):
     """Remove stale graph conditioning on auto-reset terminal observations."""
     valid = ~is_last.bool()
@@ -68,6 +96,7 @@ class Dreamer(nn.Module):
             self.act_dim,
             semantic=self.graph_enabled,
             graph_token_size=int(config.graph.units) if self.graph_enabled else 0,
+            compute_dtype=self._amp_dtype,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -96,6 +125,7 @@ class Dreamer(nn.Module):
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
         self._skipped_updates = 0
+        self._replay_input_checked = False
 
         modules = {
             "rssm": self.rssm,
@@ -218,6 +248,14 @@ class Dreamer(nn.Module):
                     s.data.copy_(mix * v.data + (1 - mix) * s.data)
         self._slow_value_updates += 1
 
+    def _amp_context(self):
+        """Shared DreamerV3 compute policy for acting, training, and reports."""
+        return autocast(
+            device_type=self.device.type,
+            dtype=self._amp_dtype,
+            enabled=self.device.type in ("cpu", "cuda"),
+        )
+
     def train(self, mode=True):
         super().train(mode)
         # slow_value should be always eval mode
@@ -304,39 +342,51 @@ class Dreamer(nn.Module):
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
         p_obs = self.preprocess(obs)
-        # (B, E)
-        embed = self._frozen_encoder(p_obs)
-        graph_token = (
-            self._frozen_graph_encoder(graph_from(p_obs)).token
-            if self.graph_enabled
-            else None
-        )
-        if graph_token is not None:
-            graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
-        prev_stoch, prev_deter, prev_action = state["stoch"], state["deter"], state["prev_action"]
-        # (B, S, K), (B, D)
-        result = self._frozen_rssm.obs_step(
-            prev_stoch,
-            prev_deter,
-            prev_action,
-            embed,
-            obs["is_first"],
-            sem=state.get("sem") if self.graph_enabled else None,
-            graph_token=graph_token,
-        )
+        with self._amp_context():
+            # (B, E)
+            embed = self._frozen_encoder(p_obs)
+            graph_token = (
+                self._frozen_graph_encoder(graph_from(p_obs)).token
+                if self.graph_enabled
+                else None
+            )
+            if graph_token is not None:
+                graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
+            prev_stoch = state["stoch"]
+            prev_deter = state["deter"]
+            prev_action = state["prev_action"]
+            # (B, S, K), (B, D)
+            result = self._frozen_rssm.obs_step(
+                prev_stoch,
+                prev_deter,
+                prev_action,
+                embed,
+                obs["is_first"],
+                sem=state.get("sem") if self.graph_enabled else None,
+                graph_token=graph_token,
+            )
+            if self.graph_enabled:
+                stoch, deter, _, sem, _ = result
+            else:
+                stoch, deter, _ = result
+                sem = None
+            # (B, F)
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
+            action_dist = self._frozen_actor(feat)
+            # (B, A)
+            action = action_dist.mode if eval else action_dist.rsample()
+
+        # Match the original JAX host/replay boundary: compute in bfloat16,
+        # expose recurrent state and actions as float32, and cast them back on
+        # entry to the next policy or training call.
+        action = to_f32(action)
+        entries = {
+            "stoch": to_f32(stoch),
+            "deter": to_f32(deter),
+            "prev_action": action,
+        }
         if self.graph_enabled:
-            stoch, deter, _, sem, _ = result
-        else:
-            stoch, deter, _ = result
-            sem = None
-        # (B, F)
-        feat = self._frozen_rssm.get_feat(stoch, deter, sem)
-        action_dist = self._frozen_actor(feat)
-        # (B, A)
-        action = action_dist.mode if eval else action_dist.rsample()
-        entries = {"stoch": stoch, "deter": deter, "prev_action": action}
-        if self.graph_enabled:
-            entries["sem"] = sem
+            entries["sem"] = to_f32(sem)
         return action, TensorDict(entries, batch_size=state.batch_size)
 
     @torch.no_grad()
@@ -353,7 +403,9 @@ class Dreamer(nn.Module):
     def video_pred(self, data, initial):
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        return self._video_pred(p_data, initial)
+        with self._amp_context():
+            result = self._video_pred(p_data, initial)
+        return to_f32(result)
 
     def _video_pred(self, data, initial):
         """Video prediction utility."""
@@ -395,17 +447,20 @@ class Dreamer(nn.Module):
     def update(self, replay_buffer):
         """Sample a batch from replay and perform one optimization step."""
         data, index, initial = replay_buffer.sample()
+        if not self._replay_input_checked:
+            _check_finite_replay(data, initial)
+            self._replay_input_checked = True
+            print(
+                "[dreamer] first replay batch is finite before preprocessing/autocast",
+                flush=True,
+            )
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
         self._update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
-        with autocast(
-            device_type=self.device.type,
-            dtype=self._amp_dtype,
-            enabled=self.device.type in ("cpu", "cuda"),
-        ):
+        with self._amp_context():
             posterior, mets = self._cal_grad(p_data, initial)
         # bfloat16 runs without a loss scaler, so nothing else screens this out.
         finite = bool(torch.isfinite(mets["opt/loss"]))

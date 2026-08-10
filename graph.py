@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from networks import RMSNorm
 from tools import weight_init_
 
 
@@ -138,7 +139,7 @@ class GraphMLP(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(inp, out),
-            nn.RMSNorm(out, eps=1e-4, dtype=torch.float32),
+            RMSNorm(out, eps=1e-4, dtype=torch.float32),
             getattr(nn, act)(),
         )
 
@@ -191,8 +192,9 @@ class GraphEncoder(nn.Module):
     def forward(self, graph: Mapping[str, torch.Tensor]) -> GraphEncoding:
         compact = compact_graph(graph)
         valid = compact.node_valid
-        # Acting does not run under autocast, while replay stores these arrays
-        # as float16. Match parameter dtype explicitly for both acting and training.
+        # Replay stores these arrays as float16. Normalize the storage boundary
+        # to float32; the shared acting/training autocast policy selects compute
+        # dtype for the learned projections.
         node_app = compact.node_app.to(self.app_proj[0].weight.dtype)
         node_bbox = compact.node_bbox.to(self.bbox_proj[0].weight.dtype)
         parts = []
