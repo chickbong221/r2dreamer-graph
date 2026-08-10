@@ -271,22 +271,31 @@ class ConvDecoder(nn.Module):
         layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
         layers.append(Conv2dSamePad(in_dim, self._shape[0], self.kernel_size, stride=1, bias=True))
         self.layers = nn.Sequential(*layers)
+
+        # CUDA's NHWC nearest-neighbour upsample backward kernel uses signed
+        # 32-bit indexing. A 100M decoder at B*T=2048 reaches
+        # [2048, 96, 112, 112] (2.47B elements) at its final upsample and
+        # fails before an OOM can occur. Decoder rows are independent, so
+        # split only this operation into chunks below a conservative limit.
+        # This changes neither the model nor the reconstruction objective.
+        h, w = self.min_shape[:2]
+        channels = self.depths[-1]
+        max_elements_per_row = 0
+        for depth in reversed(self.depths[:-1]):
+            h, w = h * 2, w * 2
+            max_elements_per_row = max(max_elements_per_row, channels * h * w)
+            channels = depth
+        h, w = h * 2, w * 2
+        max_elements_per_row = max(max_elements_per_row, channels * h * w)
+        # Keep each upsample well below INT_MAX rather than running at its
+        # exact boundary, which differs slightly between CUDA implementations.
+        self._rows_per_chunk = max(1, 1_500_000_000 // max_elements_per_row)
         self.apply(weight_init_)
 
-    def forward(self, stoch, deter):
-        """Decode latent states into images.
-
-        Notes
-        -----
-        The decoder first constructs a low-resolution spatial feature map from
-        the deterministic state (block-linear projection) and from the stochastic
-        state (MLP projection), concats them, then upsamples back to the target
-        resolution.
-        """
-        # (B, T, S, K), (B, T, D)
-        B_T = deter.shape[:-1]
-        # (B*T, D), (B*T, S*K)
-        x0, x1 = deter.reshape(B_T.numel(), deter.shape[-1]), stoch.reshape(B_T.numel(), -1)
+    def _decode_rows(self, stoch, deter):
+        """Decode independent flattened latent rows into image rows."""
+        # (rows, D), (rows, S*K)
+        x0, x1 = deter, stoch
 
         # Spatial features from deterministic state
         # (H_feat, W_feat, C_feat)
@@ -312,7 +321,34 @@ class ConvDecoder(nn.Module):
         x = self.layers(x)  # Upsamples to original H, W
         # (B*T, H, W, C)
         x = x.permute(0, 2, 3, 1)
-        x = torch.sigmoid(x)
+        return torch.sigmoid(x)
+
+    def forward(self, stoch, deter):
+        """Decode latent states into images.
+
+        The decoder first constructs a low-resolution spatial feature map from
+        the deterministic state and stochastic state, then upsamples it back to
+        the target resolution. Flattened B*T rows are processed independently;
+        large batches are chunked solely to avoid CUDA's upsample index limit.
+        """
+        # (B, T, S, K), (B, T, D)
+        B_T = deter.shape[:-1]
+        rows = B_T.numel()
+        flat_deter = deter.reshape(rows, deter.shape[-1])
+        flat_stoch = stoch.reshape(rows, -1)
+        if rows <= self._rows_per_chunk:
+            x = self._decode_rows(flat_stoch, flat_deter)
+        else:
+            x = torch.cat(
+                [
+                    self._decode_rows(
+                        flat_stoch[start : start + self._rows_per_chunk],
+                        flat_deter[start : start + self._rows_per_chunk],
+                    )
+                    for start in range(0, rows, self._rows_per_chunk)
+                ],
+                dim=0,
+            )
         # (B, T, H, W, C)
         return x.reshape(*B_T, *x.shape[1:])
 
