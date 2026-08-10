@@ -52,10 +52,18 @@ def main():
         missing = [key for key in GRAPH_KEYS if key not in env.observation_space.spaces]
         if missing:
             raise AssertionError(f"observation space is missing graph keys: {missing}")
-        if env.observation_space["graph_node_ent"].shape != (10,):
-            raise AssertionError(env.observation_space["graph_node_ent"])
-        if env.observation_space["graph_edge_rel"].shape != (270,):
-            raise AssertionError(env.observation_space["graph_edge_rel"])
+        node_capacity = int(config.env.graph.n_max)
+        edge_capacity = int(config.env.graph.e_max)
+        if env.observation_space["graph_node_ent"].shape != (node_capacity,):
+            raise AssertionError(
+                f"expected graph_node_ent shape {(node_capacity,)}, got "
+                f"{env.observation_space['graph_node_ent']}"
+            )
+        if env.observation_space["graph_edge_rel"].shape != (edge_capacity,):
+            raise AssertionError(
+                f"expected graph_edge_rel shape {(edge_capacity,)}, got "
+                f"{env.observation_space['graph_edge_rel']}"
+            )
 
         agent = Dreamer(config.model, env.observation_space, env.action_space).to(args.device)
         state = agent.get_initial_state(args.num_envs)
@@ -83,8 +91,8 @@ def main():
         print("MS-HAB graph smoke: OK")
         print(f"  env frames: {args.num_envs * args.steps}")
         print(f"  graph+env+policy: {args.num_envs * args.steps / elapsed:.2f} frames/s")
-        print(f"  vertices max: {max_nodes}/10")
-        print(f"  real facts max: {max_edges}/270")
+        print(f"  vertices max: {max_nodes}/{node_capacity}")
+        print(f"  real facts max: {max_edges}/{edge_capacity}")
         print(f"  target-flagged frames: {target_frames}/{args.num_envs * args.steps}")
     finally:
         if env is not None:
