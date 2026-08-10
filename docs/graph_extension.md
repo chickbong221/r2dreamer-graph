@@ -11,7 +11,7 @@ frame. Index zero is padding for entity and relation vocabularies.
 
 | Key | Shape | Storage dtype |
 |---|---:|---|
-| `graph_node_ent` | `[10]` | `uint16` |
+| `graph_node_ent` | `[10]` | `uint8` |
 | `graph_node_app` | `[10,2,384]` | `float16` |
 | `graph_node_bbox` | `[10,2,4]` | `float16` |
 | `graph_node_target` | `[10]` | `uint8` |

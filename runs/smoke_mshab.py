@@ -60,7 +60,7 @@ def main():
         )
         reset = torch.ones(args.num_envs, dtype=torch.bool, device=args.device)
         obs, done = env.step(action, reset)
-        action, state = agent.act(obs.clone(), state)
+        action, state = agent.act(obs, state)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -68,7 +68,7 @@ def main():
         max_nodes = max_edges = target_frames = 0
         for _ in range(args.steps):
             obs, done = env.step(action, done)
-            action, state = agent.act(obs.clone(), state)
+            action, state = agent.act(obs, state)
             max_nodes = max(max_nodes, int(obs["graph_node_ent"].ne(0).sum(-1).max()))
             max_edges = max(max_edges, int(obs["graph_edge_rel"].ne(0).sum(-1).max()))
             target_frames += int(obs["graph_node_target"].any(-1).sum())

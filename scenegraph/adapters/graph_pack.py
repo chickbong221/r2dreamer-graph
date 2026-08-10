@@ -57,7 +57,7 @@ def pack_graph(
             f"n_max={n_max} exceeds 255; edge endpoints are packed as uint8"
         )
 
-    node_ent = np.zeros(n_max, dtype=np.uint16)
+    node_ent = np.zeros(n_max, dtype=np.uint8)
     node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)
     node_bbox = np.zeros((n_max, n_cams, 4), dtype=np.float16)
     # Which vertex the current subtask is acting on. All-zero is the honest

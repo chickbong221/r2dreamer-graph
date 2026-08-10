@@ -98,6 +98,18 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         posterior, _ = model._cal_grad(model.preprocess(sequence()), model.rssm.initial(2))
         self.assertEqual(len(posterior), 2)
 
+    def test_preprocess_is_shallow_and_non_mutating(self):
+        config = make_config(True)
+        obs_space, act_space = spaces()
+        model = Dreamer(config, obs_space, act_space).to("cpu")
+        raw = sequence()
+        original = raw["image"].clone()
+        processed = model.preprocess(raw)
+        self.assertEqual(raw["image"].dtype, torch.uint8)
+        self.assertEqual(processed["image"].dtype, torch.float32)
+        torch.testing.assert_close(raw["image"], original)
+        self.assertIs(processed["graph_node_ent"], raw["graph_node_ent"])
+
 
 if __name__ == "__main__":
     unittest.main()

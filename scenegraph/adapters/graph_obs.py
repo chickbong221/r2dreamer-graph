@@ -46,7 +46,7 @@ _CONTACT_QUERY_CAP = 2048
 _SCENE_CACHE_CAP = 8192
 
 _DTYPES: Dict[str, np.dtype] = {
-    "graph_node_ent": np.uint16,
+    "graph_node_ent": np.uint8,
     "graph_node_app": np.float16,
     "graph_node_bbox": np.float16,
     "graph_node_target": np.uint8,
@@ -558,6 +558,11 @@ def build_graph_obs(
 
     _verify_whitelist_coverage(env, teemo_cfg["whitelist_dir"])
     vocab = build_graph_vocab(teemo_cfg["whitelist_dir"])
+    if vocab.sizes["entity"] > np.iinfo(np.uint8).max + 1:
+        raise ValueError(
+            f"graph: entity vocabulary has {vocab.sizes['entity']} entries; "
+            "the compact PyTorch runtime supports at most 256"
+        )
 
     n_max = int(teemo_cfg["selection"]["n_max"])
     e_max = int(graph_cfg.get("e_max", 256))

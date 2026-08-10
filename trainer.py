@@ -63,7 +63,9 @@ class OnlineTrainer:
             # We keep the observation and the action that produced it together.
             trans["action"] = act
             if len(cache) < self.batch_length:
-                cache.append(trans.clone())
+                # Each step returns fresh tensors. A shallow container copy is
+                # sufficient and supports uint16 graph entity IDs on CUDA.
+                cache.append(trans.copy())
             # (B, A)
             act, agent_state = agent.act(trans, agent_state, eval=True)
             returns += trans["reward"][:, 0] * ~once_done
@@ -154,7 +156,7 @@ class OnlineTrainer:
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
             # (B, A)
-            act, agent_state = agent.act(trans.clone(), agent_state, eval=False)
+            act, agent_state = agent.act(trans, agent_state, eval=False)
 
             # Store transition.
             # We keep the observation and the action that produced it together.

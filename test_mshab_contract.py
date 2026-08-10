@@ -22,7 +22,7 @@ class _FakeGraph:
         "graph_edge_temp": (270,),
     }
     obs_spec_dtypes = {
-        "graph_node_ent": np.uint16,
+        "graph_node_ent": np.uint8,
         "graph_node_app": np.float16,
         "graph_node_bbox": np.float16,
         "graph_node_target": np.uint8,
@@ -76,6 +76,7 @@ class MSHABContractTest(unittest.TestCase):
         )
         self.assertEqual(tuple(transition.batch_size), (2,))
         self.assertTrue(set(GRAPH_KEYS).issubset(transition.keys()))
+        self.assertEqual(transition["graph_node_ent"].dtype, torch.uint8)
         self.assertEqual(transition["graph_node_app"].dtype, torch.float16)
         self.assertEqual(transition["is_first"].shape, (2, 1))
 

@@ -680,6 +680,10 @@ class Dreamer(nn.Module):
 
     @torch.no_grad()
     def preprocess(self, data):
+        # Shallow-copy the container and replace only normalized image values.
+        # This keeps policy inference non-mutating without TensorDict.clone(),
+        # whose CUDA foreach path does not support uint16 graph entity IDs.
+        data = data.copy()
         for key in self.image_keys:
             if key in data:
                 data[key] = to_f32(data[key]) / 255.0
