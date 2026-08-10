@@ -91,6 +91,26 @@ class CompactGraphTest(unittest.TestCase):
         self.assertIsNotNone(encoder.node.net[0].weight.grad)
         self.assertIsNotNone(sem.grad)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for FP16 autocast")
+    def test_decoder_fp16_autocast_is_finite(self):
+        device = torch.device("cuda")
+        encoder = GraphEncoder(config()).to(device)
+        decoder = GraphDecoder(config(), sem_dim=8).to(device)
+        graph = {key: value.to(device) for key, value in graph_batch(96).items()}
+        sem = torch.randn(2, 3, 2, 4, device=device, requires_grad=True)
+        step_valid = torch.tensor(
+            [[True, True, False], [True, True, False]], device=device
+        )
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            encoded = encoder(graph)
+            losses, metrics = decoder(encoded, sem, step_valid)
+            total = sum(losses.values()) + encoded.token.square().mean()
+        self.assertTrue(all(torch.isfinite(value) for value in losses.values()))
+        self.assertTrue(all(torch.isfinite(value) for value in metrics.values()))
+        total.backward()
+        self.assertIsNotNone(encoder.node.net[0].weight.grad)
+        self.assertIsNotNone(sem.grad)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -234,8 +234,10 @@ class GraphEncoder(nn.Module):
         nodes = flat.reshape(compact.graph_count, compact.num_nodes, self.units)
 
         score = (self.key(nodes) * self.query).sum(-1) / math.sqrt(self.units)
-        score = score.masked_fill(~valid, -1e9)
-        attention = torch.softmax(score.float(), -1).to(nodes.dtype) * valid
+        # Apply masks in float32: -1e9 is outside float16's finite range and
+        # mixed-precision autocast can otherwise fail before softmax.
+        score = score.float().masked_fill(~valid, -1e9)
+        attention = torch.softmax(score, -1).to(nodes.dtype) * valid
         attention = attention / attention.sum(-1, keepdim=True).clamp_min(1e-6)
         token = self.out((attention[..., None] * self.value(nodes)).sum(1))
         token = token * valid.any(-1, keepdim=True)
@@ -373,8 +375,10 @@ class GraphDecoder(nn.Module):
         safe_label = torch.where(present, label, torch.ones_like(label))
         target_logits = self.target_head(self.target_in(sem.reshape(graph_count, -1)))
         target_classes = torch.arange(self.entity_vocab, device=target_logits.device).ne(0)
-        target_logits = target_logits.masked_fill(~target_classes, -1e9)
-        target_loss = F.cross_entropy(target_logits.float(), safe_label, reduction="none")
+        # Cross entropy is intentionally evaluated in float32. Mask there too,
+        # because -1e9 cannot be converted to float16 under autocast.
+        target_logits = target_logits.float().masked_fill(~target_classes, -1e9)
+        target_loss = F.cross_entropy(target_logits, safe_label, reduction="none")
         losses["semtgt"] = (target_loss * present).mean()
         metrics["semtgt_acc"] = self._masked(target_logits.argmax(-1).eq(label), present)
         metrics["semtgt_frac"] = present.float().mean()
