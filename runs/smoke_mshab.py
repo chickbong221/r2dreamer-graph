@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import sys
 import time
@@ -39,6 +40,9 @@ def main():
         f"device={args.device}",
         f"buffer.storage_device={args.device}",
     ]
+    dino_weights = os.environ.get("DINO_WEIGHTS")
+    if dino_weights:
+        overrides.append(f"env.graph.dino_weights={dino_weights}")
     with initialize_config_dir(version_base=None, config_dir=str(ROOT / "configs")):
         config = compose(config_name="configs", overrides=overrides)
 
