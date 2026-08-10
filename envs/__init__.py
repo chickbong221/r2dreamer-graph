@@ -8,6 +8,8 @@ def make_envs(config):
 
     if suite == "isaaclab":
         return _make_isaaclab_envs(config)
+    if suite == "maniskill":
+        return _make_maniskill_envs(config)
 
     def env_constructor(idx):
         return lambda: make_env(config, idx)
@@ -21,6 +23,24 @@ def make_envs(config):
     obs_space = train_envs.observation_space
     act_space = train_envs.action_space
     return train_envs, eval_envs, obs_space, act_space
+
+
+def _make_maniskill_envs(config):
+    """Build the single GPU-vectorized MS-HAB training environment."""
+    if int(config.eval_episode_num) > 0:
+        raise ValueError(
+            "The minimal MS-HAB path does not construct a second GPU eval env. "
+            "Set env.eval_episode_num=0 for training."
+        )
+    from envs.maniskill import ManiSkillVecEnv
+
+    train_envs = ManiSkillVecEnv(config)
+    return (
+        train_envs,
+        None,
+        train_envs.observation_space,
+        train_envs.action_space,
+    )
 
 
 def _make_isaaclab_envs(config):

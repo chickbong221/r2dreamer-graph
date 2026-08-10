@@ -18,6 +18,16 @@ from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
 
+def _mask_terminal_graph(token, is_last):
+    """Remove stale graph conditioning on auto-reset terminal observations."""
+    valid = ~is_last.bool()
+    if valid.ndim == token.ndim and valid.shape[-1] == 1:
+        valid = valid.squeeze(-1)
+    while valid.ndim < token.ndim:
+        valid = valid.unsqueeze(-1)
+    return token * valid.to(token.dtype)
+
+
 class Dreamer(nn.Module):
     def __init__(self, config, obs_space, act_space):
         super().__init__()
@@ -288,6 +298,8 @@ class Dreamer(nn.Module):
             if self.graph_enabled
             else None
         )
+        if graph_token is not None:
+            graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
         prev_stoch, prev_deter, prev_action = state["stoch"], state["deter"], state["prev_action"]
         # (B, S, K), (B, D)
         result = self._frozen_rssm.obs_step(
@@ -341,6 +353,7 @@ class Dreamer(nn.Module):
         graph_token = None
         if self.graph_enabled:
             graph_token = self.graph_encoder(graph_from(data)).token
+            graph_token = _mask_terminal_graph(graph_token, data["is_last"])
         observed = self.rssm.observe(
             embed[:B, :5],
             data["action"][:B, :5],
@@ -426,6 +439,8 @@ class Dreamer(nn.Module):
         embed = self.encoder(data)
         graph_encoding = self.graph_encoder(graph_from(data)) if self.graph_enabled else None
         graph_token = graph_encoding.token if graph_encoding is not None else None
+        if graph_token is not None:
+            graph_token = _mask_terminal_graph(graph_token, data["is_last"])
         observed = self.rssm.observe(
             embed, data["action"], initial, data["is_first"], graph_token
         )

@@ -1,0 +1,46 @@
+task: maniskill_PickSubtaskTrain-v0
+steps: 1.01e6
+env_num: 32
+eval_episode_num: 0
+action_repeat: 1
+train_ratio: 66
+time_limit: 100
+
+seed: ${seed}
+device: ${device}
+
+mshab_task: prepare_groceries
+mshab_obj: all
+split: train
+num_build_configs: 4
+obs_mode: rgb+segmentation
+sim_backend: gpu
+control_mode: ''
+reward_mode: normalized_dense
+shader_dir: minimal
+nonprivileged_obs: true
+size: [112, 112]
+cameras: [fetch_head, fetch_hand]
+instruction_table: scenegraph/configs/instructions.npz
+
+encoder:
+  mlp_keys: '^(state|instruction)$'
+  cnn_keys: '^image_(head|hand)$'
+decoder:
+  mlp_keys: '^state$'
+  cnn_keys: '^image_(head|hand)$'
+
+graph:
+  enabled: ${model.graph.enabled}
+  profile: room_scale
+  thresholds_path: ''
+  whitelist_dir: ''
+  n_max: ${model.graph.n_max}
+  e_max: ${model.graph.e_max}
+  k_persist: -1
+  app_dim: ${model.graph.app_dim}
+  dino_model: dinov2_vits14_reg
+  dino_res: 112
+  dino_weights: ''
+  staleness_enabled: true
+  bypass_teemo: false

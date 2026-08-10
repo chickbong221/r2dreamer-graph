@@ -1,0 +1,130 @@
+{
+  "_schema_version": 4,
+  "subtask": "pick",
+  "target": "actor:003_cracker_box",
+  "members": {
+    "actor:003_cracker_box": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "obj_0",
+      "interaction_rollouts": 30
+    },
+    "link:fridge-0/body": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "interaction_rollouts": 6,
+      "support_rollouts": 18,
+      "supports": [
+        "actor:003_cracker_box"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "support_rollouts": 16,
+      "supports": [
+        "actor:003_cracker_box"
+      ]
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.20557843526004702,
+      0.41115687052009403,
+      0.616735305780141,
+      0.8223137410401881
+    ],
+    "height-offset": [
+      -0.7172404204308986,
+      -0.23908014014363288,
+      0.23908014014363288,
+      0.7172404204308986
+    ],
+    "planar-distance-change": [
+      -0.052786643893883475,
+      -0.007331478318594927,
+      0.007331478318594927,
+      0.052786643893883475
+    ],
+    "height-offset-change": [
+      -0.019878473281860355,
+      -0.002760899066925049,
+      0.002760899066925049,
+      0.019878473281860355
+    ],
+    "grasp-compatibility-change": [
+      -0.018680938501520805,
+      -0.0025945747918778897,
+      0.0025945747918778897,
+      0.018680938501520805
+    ],
+    "contact-compatibility-change": [
+      -0.007914195992974576,
+      -0.0010991938879131356,
+      0.0010991938879131356,
+      0.007914195992974576
+    ]
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 0.7772698823757073,
+    "contact_compatibility_change": 0.013190326654957629,
+    "grasp_compatibility": 0.6350948481794934,
+    "grasp_compatibility_change": 0.031134897502534675,
+    "height_offset": 1.1954007007181644,
+    "height_offset_change": 0.03313078880310059,
+    "planar_distance": 1.027892176300235,
+    "planar_distance_change": 0.08797773982313913,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.0
+  },
+  "bin_stats_observed": {
+    "contact_compatibility": 1.0,
+    "contact_compatibility_change": 0.5495346217174769,
+    "grasp_compatibility": 0.8135156479986191,
+    "grasp_compatibility_change": 0.5939489262762923,
+    "height_offset": 1.3132981993258,
+    "height_offset_change": 0.19052910804748535,
+    "planar_distance": 1.6534656163868815,
+    "planar_distance_change": 0.4337517868538313,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.5318688166633454
+  },
+  "_n_successful_rollouts": 30
+}

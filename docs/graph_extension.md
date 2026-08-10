@@ -48,7 +48,7 @@ arm retains the base repository's existing compile behavior.
 Run correctness tests:
 
 ```bash
-python -m unittest test_graph test_semantic_rssm test_dreamer_graph
+python -m unittest test_graph test_semantic_rssm test_dreamer_graph test_mshab_contract
 ```
 
 Check that padding width no longer controls graph compute:
@@ -66,3 +66,24 @@ python runs/benchmark_graph.py \
 The important result is the ratio between 96 and 270. It should be close to
 one and no more than about 1.20x. Absolute time determines how much overhead
 the unchanged two-layer, 512-wide method adds to a full Dreamer update.
+
+## MS-HAB runtime smoke
+
+The repository contains only the runtime scene-graph slice. It uses externally
+installed ManiSkill and MS-HAB packages and their ReplicaCAD task plans; it
+does not import code from ReLDreamer.
+
+Before a long run, exercise reset, named RGB cameras, segmentation, frozen
+DINOv2 features, graph packing, the semantic RSSM, and policy inference:
+
+```bash
+python runs/smoke_mshab.py \
+  --num-envs 8 \
+  --steps 4 \
+  --build-configs 4 \
+  --mshab-task prepare_groceries \
+  --mshab-obj all
+```
+
+The smoke performs no replay writes and no optimizer update. Use CPU replay
+storage for training so fixed-width RGB and graph records do not consume VRAM.
