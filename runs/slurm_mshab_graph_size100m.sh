@@ -2,6 +2,7 @@
 #SBATCH --job-name=r2d-ms-g100
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
+#SBATCH --nodelist=worker-2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=0
@@ -86,7 +87,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   model.graph.n_max=12 \
   model.amp_dtype=bfloat16 \
   env.obs_mode=rgb+segmentation \
-  batch_size=32 \
+  batch_size=28 \
   batch_length=64 \
   env.env_num=126 \
   env.train_ratio=64 \
