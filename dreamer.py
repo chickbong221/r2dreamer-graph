@@ -45,6 +45,14 @@ def _check_finite_replay(data, initial):
             "Replay sample is non-finite before preprocessing/autocast; the model "
             "did not create these values:\n  " + "\n  ".join(problems)
         )
+    # Finite is not enough under float16 autocast: a magnitude near the 65504
+    # ceiling overflows to inf inside the encoder and reaches the RSSM as NaN.
+    for name, value in tensors:
+        if not torch.is_floating_point(value):
+            continue
+        peak = float(value.abs().max())
+        marker = "  <-- exceeds float16 range" if peak > 65504.0 else ""
+        print(f"[dreamer] replay |max| {name}={peak:.4g}{marker}", flush=True)
 
 
 def _mask_terminal_graph(token, is_last):
