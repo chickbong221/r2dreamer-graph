@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+import tempfile
 
 from hydra import compose, initialize_config_dir
 
@@ -25,6 +26,12 @@ def main():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-before-env", action="store_true")
+    parser.add_argument(
+        "--preamble",
+        choices=("none", "imports", "buffer", "logger"),
+        default="none",
+        help="Cumulatively reproduce training setup before constructing SAPIEN.",
+    )
     args = parser.parse_args()
 
     overrides = [
@@ -38,9 +45,25 @@ def main():
         "env.mshab_obj=all",
         f"device={args.device}",
         f"seed={args.seed}",
+        "batch_size=8",
+        "batch_length=64",
+        "buffer.storage_device=cpu",
+        "buffer.max_size=500000",
+        "wandb.enabled=false",
     ]
     with initialize_config_dir(version_base=None, config_dir=str(ROOT / "configs")):
         config = compose(config_name="configs", overrides=overrides)
+
+    buffer_type = None
+    if args.preamble != "none":
+        # Match train.py's module imports before ManiSkill is imported.
+        import tools as training_tools
+        from buffer import Buffer
+        from dreamer import Dreamer  # noqa: F401
+        from trainer import OnlineTrainer  # noqa: F401
+
+        buffer_type = Buffer
+        print("Imported the complete R2Dreamer training stack", flush=True)
 
     import mani_skill
     import mshab
@@ -53,11 +76,34 @@ def main():
     print(f"torch CUDA initialized before probe: {torch.cuda.is_initialized()}", flush=True)
 
     if args.seed_before_env:
-        import tools
+        import tools as training_tools
 
-        tools.set_seed_everywhere(args.seed)
+        training_tools.set_seed_everywhere(args.seed)
         print(
             "Applied tools.set_seed_everywhere before environment; "
+            f"CUDA initialized={torch.cuda.is_initialized()}",
+            flush=True,
+        )
+
+    logger = None
+    logger_dir = None
+    if args.preamble == "logger":
+        logger_dir = tempfile.TemporaryDirectory(prefix="r2d-env-probe-")
+        logger = training_tools.Logger(
+            pathlib.Path(logger_dir.name), wandb_config=config.wandb
+        )
+        logger.log_hydra_config(config)
+        print(
+            "Constructed the local logger before environment; "
+            f"CUDA initialized={torch.cuda.is_initialized()}",
+            flush=True,
+        )
+
+    replay = None
+    if args.preamble in ("buffer", "logger"):
+        replay = buffer_type(config.buffer)
+        print(
+            "Constructed the CPU-backed replay buffer before environment; "
             f"CUDA initialized={torch.cuda.is_initialized()}",
             flush=True,
         )
@@ -67,7 +113,7 @@ def main():
     print(
         "Creating R2Dreamer Pick/prepare_groceries env "
         f"(envs={args.num_envs}, obs={args.obs_mode}, "
-        f"seed_before_env={args.seed_before_env})...",
+        f"seed_before_env={args.seed_before_env}, preamble={args.preamble})...",
         flush=True,
     )
     env = None
@@ -77,6 +123,10 @@ def main():
     finally:
         if env is not None:
             env.close()
+        if logger is not None:
+            logger.close()
+        if logger_dir is not None:
+            logger_dir.cleanup()
 
 
 if __name__ == "__main__":
