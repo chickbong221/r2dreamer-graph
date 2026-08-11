@@ -19,7 +19,37 @@ from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
 
-def _check_finite_replay(data, initial):
+def _check_finite_tensors(scope, tensors):
+    """Fail with tensor names and locations at the first non-finite boundary."""
+    problems = []
+    for name, value in tensors:
+        if value is None or not (
+            torch.is_floating_point(value) or torch.is_complex(value)
+        ):
+            continue
+        finite = torch.isfinite(value)
+        if bool(finite.all()):
+            continue
+        invalid = ~finite
+        first = torch.nonzero(invalid, as_tuple=False)[0].tolist()
+        bad_rows = []
+        if value.ndim:
+            row_invalid = invalid.reshape(value.shape[0], -1).any(-1)
+            bad_rows = torch.nonzero(row_invalid, as_tuple=False).flatten().tolist()
+        finite_values = value[finite]
+        finite_peak = (
+            float(finite_values.abs().max()) if finite_values.numel() else float("nan")
+        )
+        problems.append(
+            f"{name}: {int(invalid.sum())} invalid value(s), first index {first}, "
+            f"bad leading rows={bad_rows[:16]}, finite |max|={finite_peak:.4g}, "
+            f"shape={tuple(value.shape)}, dtype={value.dtype}"
+        )
+    if problems:
+        raise FloatingPointError(f"Non-finite {scope}:\n  " + "\n  ".join(problems))
+
+
+def _check_finite_replay(data, initial, *, log_magnitudes=False):
     """Fail before model execution if a sampled replay tensor is non-finite."""
     tensors = [(f"data/{key}", value) for key, value in data.items()]
     latent_names = ("stoch", "deter", "sem")
@@ -27,26 +57,12 @@ def _check_finite_replay(data, initial):
         (f"initial/{latent_names[index]}", value)
         for index, value in enumerate(initial)
     )
-    problems = []
-    for name, value in tensors:
-        if not (torch.is_floating_point(value) or torch.is_complex(value)):
-            continue
-        finite = torch.isfinite(value)
-        if bool(finite.all()):
-            continue
-        invalid = ~finite
-        first = torch.nonzero(invalid, as_tuple=False)[0].tolist()
-        problems.append(
-            f"{name}: {int(invalid.sum())} invalid value(s), first index {first}, "
-            f"shape={tuple(value.shape)}, dtype={value.dtype}"
-        )
-    if problems:
-        raise FloatingPointError(
-            "Replay sample is non-finite before preprocessing/autocast; the model "
-            "did not create these values:\n  " + "\n  ".join(problems)
-        )
-    # Finite is not enough under float16 autocast: a magnitude near the 65504
-    # ceiling overflows to inf inside the encoder and reaches the RSSM as NaN.
+    _check_finite_tensors("replay sample before preprocessing/autocast", tensors)
+    if not log_magnitudes:
+        return
+    # Raw magnitudes are diagnostic only. Preprocessing (for example symlog)
+    # may change them, and a GEMM can overflow even when every input is below
+    # the float16 scalar limit.
     for name, value in tensors:
         if not torch.is_floating_point(value):
             continue
@@ -133,6 +149,8 @@ class Dreamer(nn.Module):
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
+        self._finite_diagnostic_updates = 4
+        self._diagnose_finite = False
         self._trace_update = False
         self._trace_update_started = 0.0
         self._trace_stage_started = 0.0
@@ -481,9 +499,15 @@ class Dreamer(nn.Module):
         self._trace_stage_start("replay sample")
         data, index, initial = replay_buffer.sample()
         self._trace_stage_done("replay sample")
-        if not self._replay_input_checked:
+        first_replay_check = not self._replay_input_checked
+        if first_replay_check:
             self._trace_stage_start("replay validation")
-            _check_finite_replay(data, initial)
+        _check_finite_replay(
+            data,
+            initial,
+            log_magnitudes=first_replay_check,
+        )
+        if first_replay_check:
             self._trace_stage_done("replay validation")
             self._replay_input_checked = True
             print(
@@ -498,6 +522,7 @@ class Dreamer(nn.Module):
             self.ema_update()
         self._trace_stage_done("preprocess and target update")
         metrics = {}
+        self._diagnose_finite = self._finite_diagnostic_updates > 0
         with autocast(
             device_type=self.device.type,
             dtype=self._amp_dtype,
@@ -506,6 +531,11 @@ class Dreamer(nn.Module):
             posterior, mets = self._cal_grad(p_data, initial)
         self._trace_stage_start("optimizer step")
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
+        if self._diagnose_finite:
+            _check_finite_tensors(
+                "gradients before clipping/optimizer step",
+                ((name, param.grad) for name, param in self._named_params.items()),
+            )
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
             self._prototypes.grad.zero_()
         if self._log_grads:
@@ -518,6 +548,11 @@ class Dreamer(nn.Module):
         self._agc(self._named_params.values())  # clipping
         self._scaler.step(self._optimizer)  # update params, or skip on non-finite gradients
         self._scaler.update()  # adjust scale
+        if self._diagnose_finite:
+            _check_finite_tensors(
+                "parameters after optimizer step",
+                ((name, param) for name, param in self._named_params.items()),
+            )
         self._scheduler.step()  # increment scheduler
         self._optimizer.zero_grad(set_to_none=True)  # reset grads
         self._trace_stage_done("optimizer step")
@@ -534,6 +569,8 @@ class Dreamer(nn.Module):
         self._trace_stage_start("replay latent writeback")
         replay_buffer.update(index, *(value.detach() for value in posterior))
         self._trace_stage_done("replay latent writeback")
+        if self._diagnose_finite:
+            self._finite_diagnostic_updates -= 1
         if trace_this_update:
             if self.device.type == "cuda":
                 torch.cuda.synchronize(self.device)
@@ -565,6 +602,8 @@ class Dreamer(nn.Module):
         # (B, T, E)
         self._trace_stage_start("encoder")
         embed = self.encoder(data)
+        if self._diagnose_finite:
+            _check_finite_tensors("encoder output", (("embed", embed),))
         self._trace_stage_done("encoder")
         if self.graph_enabled:
             self._trace_stage_start("graph encoder")
