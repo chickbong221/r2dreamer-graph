@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--seed-before-env", action="store_true")
     parser.add_argument(
         "--preamble",
-        choices=("none", "imports", "buffer", "logger"),
+        choices=("none", "imports", "buffer", "logger", "wandb"),
         default="none",
         help="Cumulatively reproduce training setup before constructing SAPIEN.",
     )
@@ -49,7 +49,8 @@ def main():
         "batch_length=64",
         "buffer.storage_device=cpu",
         "buffer.max_size=500000",
-        "wandb.enabled=false",
+        f"wandb.enabled={'true' if args.preamble == 'wandb' else 'false'}",
+        "wandb.name=r2d-env-init-probe",
     ]
     with initialize_config_dir(version_base=None, config_dir=str(ROOT / "configs")):
         config = compose(config_name="configs", overrides=overrides)
@@ -87,20 +88,21 @@ def main():
 
     logger = None
     logger_dir = None
-    if args.preamble == "logger":
+    if args.preamble in ("logger", "wandb"):
         logger_dir = tempfile.TemporaryDirectory(prefix="r2d-env-probe-")
         logger = training_tools.Logger(
             pathlib.Path(logger_dir.name), wandb_config=config.wandb
         )
         logger.log_hydra_config(config)
         print(
-            "Constructed the local logger before environment; "
+            "Constructed the logger before environment "
+            f"(wandb={args.preamble == 'wandb'}); "
             f"CUDA initialized={torch.cuda.is_initialized()}",
             flush=True,
         )
 
     replay = None
-    if args.preamble in ("buffer", "logger"):
+    if args.preamble in ("buffer", "logger", "wandb"):
         replay = buffer_type(config.buffer)
         print(
             "Constructed the CPU-backed replay buffer before environment; "
