@@ -1,5 +1,4 @@
 import atexit
-import copy
 
 from . import parallel, wrappers
 
@@ -34,22 +33,6 @@ def _make_maniskill_envs(config):
             "Set env.eval_episode_num=0 for training."
         )
     from envs.maniskill import ManiSkillVecEnv
-
-    warmup_envs = int(getattr(config, "renderer_warmup_envs", 0))
-    if warmup_envs > 0:
-        warmup_config = copy.deepcopy(config)
-        warmup_config.env_num = warmup_envs
-        # The warm-up exists only to initialize SAPIEN's renderer. Avoid loading
-        # the graph encoder and DINO model before constructing the real env.
-        warmup_config.graph.enabled = False
-        warmup = None
-        print(f"[env] renderer warm-up: {warmup_envs} env(s)", flush=True)
-        try:
-            warmup = ManiSkillVecEnv(warmup_config)
-        finally:
-            if warmup is not None:
-                warmup.close()
-        print("[env] renderer warm-up complete", flush=True)
 
     train_envs = ManiSkillVecEnv(config)
     return (
