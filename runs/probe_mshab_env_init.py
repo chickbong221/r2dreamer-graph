@@ -61,10 +61,13 @@ def main():
         import tools as training_tools
         from buffer import Buffer
         from dreamer import Dreamer  # noqa: F401
+        from envs import make_envs
         from trainer import OnlineTrainer  # noqa: F401
 
         buffer_type = Buffer
         print("Imported the complete R2Dreamer training stack", flush=True)
+    else:
+        from envs import make_envs
 
     import torch
 
@@ -104,18 +107,6 @@ def main():
             flush=True,
         )
 
-    # Full train.py imports the simulator only when make_envs() is called,
-    # after seeding, logging, and replay construction. Keep that exact order.
-    import mani_skill
-    import mshab
-    import sapien
-
-    print(f"mani_skill: {mani_skill.__file__}", flush=True)
-    print(f"mshab: {mshab.__file__}", flush=True)
-    print(f"sapien: {sapien.__file__}", flush=True)
-
-    from envs.maniskill import ManiSkillVecEnv
-
     print(
         "Creating R2Dreamer Pick/prepare_groceries env "
         f"(envs={args.num_envs}, obs={args.obs_mode}, "
@@ -124,8 +115,15 @@ def main():
     )
     env = None
     try:
-        env = ManiSkillVecEnv(config.env)
+        env, _, _, _ = make_envs(config.env)
         print("R2DREAMER ENV: OK", flush=True)
+        import mani_skill
+        import mshab
+        import sapien
+
+        print(f"mani_skill: {mani_skill.__file__}", flush=True)
+        print(f"mshab: {mshab.__file__}", flush=True)
+        print(f"sapien: {sapien.__file__}", flush=True)
     finally:
         if env is not None:
             env.close()
