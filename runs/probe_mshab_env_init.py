@@ -66,14 +66,8 @@ def main():
         buffer_type = Buffer
         print("Imported the complete R2Dreamer training stack", flush=True)
 
-    import mani_skill
-    import mshab
-    import sapien
     import torch
 
-    print(f"mani_skill: {mani_skill.__file__}", flush=True)
-    print(f"mshab: {mshab.__file__}", flush=True)
-    print(f"sapien: {sapien.__file__}", flush=True)
     print(f"torch CUDA initialized before probe: {torch.cuda.is_initialized()}", flush=True)
 
     if args.seed_before_env:
@@ -109,6 +103,16 @@ def main():
             f"CUDA initialized={torch.cuda.is_initialized()}",
             flush=True,
         )
+
+    # Full train.py imports the simulator only when make_envs() is called,
+    # after seeding, logging, and replay construction. Keep that exact order.
+    import mani_skill
+    import mshab
+    import sapien
+
+    print(f"mani_skill: {mani_skill.__file__}", flush=True)
+    print(f"mshab: {mshab.__file__}", flush=True)
+    print(f"sapien: {sapien.__file__}", flush=True)
 
     from envs.maniskill import ManiSkillVecEnv
 
