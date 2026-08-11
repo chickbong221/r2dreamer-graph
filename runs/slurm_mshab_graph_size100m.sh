@@ -8,6 +8,8 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
+set -euo pipefail
+
 echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
@@ -42,12 +44,6 @@ export LD_LIBRARY_PATH="$NVIDIA_USERSPACE_DIR:${LD_LIBRARY_PATH:-}"
 export VK_DRIVER_FILES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 export VK_ICD_FILENAMES="$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json"
 
-if command -v vulkaninfo >/dev/null 2>&1; then
-  vulkaninfo --summary
-else
-  echo "vulkaninfo is not installed; continuing with the configured EGL ICD."
-fi
-
 cd "$HOME/projects/r2dreamer-graph"
 
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
@@ -65,6 +61,7 @@ fi
 mkdir -p "$HOME/output" "$HOME/logdir/r2dreamer-graph"
 
 nvidia-smi
+nvidia-smi --query-gpu=name,uuid,pci.bus_id,driver_version,memory.total --format=csv,noheader
 
 # Record GPU state every 100 seconds and always stop the monitor on exit.
 nvidia-smi -l 100 > "$HOME/output/gpu_${SLURM_JOB_ID}.log" &
@@ -79,15 +76,19 @@ trap cleanup EXIT INT TERM
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-python train.py \
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+
+PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
+  deterministic_run=true \
   env=mshab \
   model=size100M_graph \
   model.graph.enabled=true \
   model.graph.n_max=12 \
-  model.amp_dtype=float16 \
+  model.amp_dtype=bfloat16 \
+  env.obs_mode=rgb+segmentation \
   batch_size=32 \
   batch_length=64 \
-  env.env_num=63 \
+  env.env_num=126 \
   env.train_ratio=64 \
   env.mshab_task=prepare_groceries \
   env.mshab_obj=all \
