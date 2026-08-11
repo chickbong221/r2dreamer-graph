@@ -201,6 +201,7 @@ class ConvEncoder(nn.Module):
         super().__init__()
         act = getattr(torch.nn, config.act)
         h, w, input_ch = input_shape
+        input_h, input_w = h, w
         self.depths = tuple(int(config.depth) * int(mult) for mult in list(config.mults))
         self.kernel_size = int(config.kernel_size)
         in_dim = input_ch
@@ -225,6 +226,18 @@ class ConvEncoder(nn.Module):
         self.out_dim = self.depths[-1] * h * w
         self.layers = nn.Sequential(*layers)
 
+        # Several CUDA CNN kernels use signed 32-bit indexing. With the 100M
+        # MS-HAB encoder, B*T=2048 makes the first activation
+        # [2048, 96, 112, 112] (2.47B elements), and corruption starts exactly
+        # at the first flattened frame beyond INT_MAX. Keep ordinary workloads
+        # on the single-pass path, but split oversized flattened image batches
+        # into independent rows. This changes neither the model nor its loss.
+        first_activation_elements_per_row = self.depths[0] * input_h * input_w
+        self._max_rows_without_chunk = max(
+            1, (2**31 - 1) // first_activation_elements_per_row
+        )
+        self._rows_per_chunk = min(1024, self._max_rows_without_chunk)
+
     def forward(self, obs):
         """Encode image-like observations with a CNN."""
         # (B, T, H, W, C)
@@ -234,7 +247,16 @@ class ConvEncoder(nn.Module):
         # (B*T, C, H, W)
         x = x.permute(0, 3, 1, 2)
         # (B*T, C_feat, H_feat, W_feat)
-        x = self.layers(x)
+        if x.shape[0] <= self._max_rows_without_chunk:
+            x = self.layers(x)
+        else:
+            x = torch.cat(
+                [
+                    self.layers(x[start : start + self._rows_per_chunk])
+                    for start in range(0, x.shape[0], self._rows_per_chunk)
+                ],
+                dim=0,
+            )
         # (B*T, C_feat*H_feat*W_feat)
         x = x.reshape(x.shape[0], -1)
         # (B, T, C_feat*H_feat*W_feat)
