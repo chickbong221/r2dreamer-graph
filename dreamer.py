@@ -1,5 +1,6 @@
 import copy
 import math
+import time
 from collections import OrderedDict
 
 import torch
@@ -124,6 +125,9 @@ class Dreamer(nn.Module):
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
+        self._trace_update = False
+        self._trace_update_started = 0.0
+        self._trace_stage_started = 0.0
 
         modules = {
             "rssm": self.rssm,
@@ -425,21 +429,66 @@ class Dreamer(nn.Module):
         error = (model - truth + 1.0) / 2.0
         return torch.cat([truth, model, error], 2)
 
+    def _trace_stage_start(self, name):
+        """Mark the start of a synchronized first-update diagnostic stage."""
+        if not self._trace_update:
+            return
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        self._trace_stage_started = time.perf_counter()
+        elapsed = self._trace_stage_started - self._trace_update_started
+        print(
+            f"[dreamer:first-update] START {name} (total={elapsed:.3f}s)",
+            flush=True,
+        )
+
+    def _trace_stage_done(self, name):
+        """Synchronize and mark completion of a first-update diagnostic stage."""
+        if not self._trace_update:
+            return
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        now = time.perf_counter()
+        stage = now - self._trace_stage_started
+        total = now - self._trace_update_started
+        memory = ""
+        if self.device.type == "cuda":
+            allocated = torch.cuda.memory_allocated(self.device) / 2**30
+            reserved = torch.cuda.memory_reserved(self.device) / 2**30
+            memory = f", allocated={allocated:.2f}GiB, reserved={reserved:.2f}GiB"
+        print(
+            f"[dreamer:first-update] DONE  {name} "
+            f"(stage={stage:.3f}s, total={total:.3f}s{memory})",
+            flush=True,
+        )
+
     def update(self, replay_buffer):
         """Sample a batch from replay and perform one optimization step."""
+        trace_this_update = not self._replay_input_checked
+        if trace_this_update:
+            self._trace_update = True
+            self._trace_update_started = time.perf_counter()
+            print("[dreamer:first-update] BEGIN", flush=True)
+
+        self._trace_stage_start("replay sample")
         data, index, initial = replay_buffer.sample()
+        self._trace_stage_done("replay sample")
         if not self._replay_input_checked:
+            self._trace_stage_start("replay validation")
             _check_finite_replay(data, initial)
+            self._trace_stage_done("replay validation")
             self._replay_input_checked = True
             print(
                 "[dreamer] first replay batch is finite before preprocessing/autocast",
                 flush=True,
             )
         torch.compiler.cudagraph_mark_step_begin()
+        self._trace_stage_start("preprocess and target update")
         p_data = self.preprocess(data)
         self._update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
+        self._trace_stage_done("preprocess and target update")
         metrics = {}
         with autocast(
             device_type=self.device.type,
@@ -447,6 +496,7 @@ class Dreamer(nn.Module):
             enabled=self.device.type in ("cpu", "cuda"),
         ):
             posterior, mets = self._cal_grad(p_data, initial)
+        self._trace_stage_start("optimizer step")
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
         if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
             self._prototypes.grad.zero_()
@@ -462,6 +512,7 @@ class Dreamer(nn.Module):
         self._scaler.update()  # adjust scale
         self._scheduler.step()  # increment scheduler
         self._optimizer.zero_grad(set_to_none=True)  # reset grads
+        self._trace_stage_done("optimizer step")
         mets["opt/lr"] = self._scheduler.get_lr()[0]
         mets["opt/grad_scale"] = self._scaler.get_scale()
         if self._log_grads:
@@ -472,7 +523,18 @@ class Dreamer(nn.Module):
             mets["opt/update_rms"] = update_rms
         metrics.update(mets)
         # update latent vectors in replay buffer
+        self._trace_stage_start("replay latent writeback")
         replay_buffer.update(index, *(value.detach() for value in posterior))
+        self._trace_stage_done("replay latent writeback")
+        if trace_this_update:
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            elapsed = time.perf_counter() - self._trace_update_started
+            print(
+                f"[dreamer:first-update] COMPLETE (total={elapsed:.3f}s)",
+                flush=True,
+            )
+            self._trace_update = False
         return metrics
 
     def _cal_grad(self, data, initial):
@@ -493,23 +555,34 @@ class Dreamer(nn.Module):
 
         # === World model: posterior rollout and KL losses ===
         # (B, T, E)
+        self._trace_stage_start("encoder")
         embed = self.encoder(data)
+        self._trace_stage_done("encoder")
+        if self.graph_enabled:
+            self._trace_stage_start("graph encoder")
         graph_encoding = self.graph_encoder(graph_from(data)) if self.graph_enabled else None
+        if self.graph_enabled:
+            self._trace_stage_done("graph encoder")
         graph_token = graph_encoding.token if graph_encoding is not None else None
         if graph_token is not None:
             graph_token = _mask_terminal_graph(graph_token, data["is_last"])
+        self._trace_stage_start("RSSM posterior rollout")
         observed = self.rssm.observe(
             embed, data["action"], initial, data["is_first"], graph_token
         )
+        self._trace_stage_done("RSSM posterior rollout")
         post_stoch, post_deter, post_logit = observed[:3]
         post_sem = observed[3] if self.graph_enabled else None
         post_sem_logit = observed[4] if self.graph_enabled else None
         # (B, T, S, K)
+        self._trace_stage_start("RSSM prior and KL")
         _, prior_logit = self.rssm.prior(post_deter, post_sem)
         dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
         losses["dyn"] = torch.mean(dyn_loss)
         losses["rep"] = torch.mean(rep_loss)
+        self._trace_stage_done("RSSM prior and KL")
         if self.graph_enabled:
+            self._trace_stage_start("semantic and graph losses")
             step_valid = ~data["is_last"].bool()
             if step_valid.ndim == 3 and step_valid.shape[-1] == 1:
                 step_valid = step_valid[..., 0]
@@ -531,8 +604,10 @@ class Dreamer(nn.Module):
             )
             losses.update(graph_losses)
             metrics.update(graph_metrics)
+            self._trace_stage_done("semantic and graph losses")
         # === Representation / auxiliary losses ===
         # (B, T, F)
+        self._trace_stage_start("representation and reconstruction losses")
         feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
         if self.rep_loss == "dreamer":
             recon_losses = {
@@ -585,14 +660,17 @@ class Dreamer(nn.Module):
             losses.update(proto_losses)
         else:
             raise NotImplementedError
+        self._trace_stage_done("representation and reconstruction losses")
 
         # reward and continue
+        self._trace_stage_start("reward and continuation losses")
         losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
         cont = 1.0 - to_f32(data["is_terminal"])
         losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
         # log
         metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
         metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
+        self._trace_stage_done("reward and continuation losses")
 
         # === Imagination rollout for actor-critic ===
         # (B*T, S, K), (B*T, D)
@@ -603,10 +681,13 @@ class Dreamer(nn.Module):
         if self.graph_enabled:
             start = start + (post_sem.reshape(-1, *post_sem.shape[2:]).detach(),)
         # (B, T, ...) -> (B*T, ...)
+        self._trace_stage_start("imagination rollout")
         imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
+        self._trace_stage_done("imagination rollout")
 
         # (B*T, T_imag, 1)
+        self._trace_stage_start("imagination objectives")
         imag_reward = self._frozen_reward(imag_feat).mode()
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = self._frozen_cont(imag_feat).mean
@@ -655,8 +736,10 @@ class Dreamer(nn.Module):
         metrics["weight"] = torch.mean(weight)
         metrics["action_entropy"] = torch.mean(entropy)
         metrics.update(tools.tensorstats(imag_action, "action"))
+        self._trace_stage_done("imagination objectives")
 
         # === Replay-based value learning (keep gradients through world model) ===
+        self._trace_stage_start("replay value objective")
         last, term, reward = (
             to_f32(data["is_last"]),
             to_f32(data["is_terminal"]),
@@ -683,9 +766,12 @@ class Dreamer(nn.Module):
         metrics.update(tools.tensorstats(ret, "ret_replay"))
         metrics.update(tools.tensorstats(value, "value_replay"))
         metrics.update(tools.tensorstats(slow_value, "slow_value_replay"))
+        self._trace_stage_done("replay value objective")
 
+        self._trace_stage_start("backward")
         total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
         self._scaler.scale(total_loss).backward()
+        self._trace_stage_done("backward")
 
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})

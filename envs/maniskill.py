@@ -90,8 +90,6 @@ class ManiSkillVecEnv:
             obs_mode=str(config.obs_mode),
             render_mode="rgb_array",
             sensor_configs=dict(width=size[1], height=size[0]),
-            # Allocated per scene whatever the render mode is; nothing here renders.
-            human_render_camera_configs=dict(width=128, height=128),
             num_envs=self._num_envs,
             sim_backend=str(config.sim_backend),
             task_plans=task_plans,
