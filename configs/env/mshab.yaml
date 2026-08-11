@@ -5,6 +5,7 @@ eval_episode_num: 0
 action_repeat: 1
 train_ratio: 66
 time_limit: 100
+renderer_warmup_envs: 1
 
 seed: ${seed}
 device: ${device}
