@@ -49,10 +49,11 @@ def _check_finite_tensors(scope, tensors):
         raise FloatingPointError(f"Non-finite {scope}:\n  " + "\n  ".join(problems))
 
 
-def _check_finite_replay(data, initial, *, log_magnitudes=False):
+def _check_finite_replay(
+    data, initial, *, latent_names=("stoch", "deter", "sem"), log_magnitudes=False
+):
     """Fail before model execution if a sampled replay tensor is non-finite."""
     tensors = [(f"data/{key}", value) for key, value in data.items()]
-    latent_names = ("stoch", "deter", "sem")
     tensors.extend(
         (f"initial/{latent_names[index]}", value)
         for index, value in enumerate(initial)
@@ -94,6 +95,9 @@ class Dreamer(nn.Module):
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         self.graph_enabled = bool(config.graph.enabled)
+        self.graph_only = bool(getattr(config, "graph_only_latent", False))
+        if self.graph_only and not self.graph_enabled:
+            raise ValueError("graph_only_latent=true requires graph.enabled=true")
         amp_name = str(config.amp_dtype)
         amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
         if amp_name not in amp_dtypes:
@@ -111,7 +115,12 @@ class Dreamer(nn.Module):
             missing = [key for key in GRAPH_KEYS if key not in shapes]
             raise ValueError(f"graph.enabled observation space is missing: {missing}")
         model_shapes = {key: value for key, value in shapes.items() if key not in GRAPH_KEYS}
-        self.encoder = networks.MultiEncoder(config.encoder, model_shapes)
+        encoder_shapes = (
+            {key: value for key, value in model_shapes.items() if len(value) != 3}
+            if self.graph_only
+            else model_shapes
+        )
+        self.encoder = networks.MultiEncoder(config.encoder, encoder_shapes)
         self.image_keys = tuple(self.encoder.cnn_shapes)
         self.embed_size = self.encoder.out_dim
         self.graph_encoder = GraphEncoder(config.graph) if self.graph_enabled else None
@@ -121,6 +130,7 @@ class Dreamer(nn.Module):
             self.act_dim,
             semantic=self.graph_enabled,
             graph_token_size=int(config.graph.units) if self.graph_enabled else 0,
+            graph_only=self.graph_only,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -164,7 +174,7 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
         if self.graph_enabled:
-            self.graph_decoder = GraphDecoder(config.graph, self.rssm.flat_sem)
+            self.graph_decoder = GraphDecoder(config.graph)
             modules.update(
                 {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
             )
@@ -173,6 +183,10 @@ class Dreamer(nn.Module):
             decoder_shapes = {
                 key: value for key, value in model_shapes.items() if key != "instruction"
             }
+            if self.graph_only:
+                decoder_shapes = {
+                    key: value for key, value in decoder_shapes.items() if len(value) != 3
+                }
             self.decoder = networks.MultiDecoder(
                 config.decoder,
                 self.rssm._deter,
@@ -181,7 +195,15 @@ class Dreamer(nn.Module):
                 flat_sem=self.rssm.flat_sem,
             )
             recon = self._loss_scales.pop("recon")
-            self._loss_scales.update({k: recon for k in self.decoder.all_keys})
+            graph_image_recon = self._loss_scales.pop("graph_image_recon")
+            self._loss_scales.update({
+                key: (
+                    graph_image_recon
+                    if self.graph_enabled and key in self.decoder.cnn_shapes
+                    else recon
+                )
+                for key in self.decoder.all_keys
+            })
             modules.update({"decoder": self.decoder})
         elif self.rep_loss == "r2dreamer" or self.rep_loss == "infonce":
             # add projector for latent to embedding
@@ -371,7 +393,7 @@ class Dreamer(nn.Module):
         )
         if graph_token is not None:
             graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
-        prev_stoch = state["stoch"]
+        prev_stoch = state.get("stoch")
         prev_deter = state["deter"]
         prev_action = state["prev_action"]
         result = self._frozen_rssm.obs_step(
@@ -383,7 +405,10 @@ class Dreamer(nn.Module):
             sem=state.get("sem") if self.graph_enabled else None,
             graph_token=graph_token,
         )
-        if self.graph_enabled:
+        if self.graph_only:
+            deter, sem, _ = result
+            stoch = None
+        elif self.graph_enabled:
             stoch, deter, _, sem, _ = result
         else:
             stoch, deter, _ = result
@@ -393,11 +418,9 @@ class Dreamer(nn.Module):
         action = action_dist.mode if eval else action_dist.rsample()
 
         action = to_f32(action)
-        entries = {
-            "stoch": to_f32(stoch),
-            "deter": to_f32(deter),
-            "prev_action": action,
-        }
+        entries = {"deter": to_f32(deter), "prev_action": action}
+        if not self.graph_only:
+            entries["stoch"] = to_f32(stoch)
         if self.graph_enabled:
             entries["sem"] = to_f32(sem)
         return action, TensorDict(entries, batch_size=state.batch_size)
@@ -405,11 +428,9 @@ class Dreamer(nn.Module):
     @torch.no_grad()
     def get_initial_state(self, B):
         initial = self.rssm.initial(B)
-        stoch, deter = initial[:2]
         action = torch.zeros(B, self.act_dim, dtype=torch.float32, device=self.device)
-        entries = {"stoch": stoch, "deter": deter, "prev_action": action}
-        if self.graph_enabled:
-            entries["sem"] = initial[2]
+        entries = dict(zip(self.rssm.state_keys, initial))
+        entries["prev_action"] = action
         return TensorDict(entries, batch_size=(B,))
 
     @torch.no_grad()
@@ -420,6 +441,10 @@ class Dreamer(nn.Module):
 
     def _video_pred(self, data, initial):
         """Video prediction utility."""
+        if self.graph_only:
+            raise NotImplementedError(
+                "graph-only mode has no pixel decoder or open-loop video prediction"
+            )
         if self.rep_loss != "dreamer":
             raise NotImplementedError("video_pred requires decoder and is only supported when rep_loss == 'dreamer'.")
 
@@ -505,6 +530,7 @@ class Dreamer(nn.Module):
         _check_finite_replay(
             data,
             initial,
+            latent_names=self.rssm.state_keys,
             log_magnitudes=first_replay_check,
         )
         if first_replay_check:
@@ -567,7 +593,13 @@ class Dreamer(nn.Module):
         metrics.update(mets)
         # update latent vectors in replay buffer
         self._trace_stage_start("replay latent writeback")
-        replay_buffer.update(index, *(value.detach() for value in posterior))
+        replay_buffer.update(
+            index,
+            **{
+                key: value.detach()
+                for key, value in zip(self.rssm.state_keys, posterior)
+            },
+        )
         self._trace_stage_done("replay latent writeback")
         if self._diagnose_finite:
             self._finite_diagnostic_updates -= 1
@@ -618,23 +650,31 @@ class Dreamer(nn.Module):
             embed, data["action"], initial, data["is_first"], graph_token
         )
         self._trace_stage_done("RSSM posterior rollout")
-        post_stoch, post_deter, post_logit = observed[:3]
-        post_sem = observed[3] if self.graph_enabled else None
-        post_sem_logit = observed[4] if self.graph_enabled else None
+        if self.graph_only:
+            post_deter, post_sem, post_sem_logit = observed
+            post_stoch = post_logit = None
+        else:
+            post_stoch, post_deter, post_logit = observed[:3]
+            post_sem = observed[3] if self.graph_enabled else None
+            post_sem_logit = observed[4] if self.graph_enabled else None
         # (B, T, S, K)
-        self._trace_stage_start("RSSM prior and KL")
-        _, prior_logit = self.rssm.prior(post_deter, post_sem)
-        dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
-        losses["dyn"] = torch.mean(dyn_loss)
-        losses["rep"] = torch.mean(rep_loss)
-        self._trace_stage_done("RSSM prior and KL")
+        prior_logit = None
+        if not self.graph_only:
+            self._trace_stage_start("RSSM prior and KL")
+            _, prior_logit = self.rssm.prior(post_deter, post_sem)
+            dyn_loss, rep_loss = self.rssm.kl_loss(
+                post_logit, prior_logit, self.kl_free
+            )
+            losses["dyn"] = torch.mean(dyn_loss)
+            losses["rep"] = torch.mean(rep_loss)
+            self._trace_stage_done("RSSM prior and KL")
         if self.graph_enabled:
             self._trace_stage_start("semantic and graph losses")
             step_valid = ~data["is_last"].bool()
             if step_valid.ndim == 3 and step_valid.shape[-1] == 1:
                 step_valid = step_valid[..., 0]
             sem_prior_logit = self.rssm.semantic_prior_logits(
-                post_deter, post_sem, initial[2], data["is_first"]
+                post_deter, post_sem, initial[-1], data["is_first"]
             )
             sem_dyn, sem_rep, raw_sem_dyn, raw_sem_rep = self.rssm.semantic_kl_loss(
                 post_sem_logit, sem_prior_logit, self.kl_free
@@ -646,9 +686,7 @@ class Dreamer(nn.Module):
             metrics["semdyn_raw"] = (raw_sem_dyn * step_float).sum() / denominator
             metrics["semrep_raw"] = (raw_sem_rep * step_float).sum() / denominator
             metrics["sem_entropy"] = self.rssm.get_sem_dist(post_sem_logit).entropy().mean()
-            graph_losses, graph_metrics = self.graph_decoder(
-                graph_encoding, post_sem, step_valid
-            )
+            graph_losses, graph_metrics = self.graph_decoder(graph_encoding, step_valid)
             losses.update(graph_losses)
             metrics.update(graph_metrics)
             self._trace_stage_done("semantic and graph losses")
@@ -715,17 +753,28 @@ class Dreamer(nn.Module):
         cont = 1.0 - to_f32(data["is_terminal"])
         losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
         # log
-        metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
-        metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
+        if not self.graph_only:
+            metrics["dyn_entropy"] = torch.mean(
+                self.rssm.get_dist(prior_logit).entropy()
+            )
+            metrics["rep_entropy"] = torch.mean(
+                self.rssm.get_dist(post_logit).entropy()
+            )
         self._trace_stage_done("reward and continuation losses")
 
         # === Imagination rollout for actor-critic ===
         # (B*T, S, K), (B*T, D)
-        start = (
-            post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
-            post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
-        )
-        if self.graph_enabled:
+        if self.graph_only:
+            start = (
+                post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
+                post_sem.reshape(-1, *post_sem.shape[2:]).detach(),
+            )
+        else:
+            start = (
+                post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
+                post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
+            )
+        if self.graph_enabled and not self.graph_only:
             start = start + (post_sem.reshape(-1, *post_sem.shape[2:]).detach(),)
         # (B, T, ...) -> (B*T, ...)
         self._trace_stage_start("imagination rollout")
@@ -822,8 +871,11 @@ class Dreamer(nn.Module):
 
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})
-        posterior = (post_stoch, post_deter)
-        if self.graph_enabled:
+        if self.graph_only:
+            posterior = (post_deter, post_sem)
+        else:
+            posterior = (post_stoch, post_deter)
+        if self.graph_enabled and not self.graph_only:
             posterior = posterior + (post_sem,)
         return posterior, metrics
 
@@ -833,8 +885,12 @@ class Dreamer(nn.Module):
         # (B, S, K), (B, D)
         feats = []
         actions = []
-        stoch, deter = start[:2]
-        sem = start[2] if self.graph_enabled else None
+        if self.graph_only:
+            deter, sem = start
+            stoch = None
+        else:
+            stoch, deter = start[:2]
+            sem = start[2] if self.graph_enabled else None
         for _ in range(imag_horizon):
             # (B, F)
             feat = self._frozen_rssm.get_feat(stoch, deter, sem)
@@ -844,7 +900,9 @@ class Dreamer(nn.Module):
             feats.append(feat)
             actions.append(action)
             result = self._frozen_rssm.img_step(stoch, deter, action, sem)
-            if self.graph_enabled:
+            if self.graph_only:
+                deter, sem, _ = result
+            elif self.graph_enabled:
                 stoch, deter, sem, _ = result
             else:
                 stoch, deter = result

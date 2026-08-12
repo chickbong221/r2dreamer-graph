@@ -126,7 +126,7 @@ class GraphObsBuilder:
         dino: Optional[DinoFeatures] = None,
         app_dim: int = 384,
         bypass_teemo: bool = False,
-        staleness_enabled: bool = True,
+        staleness_enabled: bool = False,
     ):
         self.env = env
         self.sensor_source = sensor_source
@@ -598,5 +598,5 @@ def build_graph_obs(
         dino=dino,
         app_dim=app_dim,
         bypass_teemo=bool(graph_cfg.get("bypass_teemo", False)),
-        staleness_enabled=bool(graph_cfg.get("staleness_enabled", True)),
+        staleness_enabled=bool(graph_cfg.get("staleness_enabled", False)),
     )

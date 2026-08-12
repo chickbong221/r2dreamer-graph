@@ -3,6 +3,28 @@ import torch
 import tools
 
 
+def _observation_frame(trans):
+    """First environment's cameras tiled left-to-right as one RGB frame."""
+    if "image" in trans:
+        keys = ["image"]
+    else:
+        preferred = ["image_head", "image_hand"]
+        keys = [key for key in preferred if key in trans]
+        keys += sorted(
+            key for key in trans.keys()
+            if key.startswith("image_") and key not in keys
+        )
+    frames = []
+    for key in keys:
+        frame = trans[key]
+        while frame.ndim > 3:
+            frame = frame[0]
+        if frame.ndim != 3 or frame.shape[-1] not in (1, 3):
+            continue
+        frames.append(frame.detach())
+    return torch.cat(frames, dim=1) if frames else None
+
+
 class OnlineTrainer:
     def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs):
         self.replay_buffer = replay_buffer
@@ -14,14 +36,17 @@ class OnlineTrainer:
         self.eval_every = int(config.eval_every)
         self.eval_episode_num = int(config.eval_episode_num)
         self.video_pred_log = bool(config.video_pred_log)
+        self.video_fps = int(config.video_fps)
         self.params_hist_log = bool(config.params_hist_log)
         self.batch_length = int(config.batch_length)
         batch_steps = int(config.batch_size * config.batch_length)
+        self._batch_steps = batch_steps
         # train_ratio is based on data steps rather than environment steps.
         self._updates_needed = tools.Every(batch_steps / config.train_ratio * config.action_repeat)
         self._should_pretrain = tools.Once()
         self._should_log = tools.Every(config.update_log_every)
         self._should_eval = tools.Every(self.eval_every)
+        self._should_video = tools.Every(config.video_every)
         self._action_repeat = config.action_repeat
 
     def eval(self, agent, train_step):
@@ -43,6 +68,7 @@ class OnlineTrainer:
         log_metrics = {}
         # cache is only used for video logging / open-loop prediction.
         cache = []
+        video_frames = []
         agent_state = agent.get_initial_state(envs.env_num)
         # (B, A)
         act = agent_state["prev_action"].clone()
@@ -56,6 +82,9 @@ class OnlineTrainer:
             trans, step_done = envs.step(act.detach(), done)
             # dict of (B, 1, *)
             trans = trans.to(agent.device, non_blocking=True)
+            frame = _observation_frame(trans)
+            if frame is not None:
+                video_frames.append(frame)
             # (B,)
             done = step_done.to(agent.device)
 
@@ -83,11 +112,15 @@ class OnlineTrainer:
             if key == "log_success":
                 value = torch.clip(value, max=1.0)  # make sure 1.0 for success episode
             self.logger.scalar(f"episode/eval_{key[4:]}", value.mean())
-        if cache is not None and "image" in cache:
-            self.logger.video("eval_video", tools.to_np(cache["image"][:1]))
+        if video_frames:
+            video = torch.stack(video_frames, dim=0)
+            self.logger.video(
+                "eval_video", tools.to_np(video[None]), fps=self.video_fps)
         if self.video_pred_log and cache is not None:
             initial = agent.get_initial_state(1)
-            latent_keys = ["stoch", "deter"] + (["sem"] if "sem" in initial else [])
+            latent_keys = [
+                key for key in ("stoch", "deter", "sem") if key in initial
+            ]
             self.logger.video(
                 "eval_open_loop",
                 tools.to_np(
@@ -112,6 +145,8 @@ class OnlineTrainer:
         video_cache = []
         step = self.replay_buffer.count() * self._action_repeat
         update_count = 0
+        policy_fps = tools.FPS()
+        train_fps = tools.FPS()
         # (B,)
         done = torch.ones(envs.env_num, dtype=torch.bool, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
@@ -134,8 +169,12 @@ class OnlineTrainer:
                 finished = done & lengths.gt(0)
                 if finished.any():
                     if len(video_cache) > 0:
-                        video = torch.stack(video_cache, axis=0)
-                        self.logger.video("train_video", tools.to_np(video[None]))
+                        if self._should_video(step):
+                            video = torch.stack(video_cache, axis=0)
+                            self.logger.video(
+                                "train_video", tools.to_np(video[None]),
+                                fps=self.video_fps,
+                            )
                         video_cache = []
                     self.logger.scalar("episode/score", returns[finished].mean())
                     self.logger.scalar(
@@ -154,7 +193,9 @@ class OnlineTrainer:
                     self.logger.write(step)
                     returns[finished] = 0
                     lengths[finished] = 0
-            step += int((~done).sum()) * self._action_repeat  # step is based on env side
+            env_steps = int((~done).sum()) * self._action_repeat
+            step += env_steps  # step is based on env side
+            policy_fps.step(env_steps)
             lengths += ~done
 
             # Step environments.  Each env backend handles device placement
@@ -177,13 +218,13 @@ class OnlineTrainer:
             # We keep the observation and the action that produced it together.
             # Mask actions after an episode has ended.
             trans["action"] = act * ~done.unsqueeze(-1)
-            trans["stoch"] = agent_state["stoch"]
-            trans["deter"] = agent_state["deter"]
-            if "sem" in agent_state:
-                trans["sem"] = agent_state["sem"]
+            for key in ("stoch", "deter", "sem"):
+                if key in agent_state:
+                    trans[key] = agent_state[key]
             trans["episode"] = episode_ids  # Don't lift dim
-            if "image" in trans:
-                video_cache.append(trans["image"][0])
+            frame = _observation_frame(trans)
+            if frame is not None:
+                video_cache.append(frame)
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
             active = ~trans["is_first"][:, 0].bool()
@@ -207,6 +248,7 @@ class OnlineTrainer:
                 for _ in range(update_num):
                     _metrics = agent.update(self.replay_buffer)
                     train_metrics = _metrics
+                    train_fps.step(self._batch_steps)
                 update_count += update_num
                 # Log training metrics
                 if self._should_log(step):
@@ -220,4 +262,6 @@ class OnlineTrainer:
                     if self.params_hist_log:
                         for name, param in agent._named_params.items():
                             self.logger.histogram(name, tools.to_np(param))
-                    self.logger.write(step, fps=True)
+                    self.logger.scalar("fps/policy", policy_fps.result())
+                    self.logger.scalar("fps/train", train_fps.result())
+                    self.logger.write(step)

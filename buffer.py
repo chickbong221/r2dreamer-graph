@@ -36,34 +36,34 @@ class Buffer:
         elif src_dev != self.device:
             sample_td = sample_td.to(self.device, non_blocking=True)
         # The initial ones are used only to extract the latent vector
-        initial = (sample_td["stoch"][:, 0], sample_td["deter"][:, 0])
-        if "sem" in sample_td:
-            initial = initial + (sample_td["sem"][:, 0],)
+        state_keys = [
+            key for key in ("stoch", "deter", "sem") if key in sample_td
+        ]
+        initial = tuple(sample_td[key][:, 0] for key in state_keys)
         data = sample_td[:, 1:]
         # Action is 1 step back; clone because source and destination overlap.
         data.set_("action", sample_td["action"][:, :-1].clone())
         index = [ind.view(-1, self.batch_length + 1)[:, 1:] for ind in info["index"]]
         return data, index, initial
 
-    def update(self, index, stoch, deter, sem=None):
+    def update(self, index, **states):
         # Replay state is float32. Move model outputs back to that storage
         # boundary before indexed assignment (TensorDict requires exact dtype
         # and device matches).
-        stoch = stoch.to(device=self.storage_device, dtype=torch.float32)
-        deter = deter.to(device=self.storage_device, dtype=torch.float32)
-        if sem is not None:
-            sem = sem.to(device=self.storage_device, dtype=torch.float32)
+        if "deter" not in states:
+            raise KeyError("replay latent update requires deter")
+        states = {
+            key: value.to(device=self.storage_device, dtype=torch.float32)
+            for key, value in states.items()
+        }
         # Flatten the data
         index = [ind.reshape(-1) for ind in index]
-        # (B, T, S, K) -> (B*T, S, K)
-        stoch = stoch.reshape(-1, *stoch.shape[2:])
-        # (B, T, D) -> (B*T, D)
-        deter = deter.reshape(-1, *deter.shape[2:])
         # In storage, the length is the first dimension, and the batch (number of environments) is the second dimension.
         n = index[0].shape[0]
-        values = {"stoch": stoch, "deter": deter}
-        if sem is not None:
-            values["sem"] = sem.reshape(-1, *sem.shape[2:])
+        values = {
+            key: value.reshape(-1, *value.shape[2:])
+            for key, value in states.items()
+        }
         self._buffer[index[1], index[0]] = TensorDict(values, batch_size=(n,))
 
     def count(self):

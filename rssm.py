@@ -18,8 +18,14 @@ class Deter(nn.Module):
         self._dyn_in0 = nn.Sequential(
             nn.Linear(deter, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
         )
-        self._dyn_in1 = nn.Sequential(
-            nn.Linear(stoch, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
+        self._dyn_in1 = (
+            nn.Sequential(
+                nn.Linear(stoch, hidden, bias=True),
+                nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32),
+                act(),
+            )
+            if stoch
+            else None
         )
         self._dyn_in2 = nn.Sequential(
             nn.Linear(act_dim, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act()
@@ -34,7 +40,7 @@ class Deter(nn.Module):
             else None
         )
         self._dyn_hid = nn.Sequential()
-        input_count = 4 if semantic_size else 3
+        input_count = 2 + int(bool(stoch)) + int(bool(semantic_size))
         in_ch = (input_count * hidden + deter // self.blocks) * self.blocks
         for i in range(self.dynlayers):
             self._dyn_hid.add_module(f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks))
@@ -52,16 +58,18 @@ class Deter(nn.Module):
 
         # Flatten stochastic state and normalize action magnitude.
         # (B, S*K)
-        stoch = stoch.reshape(B, -1)
         action = action / torch.clip(torch.abs(action), min=1.0).detach()
         # (B, U)
         x0 = self._dyn_in0(deter)
-        x1 = self._dyn_in1(stoch)
         x2 = self._dyn_in2(action)
 
         # Concatenate projected inputs and broadcast over blocks.
-        # (B, 3*U)
-        inputs = [x0, x1, x2]
+        inputs = [x0]
+        if self._dyn_in1 is not None:
+            if stoch is None:
+                raise ValueError("stochastic dynamics require the previous stochastic state")
+            inputs.append(self._dyn_in1(stoch.reshape(B, -1)))
+        inputs.append(x2)
         if self._dyn_in3 is not None:
             if sem is None:
                 raise ValueError("semantic dynamics require the previous semantic state")
@@ -100,12 +108,24 @@ class RSSM(nn.Module):
         act_dim,
         semantic=False,
         graph_token_size=0,
+        graph_only=False,
     ):
         super().__init__()
-        self._stoch = int(config.stoch)
+        self.semantic = bool(semantic)
+        self.graph_only = bool(graph_only)
+        if self.graph_only and not self.semantic:
+            raise ValueError("graph-only RSSM requires semantic=True")
+        if self.graph_only:
+            self._stoch = 0
+            self._discrete = 0
+        else:
+            self._stoch = int(
+                getattr(config, "hybrid_stoch", config.stoch)
+                if self.semantic else config.stoch
+            )
+            self._discrete = int(config.discrete)
         self._deter = int(config.deter)
         self._hidden = int(config.hidden)
-        self._discrete = int(config.discrete)
         act = getattr(torch.nn, config.act)
         self._unimix_ratio = float(config.unimix_ratio)
         self._initial = str(config.initial)
@@ -115,17 +135,27 @@ class RSSM(nn.Module):
         self._img_layers = int(config.img_layers)
         self._dyn_layers = int(config.dyn_layers)
         self._blocks = int(config.blocks)
-        self.semantic = bool(semantic)
         self.flat_stoch = self._stoch * self._discrete
         if self.semantic:
-            self._sem_stoch = int(config.sem_stoch)
-            self._sem_discrete = int(config.sem_discrete)
+            if self.graph_only:
+                self._sem_stoch = int(getattr(config, "graph_only_stoch", 32))
+                self._sem_discrete = int(
+                    getattr(config, "graph_only_discrete", config.discrete)
+                )
+            else:
+                self._sem_stoch = int(config.sem_stoch)
+                self._sem_discrete = int(config.sem_discrete)
             self._sem_layers = int(config.sem_layers)
             self.flat_sem = self._sem_stoch * self._sem_discrete
         else:
             self._sem_stoch = self._sem_discrete = self._sem_layers = 0
             self.flat_sem = 0
         self.feat_size = self.flat_stoch + self.flat_sem + self._deter
+        self.state_keys = (
+            ("deter", "sem")
+            if self.graph_only
+            else (("stoch", "deter", "sem") if self.semantic else ("stoch", "deter"))
+        )
         self._deter_net = Deter(
             self._deter,
             self.flat_stoch,
@@ -137,34 +167,51 @@ class RSSM(nn.Module):
             semantic_size=self.flat_sem,
         )
 
-        self._obs_net = nn.Sequential()
-        inp_dim = self._deter + embed_size + self.flat_sem
-        for i in range(self._obs_layers):
-            self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
-            self._obs_net.add_module(f"obs_net_a_{i}", act())
-            inp_dim = self._hidden
-        self._obs_net.add_module("obs_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete, bias=True))
-        self._obs_net.add_module(
-            "obs_net_lambda",
-            LambdaLayer(lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)),
-        )
+        self._obs_net = None
+        self._img_net = None
+        if not self.graph_only:
+            self._obs_net = nn.Sequential()
+            inp_dim = self._deter + embed_size + self.flat_sem
+            for i in range(self._obs_layers):
+                self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
+                self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+                self._obs_net.add_module(f"obs_net_a_{i}", act())
+                inp_dim = self._hidden
+            self._obs_net.add_module(
+                "obs_net_logit",
+                nn.Linear(inp_dim, self._stoch * self._discrete, bias=True),
+            )
+            self._obs_net.add_module(
+                "obs_net_lambda",
+                LambdaLayer(
+                    lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
+                ),
+            )
 
-        self._img_net = nn.Sequential()
-        inp_dim = self._deter + self.flat_sem
-        for i in range(self._img_layers):
-            self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
-            self._img_net.add_module(f"img_net_a_{i}", act())
-            inp_dim = self._hidden
-        self._img_net.add_module("img_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete))
-        self._img_net.add_module(
-            "img_net_lambda",
-            LambdaLayer(lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)),
-        )
+            self._img_net = nn.Sequential()
+            inp_dim = self._deter + self.flat_sem
+            for i in range(self._img_layers):
+                self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
+                self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+                self._img_net.add_module(f"img_net_a_{i}", act())
+                inp_dim = self._hidden
+            self._img_net.add_module(
+                "img_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete)
+            )
+            self._img_net.add_module(
+                "img_net_lambda",
+                LambdaLayer(
+                    lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
+                ),
+            )
         if self.semantic:
             self._sem_obs = self._semantic_head(
-                self._deter + self.flat_sem + int(graph_token_size), config.act, "sem_obs"
+                self._deter
+                + self.flat_sem
+                + int(graph_token_size)
+                + (int(embed_size) if self.graph_only else 0),
+                config.act,
+                "sem_obs",
             )
             self._sem_img = self._semantic_head(
                 self._deter + self.flat_sem, config.act, "sem_img"
@@ -197,7 +244,6 @@ class RSSM(nn.Module):
         """Return an initial latent state."""
         # (B, D), (B, S, K)
         deter = torch.zeros(batch_size, self._deter, dtype=torch.float32, device=self._device)
-        stoch = torch.zeros(batch_size, self._stoch, self._discrete, dtype=torch.float32, device=self._device)
         if self.semantic:
             sem = torch.zeros(
                 batch_size,
@@ -206,6 +252,16 @@ class RSSM(nn.Module):
                 dtype=torch.float32,
                 device=self._device,
             )
+            if self.graph_only:
+                return deter, sem
+        stoch = torch.zeros(
+            batch_size,
+            self._stoch,
+            self._discrete,
+            dtype=torch.float32,
+            device=self._device,
+        )
+        if self.semantic:
             return stoch, deter, sem
         return stoch, deter
 
@@ -213,6 +269,29 @@ class RSSM(nn.Module):
         """Posterior rollout using observations."""
         # (B, T, E), (B, T, A), ((B, S, K), (B, D)) (B, T)
         L = action.shape[1]
+        if self.graph_only:
+            deter, sem = initial
+            if graph_token is None:
+                raise ValueError("graph-only RSSM.observe requires graph_token")
+            deters, sems, sem_logits = [], [], []
+            for i in range(L):
+                deter, sem, sem_logit = self.obs_step(
+                    None,
+                    deter,
+                    action[:, i],
+                    embed[:, i],
+                    reset[:, i],
+                    sem=sem,
+                    graph_token=graph_token[:, i],
+                )
+                deters.append(deter)
+                sems.append(sem)
+                sem_logits.append(sem_logit)
+            return (
+                torch.stack(deters, dim=1),
+                torch.stack(sems, dim=1),
+                torch.stack(sem_logits, dim=1),
+            )
         if self.semantic:
             stoch, deter, sem = initial
             if graph_token is None:
@@ -259,7 +338,12 @@ class RSSM(nn.Module):
     def obs_step(self, stoch, deter, prev_action, embed, reset, sem=None, graph_token=None):
         """Single posterior step."""
         # (B, S, K), (B, D), (B, A), (B, E), (B,)
-        stoch = torch.where(rpad(reset, stoch.dim() - int(reset.dim())), torch.zeros_like(stoch), stoch)
+        if not self.graph_only:
+            stoch = torch.where(
+                rpad(reset, stoch.dim() - int(reset.dim())),
+                torch.zeros_like(stoch),
+                stoch,
+            )
         deter = torch.where(rpad(reset, deter.dim() - int(reset.dim())), torch.zeros_like(deter), deter)
         prev_action = torch.where(
             rpad(reset, prev_action.dim() - int(reset.dim())), torch.zeros_like(prev_action), prev_action
@@ -273,10 +357,13 @@ class RSSM(nn.Module):
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action, sem)
         if self.semantic:
-            sem_logit = self._sem_obs(
-                torch.cat([deter, sem.reshape(sem.shape[0], -1), graph_token], -1)
-            )
+            sem_inputs = [deter, sem.reshape(sem.shape[0], -1), graph_token]
+            if self.graph_only:
+                sem_inputs.append(embed)
+            sem_logit = self._sem_obs(torch.cat(sem_inputs, -1))
             sem = self.get_sem_dist(sem_logit).rsample()
+        if self.graph_only:
+            return deter, sem, sem_logit
         # (B, D + E)
         inputs = [deter]
         if self.semantic:
@@ -302,6 +389,8 @@ class RSSM(nn.Module):
             if sem is None:
                 raise ValueError("semantic img_step requires sem")
             sem, sem_logit = self.semantic_prior(deter, sem)
+        if self.graph_only:
+            return deter, sem, sem_logit
         # (B, S, K)
         stoch, _ = self.prior(deter, sem)
         if self.semantic:
@@ -310,6 +399,9 @@ class RSSM(nn.Module):
 
     def prior(self, deter, sem=None):
         """Compute prior distribution parameters and sample stoch."""
+
+        if self.graph_only:
+            raise RuntimeError("graph-only RSSM has no z prior")
 
         # (B, S, K)
         inputs = [deter]
@@ -328,16 +420,22 @@ class RSSM(nn.Module):
         stochs, deters, sems = [], [], []
         for i in range(L):
             result = self.img_step(stoch, deter, actions[:, i], sem)
-            if self.semantic:
+            if self.graph_only:
+                deter, sem, _ = result
+                sems.append(sem)
+            elif self.semantic:
                 stoch, deter, sem, _ = result
                 sems.append(sem)
             else:
                 stoch, deter = result
-            stochs.append(stoch)
+            if not self.graph_only:
+                stochs.append(stoch)
             deters.append(deter)
         # (B, T, S, K), (B, T, D)
-        stochs = torch.stack(stochs, dim=1)
         deters = torch.stack(deters, dim=1)
+        if self.graph_only:
+            return deters, torch.stack(sems, dim=1)
+        stochs = torch.stack(stochs, dim=1)
         if self.semantic:
             return stochs, deters, torch.stack(sems, dim=1)
         return stochs, deters
@@ -346,9 +444,10 @@ class RSSM(nn.Module):
         """Flatten stoch and concatenate with deter."""
         # (B, S, K), (B, D)
         # (B, S*K)
-        stoch = stoch.reshape(*stoch.shape[:-2], self._stoch * self._discrete)
-        # (B, S*K + D)
-        parts = [stoch]
+        parts = []
+        if not self.graph_only:
+            stoch = stoch.reshape(*stoch.shape[:-2], self._stoch * self._discrete)
+            parts.append(stoch)
         if self.semantic:
             if sem is None:
                 raise ValueError("semantic features require sem")
@@ -357,6 +456,8 @@ class RSSM(nn.Module):
         return torch.cat(parts, -1)
 
     def get_dist(self, logit):
+        if self.graph_only:
+            raise RuntimeError("graph-only RSSM has no z distribution")
         return torchd.independent.Independent(dists.OneHotDist(logit, unimix_ratio=self._unimix_ratio), 1)
 
     def get_sem_dist(self, logit):

@@ -262,12 +262,11 @@ def _relation_masks(n_rel: int, n_abs: int) -> torch.Tensor:
 class GraphDecoder(nn.Module):
     """Auxiliary graph heads with the same per-frame weighting as the JAX model."""
 
-    def __init__(self, config, sem_dim: int):
+    def __init__(self, config):
         super().__init__()
         self.units = int(config.units)
         self.app_dim = int(config.app_dim)
         self.n_cams = int(config.n_cams)
-        self.entity_vocab = int(config.entity_vocab)
         self.n_abs = int(config.n_abs)
         self.n_temp = int(config.n_temp)
         self.bbox_beta = float(config.bbox_beta)
@@ -275,14 +274,13 @@ class GraphDecoder(nn.Module):
         self.app = nn.Linear(self.units, self.n_cams * self.app_dim)
         self.bbox = nn.Linear(self.units, self.n_cams * 4)
         self.visibility = nn.Linear(self.units, self.n_cams)
+        self.target = nn.Linear(self.units, 1)
         self.reltype = nn.Embedding(int(config.n_rel), int(config.embed))
         self.pair = GraphMLP(
             2 * self.units + int(config.embed), self.units, str(config.act)
         )
         self.abs_head = nn.Linear(self.units, self.n_abs)
         self.temp_head = nn.Linear(self.units, self.n_temp)
-        self.target_in = GraphMLP(sem_dim, self.units, str(config.act))
-        self.target_head = nn.Linear(self.units, self.entity_vocab)
         self.register_buffer(
             "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
         )
@@ -291,7 +289,6 @@ class GraphDecoder(nn.Module):
     def forward(
         self,
         encoded: GraphEncoding,
-        sem: torch.Tensor,
         step_valid: torch.Tensor,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         compact = encoded.compact
@@ -337,6 +334,33 @@ class GraphDecoder(nn.Module):
         )
         losses["node"] = (node_app + node_bbox + node_visibility) / 3
 
+        # Reconstruct the exact per-node target flag. Slot zero is reserved for
+        # the end effector, so only valid object rows participate in this loss.
+        target_logit = self.target(nodes).squeeze(-1).float()
+        target_mask = valid.clone()
+        target_mask[:, 0] = False
+        target_flag = compact.node_target.bool()
+        target_error = F.binary_cross_entropy_with_logits(
+            target_logit, target_flag.float(), reduction="none"
+        )
+        positive = target_mask & target_flag
+        negative = target_mask & ~target_flag
+        has_positive = positive.any(-1)
+        has_negative = negative.any(-1)
+        class_count = has_positive.float() + has_negative.float()
+        target_frame_loss = (
+            self._frame_mean(target_error, positive) * has_positive
+            + self._frame_mean(target_error, negative) * has_negative
+        ) / class_count.clamp_min(1)
+        losses["nodetgt"] = target_frame_loss.mean()
+
+        # Report exact target-instance selection accuracy on frames that name a
+        # target, rather than per-node binary accuracy dominated by negatives.
+        target_index = target_flag.long().argmax(-1)
+        selected = target_logit.masked_fill(~target_mask, -1e9).argmax(-1)
+        metrics["node_target_acc"] = self._masked(selected.eq(target_index), has_positive)
+        metrics["node_target_frac"] = has_positive.float().mean()
+
         edge_step = step.index_select(0, compact.edge_graph)
         flat_nodes = nodes.reshape(-1, self.units)
         pair = self.pair(
@@ -370,19 +394,6 @@ class GraphDecoder(nn.Module):
             graph_count,
         )
 
-        flag = compact.node_target.bool() & valid
-        present = flag.any(-1)
-        label = (compact.node_target * compact.node_ent).sum(-1)
-        safe_label = torch.where(present, label, torch.ones_like(label))
-        target_logits = self.target_head(self.target_in(sem.reshape(graph_count, -1)))
-        target_classes = torch.arange(self.entity_vocab, device=target_logits.device).ne(0)
-        # Cross entropy is intentionally evaluated in float32. Mask there too,
-        # because -1e9 cannot be converted to float16 under autocast.
-        target_logits = target_logits.float().masked_fill(~target_classes, -1e9)
-        target_loss = F.cross_entropy(target_logits, safe_label, reduction="none")
-        losses["semtgt"] = (target_loss * present).mean()
-        metrics["semtgt_acc"] = self._masked(target_logits.argmax(-1).eq(label), present)
-        metrics["semtgt_frac"] = present.float().mean()
         metrics["graph_real_edges"] = torch.as_tensor(
             compact.edge_count / max(graph_count, 1),
             device=nodes.device,

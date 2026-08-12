@@ -151,6 +151,7 @@ class MultiDecoder(nn.Module):
         print("Decoder CNN shapes:", self.cnn_shapes)
         print("Decoder MLP shapes:", self.mlp_shapes)
         self.all_keys = list(self.mlp_shapes.keys()) + list(self.cnn_shapes.keys())
+        self.flat_stoch = int(flat_stoch)
         self.flat_sem = int(flat_sem)
         latent_size = flat_stoch + self.flat_sem
 
@@ -175,7 +176,12 @@ class MultiDecoder(nn.Module):
         """Decode latent states into observation distributions."""
         # (B, T, S, K), (B, T, D)
         dists = {}
-        latent = stoch.reshape(*deter.shape[:-1], -1)
+        if self.flat_stoch:
+            if stoch is None:
+                raise ValueError("decoder requires stochastic state")
+            latent = stoch.reshape(*deter.shape[:-1], self.flat_stoch)
+        else:
+            latent = deter.new_empty(*deter.shape[:-1], 0)
         if self.flat_sem:
             if sem is None:
                 raise ValueError("semantic decoder requires sem")

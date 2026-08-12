@@ -8,6 +8,7 @@ amp_dtype: float16
 log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
+graph_only_latent: False
 
 lr: 4e-5
 agc: 0.3
@@ -23,6 +24,7 @@ loss_scales:
   barlow: 0.05
   infonce: 1.0
   recon: 1.0
+  graph_image_recon: 0.5
   rew: 1.0
   con: 1.0
   dyn: 1.0
@@ -36,7 +38,7 @@ loss_scales:
   node: 1.0
   relabs: 1.0
   reltemp: 1.0
-  semtgt: 0.1
+  nodetgt: 1.0
   semdyn: 1.0
   semrep: 0.1
 
@@ -60,6 +62,7 @@ dreamer_pro:
 
 rssm:
   stoch: 32
+  hybrid_stoch: 14
   deter: ${model.deter}
   hidden: ${model.hidden}
   discrete: ${model.discrete}
@@ -72,14 +75,16 @@ rssm:
   unimix_ratio: 0.01
   initial: 'learned'
   device: ${device}
-  sem_stoch: 16
-  sem_discrete: 16
+  sem_stoch: 18
+  sem_discrete: ${model.discrete}
+  graph_only_stoch: 32
+  graph_only_discrete: ${model.discrete}
   sem_layers: 1
 
 graph:
   enabled: False
-  n_max: 12
-  e_max: 270
+  n_max: 8    # end effector plus seven diversity-preserving object slots
+  e_max: 168  # truncation-free ceiling: 3 * n_max * (n_max - 1)
   n_cams: 2
   app_dim: 384
   entity_vocab: 14

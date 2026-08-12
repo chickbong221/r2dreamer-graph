@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from types import SimpleNamespace
 
@@ -7,19 +8,22 @@ import torch
 from dreamer import _mask_terminal_graph
 from envs.maniskill import ManiSkillVecEnv, _repo_path, _select_build_configs
 from graph import GRAPH_KEYS
+from scenegraph.adapters.graph_obs import GraphObsBuilder
+from scenegraph.core.graph_builder import GraphBuilder
+from trainer import _observation_frame
 
 
 class _FakeGraph:
     obs_spec_shapes = {
-        "graph_node_ent": (10,),
-        "graph_node_app": (10, 2, 384),
-        "graph_node_bbox": (10, 2, 4),
-        "graph_node_target": (10,),
-        "graph_edge_src": (270,),
-        "graph_edge_dst": (270,),
-        "graph_edge_rel": (270,),
-        "graph_edge_abs": (270,),
-        "graph_edge_temp": (270,),
+        "graph_node_ent": (8,),
+        "graph_node_app": (8, 2, 384),
+        "graph_node_bbox": (8, 2, 4),
+        "graph_node_target": (8,),
+        "graph_edge_src": (168,),
+        "graph_edge_dst": (168,),
+        "graph_edge_rel": (168,),
+        "graph_edge_abs": (168,),
+        "graph_edge_temp": (168,),
     }
     obs_spec_dtypes = {
         "graph_node_ent": np.uint8,
@@ -32,13 +36,26 @@ class _FakeGraph:
         "graph_edge_abs": np.uint8,
         "graph_edge_temp": np.uint8,
     }
-    overflow_drops = np.zeros(2, np.float32)
     fact_drops = np.zeros(2, np.float32)
     target_missing = np.zeros(2, np.float32)
     cache_entries = 3
 
 
 class MSHABContractTest(unittest.TestCase):
+    def test_graph_history_is_off_by_default(self):
+        self.assertIs(
+            inspect.signature(GraphBuilder).parameters[
+                "staleness_enabled"
+            ].default,
+            False,
+        )
+        self.assertIs(
+            inspect.signature(GraphObsBuilder).parameters[
+                "staleness_enabled"
+            ].default,
+            False,
+        )
+
     def _adapter(self):
         env = ManiSkillVecEnv.__new__(ManiSkillVecEnv)
         env._num_envs = 2
@@ -66,7 +83,8 @@ class MSHABContractTest(unittest.TestCase):
         space = env._build_observation_space(self._obs())
         self.assertEqual(space["image_head"].shape, (112, 112, 3))
         self.assertEqual(space["instruction"].shape, (768,))
-        self.assertEqual(space["graph_edge_rel"].shape, (270,))
+        self.assertEqual(space["graph_edge_rel"].shape, (168,))
+        self.assertNotIn("log_graph_overflow_drops", space)
         transition = env._transition(
             self._obs(),
             np.zeros(2, np.float32),
@@ -76,6 +94,7 @@ class MSHABContractTest(unittest.TestCase):
         )
         self.assertEqual(tuple(transition.batch_size), (2,))
         self.assertTrue(set(GRAPH_KEYS).issubset(transition.keys()))
+        self.assertNotIn("log_graph_overflow_drops", transition.keys())
         self.assertEqual(transition["graph_node_ent"].dtype, torch.uint8)
         self.assertEqual(transition["graph_node_app"].dtype, torch.float16)
         self.assertEqual(transition["is_first"].shape, (2, 1))
@@ -87,6 +106,18 @@ class MSHABContractTest(unittest.TestCase):
         self.assertTrue(torch.equal(masked[0, 1], torch.zeros(4)))
         self.assertTrue(torch.equal(masked[1, 0], torch.zeros(4)))
         self.assertTrue(torch.equal(masked[0, 0], torch.ones(4)))
+
+    def test_video_tiles_named_cameras(self):
+        obs = {
+            "image_head": torch.zeros(2, 1, 4, 5, 3, dtype=torch.uint8),
+            "image_hand": torch.ones(2, 1, 4, 5, 3, dtype=torch.uint8),
+        }
+        frame = _observation_frame(obs)
+        self.assertEqual(tuple(frame.shape), (4, 10, 3))
+        self.assertTrue(torch.equal(
+            frame[:, :5], torch.zeros(4, 5, 3, dtype=torch.uint8)))
+        self.assertTrue(torch.equal(
+            frame[:, 5:], torch.ones(4, 5, 3, dtype=torch.uint8)))
 
     def test_build_config_selection_keeps_whole_groups(self):
         plans = [

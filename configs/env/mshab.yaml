@@ -43,5 +43,7 @@ graph:
   dino_model: dinov2_vits14_reg
   dino_res: 112
   dino_weights: ''
-  staleness_enabled: true
+  # False: emit only objects visible in at least one camera this frame.
+  # True: retain unseen nodes and their cached physical relations.
+  staleness_enabled: false
   bypass_teemo: false

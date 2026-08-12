@@ -76,19 +76,14 @@ def make_graph(args, edge_width, device):
 def measure(args, encoder, decoder, edge_width, device):
     torch.manual_seed(0)
     graph = make_graph(args, edge_width, device)
-    sem = torch.randn(
-        args.batch, args.length, 16, 16, device=device, requires_grad=True
-    )
     valid = torch.ones(args.batch, args.length, dtype=torch.bool, device=device)
 
     def step():
         encoder.zero_grad(set_to_none=True)
         decoder.zero_grad(set_to_none=True)
-        if sem.grad is not None:
-            sem.grad = None
         with torch.amp.autocast("cuda", dtype=torch.float16):
             encoded = encoder(graph)
-            losses, _ = decoder(encoded, sem, valid)
+            losses, _ = decoder(encoded, valid)
             loss = sum(losses.values()) + encoded.token.square().mean()
         loss.backward()
         return encoded.compact.edge_count
@@ -106,11 +101,11 @@ def measure(args, encoder, decoder, edge_width, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--edge-widths", nargs="+", type=int, default=[96, 270])
+    parser.add_argument("--edge-widths", nargs="+", type=int, default=[96, 168])
     parser.add_argument("--real-edges", type=int, default=72)
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--length", type=int, default=32)
-    parser.add_argument("--nodes", type=int, default=10)
+    parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--valid-nodes", type=int, default=7)
     parser.add_argument("--units", type=int, default=512)
     parser.add_argument("--layers", type=int, default=2)
@@ -122,7 +117,7 @@ def main():
     device = torch.device("cuda")
     cfg = make_config(args)
     encoder = GraphEncoder(cfg).to(device)
-    decoder = GraphDecoder(cfg, sem_dim=16 * 16).to(device)
+    decoder = GraphDecoder(cfg).to(device)
     results = []
     for width in args.edge_widths:
         milliseconds, count = measure(args, encoder, decoder, width, device)

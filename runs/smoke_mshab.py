@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--mshab-task", default="prepare_groceries")
     parser.add_argument("--mshab-obj", default="all")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--graph-only", action="store_true")
     args = parser.parse_args()
 
     overrides = [
@@ -39,6 +40,7 @@ def main():
         f"env.mshab_obj={args.mshab_obj}",
         f"device={args.device}",
         f"buffer.storage_device={args.device}",
+        f"model.graph_only_latent={str(args.graph_only).lower()}",
     ]
     dino_weights = os.environ.get("DINO_WEIGHTS")
     if dino_weights:
@@ -67,6 +69,8 @@ def main():
 
         agent = Dreamer(config.model, env.observation_space, env.action_space).to(args.device)
         state = agent.get_initial_state(args.num_envs)
+        if args.graph_only and "stoch" in state:
+            raise AssertionError("graph-only state must not contain stoch")
         action = torch.zeros(
             args.num_envs, env.action_space.shape[0], device=args.device
         )
@@ -88,7 +92,7 @@ def main():
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
 
-        print("MS-HAB graph smoke: OK")
+        print(f"MS-HAB {'graph-only' if args.graph_only else 'hybrid'} smoke: OK")
         print(f"  env frames: {args.num_envs * args.steps}")
         print(f"  graph+env+policy: {args.num_envs * args.steps / elapsed:.2f} frames/s")
         print(f"  vertices max: {max_nodes}/{node_capacity}")

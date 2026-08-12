@@ -4,11 +4,11 @@ Pipeline per frame:
 
     apply_whitelist(candidates)   # hard eligibility gate
     -> merge_persistent(...)      # re-inject nodes that left the view
-    -> EntityRegistry.assign(...) # stable index, oldest-first overflow
+    -> EntityRegistry.assign(...) # stable index, diversity-aware overflow
 
 No scoring or secondary contact-based admission path exists. When the registry
-is at capacity, a newly seen instance replaces the oldest instance rather than
-being discarded.
+is at capacity, eviction comes from the most represented object type; age only
+breaks ties and selects the instance within that type.
 """
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ from .schema import Node
 from .whitelist import Whitelist, match_key
 
 class EntityRegistry:
-    """Bounded, first-seen-ordered vertex index. One instance per episode.
+    """Bounded, diversity-preserving vertex index. One instance per episode.
 
     ``ee`` always holds index 0. Object indices are handed out on first sight
     and remain stable until capacity is reached. A genuinely new instance then
-    takes the oldest resident's index. First-seen order is retained even after
-    overflow eviction, preventing an old persistent instance from returning on
-    the next frame and displacing a newer one. Appearance retention is separate
-    and lives in the adapter-level cache.
+    displaces the oldest resident belonging to the most numerous canonical
+    object type. First-seen order is retained after eviction, preventing an old
+    instance from returning on the next frame and rotating the slots. Appearance
+    retention is separate and lives in the adapter-level cache.
     """
 
     def __init__(self, n_max: int):
@@ -35,6 +35,7 @@ class EntityRegistry:
         self._index: Dict[str, int] = {}
         self._free: List[int] = []
         self._first_seen: Dict[str, int] = {}
+        self._type: Dict[str, str] = {}
         self._seen_clock = 0
         self._next = 1  # 0 is reserved for the end effector
         self.evicted_ids: List[str] = []
@@ -44,6 +45,7 @@ class EntityRegistry:
         self._index.clear()
         self._free.clear()
         self._first_seen.clear()
+        self._type.clear()
         self._seen_clock = 0
         self._next = 1
         self.evicted_ids.clear()
@@ -55,14 +57,20 @@ class EntityRegistry:
     def index_of(self, entity_id: str) -> Optional[int]:
         return self._index.get(entity_id)
 
-    def assign(self, nodes: Dict[str, Node]) -> Dict[str, Node]:
-        """Index every object node, evicting the oldest resident on overflow.
+    def assign(
+        self,
+        nodes: Dict[str, Node],
+        protected_id: Optional[str] = None,
+    ) -> Dict[str, Node]:
+        """Index objects, evicting an old duplicate type on overflow.
 
         Returns the admitted subset. ``evicted_ids`` reports residents displaced
         by this call so the graph builder can purge their persistence and edge
         history. An already-seen overflow instance remains older than the
         current residents and is rejected instead of causing frame-to-frame
-        slot rotation.
+        slot rotation. ``protected_id`` names the exact active target instance:
+        it cannot be evicted, and if it is pending it bypasses the age rejection
+        so a visible target is always admitted when a non-target slot exists.
         """
         self.evicted_ids.clear()
         admitted: Dict[str, Node] = {}
@@ -76,6 +84,7 @@ class EntityRegistry:
             if idx is None:
                 pending.append(ent_id)
                 continue
+            self._type[ent_id] = self._type_key(node)
             node.index = idx
             admitted[ent_id] = node
 
@@ -88,29 +97,71 @@ class EntityRegistry:
         for ent_id in sorted(pending, key=lambda k: self._first_seen[k]):
             node = nodes[ent_id]
             if len(self._index) >= capacity:
-                oldest = self._oldest_resident()
-                if oldest is None or self._first_seen[ent_id] < self._first_seen[oldest]:
+                victim = self._eviction_candidate(node, protected_id)
+                force_target = ent_id == protected_id
+                if victim is None or (
+                    not force_target
+                    and self._first_seen[ent_id] < self._first_seen[victim]
+                ):
                     self.overflow_drops += 1
                     continue
-                self.release(oldest, forget=False)
-                admitted.pop(oldest, None)
-                self.evicted_ids.append(oldest)
+                self.release(victim, forget=False)
+                admitted.pop(victim, None)
+                self.evicted_ids.append(victim)
                 self.overflow_drops += 1
             idx = self._free.pop(0) if self._free else self._next
             if idx == self._next:
                 self._next += 1
             self._index[ent_id] = idx
+            self._type[ent_id] = self._type_key(node)
             node.index = idx
             admitted[ent_id] = node
         return admitted
 
-    def _oldest_resident(self) -> Optional[str]:
+    @staticmethod
+    def _type_key(node: Node) -> str:
+        """Canonical category shared by duplicate instances."""
+        return str(
+            node.attributes.get("whitelist_key")
+            or node.attributes.get("entity_type")
+            or node.name
+            or node.node_id
+        )
+
+    def _eviction_candidate(
+        self,
+        incoming: Node,
+        protected_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Oldest non-target resident from the most represented type."""
         if not self._index:
             return None
-        return min(self._index, key=lambda key: self._first_seen[key])
+        counts: Dict[str, int] = {}
+        for kind in self._type.values():
+            counts[kind] = counts.get(kind, 0) + 1
+        incoming_type = self._type_key(incoming)
+        counts[incoming_type] = counts.get(incoming_type, 0) + 1
+        largest = max(counts.values())
+        candidates = [
+            ent_id for ent_id in self._index
+            if ent_id != protected_id and counts[self._type[ent_id]] == largest
+        ]
+        # If the globally largest type contains only the protected target,
+        # evict from the next most represented non-target type instead.
+        if not candidates:
+            unprotected = [ent_id for ent_id in self._index if ent_id != protected_id]
+            if not unprotected:
+                return None
+            largest = max(counts[self._type[ent_id]] for ent_id in unprotected)
+            candidates = [
+                ent_id for ent_id in unprotected
+                if counts[self._type[ent_id]] == largest
+            ]
+        return min(candidates, key=lambda key: self._first_seen[key])
 
     def release(self, entity_id: str, *, forget: bool = True) -> None:
         idx = self._index.pop(entity_id, None)
+        self._type.pop(entity_id, None)
         if idx is not None:
             self._free.append(idx)
             self._free.sort()
@@ -153,8 +204,7 @@ class NodeSelector:
         from the current frame's visible set.
 
         ``k_persist == 0`` disables persistence entirely; ``k_persist < 0``
-        means "never evict" -- the node stays for the whole episode once seen,
-        which is the configuration the scene graph is defined against.
+        means "never evict" when the adapter's history switch is enabled.
         """
         if self.k_persist == 0:
             return fresh

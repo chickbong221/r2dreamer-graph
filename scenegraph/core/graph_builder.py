@@ -38,7 +38,7 @@ class GraphBuilder:
         env_id: str = "env",
         camera: Optional[str] = None,
         camera_order: Optional[List[str]] = None,
-        staleness_enabled: bool = True,
+        staleness_enabled: bool = False,
     ):
         self.env = env
         self.cfg = cfg
@@ -196,10 +196,9 @@ class GraphBuilder:
             admit=None if need_masks else self._entity_admitted,
         )
 
-        # Whitelist admission first, then episode-scoped persistence: a node
-        # that was ever seen (post-whitelist) and is still admissible stays in
-        # the vertex set for the rest of the episode. Non-whitelisted entities
-        # are never persisted.
+        # Whitelist admission comes first. Optional episode history can then
+        # reinsert a previously seen node; with history disabled, only nodes
+        # observed by at least one camera this frame continue below.
         active_target_node_id: Optional[str] = None
         if state.active_obj is not None:
             # Leave the goal unflagged if active-object resolution fell back to
@@ -232,7 +231,15 @@ class GraphBuilder:
             else:
                 n.steps_since_seen = frame - self._last_seen[nid]
 
-        nodes = self.registry.assign(nodes)
+        # History-off graphs protect the target only while its exact instance
+        # is present in the current observation. If it later reappears, the
+        # registry force-admits it by evicting a non-target.
+        protected_target = (
+            active_target_node_id
+            if active_target_node_id is not None and active_target_node_id in nodes
+            else None
+        )
+        nodes = self.registry.assign(nodes, protected_id=protected_target)
 
         # k_persist=-1 must not inject an overflow-evicted old instance again
         # on the next frame and displace one of the newer residents.
@@ -274,7 +281,8 @@ class GraphBuilder:
             self._attach_stale_edges(graph, frame)
         self.temporal.annotate(graph, self.cfg)
 
-        self.selector.commit(nodes, frame)
+        if self.staleness_enabled:
+            self.selector.commit(nodes, frame)
         return graph, masks, cam, rgb
 
     def _attach_stale_edges(self, graph: Graph, frame: int) -> None:

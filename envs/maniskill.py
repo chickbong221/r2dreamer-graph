@@ -212,7 +212,6 @@ class ManiSkillVecEnv:
             )
         if self._graph is not None:
             for key in (
-                "log_graph_overflow_drops",
                 "log_graph_fact_drops",
                 "log_graph_target_missing",
                 "log_graph_cache_entries",
@@ -295,9 +294,6 @@ class ManiSkillVecEnv:
         if self._graph is not None:
             for key, value in self._graph_obs.items():
                 data[key] = torch.as_tensor(value, device=self._device)
-            data["log_graph_overflow_drops"] = torch.as_tensor(
-                self._graph.overflow_drops, device=self._device
-            ).reshape(-1, 1)
             data["log_graph_fact_drops"] = torch.as_tensor(
                 self._graph.fact_drops, device=self._device
             ).reshape(-1, 1)

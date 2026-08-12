@@ -11,20 +11,20 @@ frame. Index zero is padding for entity and relation vocabularies.
 
 | Key | Shape | Storage dtype |
 |---|---:|---|
-| `graph_node_ent` | `[10]` | `uint8` |
-| `graph_node_app` | `[10,2,384]` | `float16` |
-| `graph_node_bbox` | `[10,2,4]` | `float16` |
-| `graph_node_target` | `[10]` | `uint8` |
-| `graph_edge_src` | `[270]` | `uint8` |
-| `graph_edge_dst` | `[270]` | `uint8` |
-| `graph_edge_rel` | `[270]` | `uint8` |
-| `graph_edge_abs` | `[270]` | `uint8` |
-| `graph_edge_temp` | `[270]` | `uint8` |
+| `graph_node_ent` | `[8]` | `uint8` |
+| `graph_node_app` | `[8,2,384]` | `float16` |
+| `graph_node_bbox` | `[8,2,4]` | `float16` |
+| `graph_node_target` | `[8]` | `uint8` |
+| `graph_edge_src` | `[168]` | `uint8` |
+| `graph_edge_dst` | `[168]` | `uint8` |
+| `graph_edge_rel` | `[168]` | `uint8` |
+| `graph_edge_abs` | `[168]` | `uint8` |
+| `graph_edge_temp` | `[168]` | `uint8` |
 
 The replay remains fixed-width. `compact_graph()` selects
 `graph_edge_rel != 0` on the GPU and offsets endpoints into one disconnected
 batch. Relation embeddings, message MLPs, aggregation, and relation decoding
-therefore execute only for real edges. The ten node slots remain dense because
+therefore execute only for real edges. The eight node slots remain dense because
 their cost is small and retaining them makes target and reconstruction labels
 unambiguous.
 
@@ -32,6 +32,7 @@ unambiguous.
 
 - Graph semantic method: use `model=size50M_graph`.
 - Matched graph-free DreamerV3: use `model=size50M_graph model.graph.enabled=false`.
+- Graph-only latent: add `model.graph_only_latent=true` to the graph method.
 
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation
@@ -55,7 +56,7 @@ Check that padding width no longer controls graph compute:
 
 ```bash
 python runs/benchmark_graph.py \
-  --edge-widths 96 270 \
+  --edge-widths 96 168 \
   --real-edges 72 \
   --batch 8 \
   --length 32 \
@@ -63,7 +64,7 @@ python runs/benchmark_graph.py \
   --layers 2
 ```
 
-The important result is the ratio between 96 and 270. It should be close to
+The important result is the ratio between 96 and 168. It should be close to
 one and no more than about 1.20x. Absolute time determines how much overhead
 the unchanged two-layer, 512-wide method adds to a full Dreamer update.
 
@@ -84,6 +85,9 @@ python runs/smoke_mshab.py \
   --mshab-task prepare_groceries \
   --mshab-obj all
 ```
+
+Add `--graph-only` to exercise the graph-only RSSM without a pixel CNN or
+stochastic `z` state.
 
 The smoke performs no replay writes and no optimizer update. Use CPU replay
 storage for training so fixed-width RGB and graph records do not consume VRAM.

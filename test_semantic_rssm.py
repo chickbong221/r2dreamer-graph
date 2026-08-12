@@ -20,8 +20,11 @@ def config():
         unimix_ratio=0.01,
         initial="zeros",
         device="cpu",
+        hybrid_stoch=2,
         sem_stoch=2,
         sem_discrete=3,
+        graph_only_stoch=2,
+        graph_only_discrete=4,
         sem_layers=1,
     )
 
@@ -60,6 +63,57 @@ class SemanticRSSMTest(unittest.TestCase):
         self.assertEqual(prior_logit.shape, logit.shape)
         imagined = model.img_step(stoch[:, 0], deter[:, 0], self.action[:, 0], sem[:, 0])
         self.assertEqual(len(imagined), 4)
+
+    def test_graph_only_has_no_z_and_conditions_g_on_vector_embed(self):
+        model = RSSM(
+            config(),
+            embed_size=5,
+            act_dim=3,
+            semantic=True,
+            graph_token_size=7,
+            graph_only=True,
+        )
+        initial = model.initial(self.batch)
+        self.assertEqual(model.state_keys, ("deter", "sem"))
+        self.assertEqual(len(initial), 2)
+        self.assertIsNone(model._obs_net)
+        self.assertIsNone(model._img_net)
+        self.assertEqual(model.flat_stoch, 0)
+        self.assertEqual(model.flat_sem, 8)
+
+        token = torch.randn(self.batch, self.time, 7)
+        deter, sem, sem_logit = model.observe(
+            self.embed, self.action, initial, self.reset, token
+        )
+        self.assertEqual(deter.shape, (self.batch, self.time, 16))
+        self.assertEqual(sem.shape, (self.batch, self.time, 2, 4))
+        self.assertEqual(model.get_feat(None, deter, sem).shape[-1], 24)
+
+        first = model.obs_step(
+            None,
+            initial[0],
+            self.action[:, 0],
+            self.embed[:, 0],
+            self.reset[:, 0],
+            sem=initial[1],
+            graph_token=token[:, 0],
+        )[-1]
+        second = model.obs_step(
+            None,
+            initial[0],
+            self.action[:, 0],
+            self.embed[:, 0] + 1,
+            self.reset[:, 0],
+            sem=initial[1],
+            graph_token=token[:, 0],
+        )[-1]
+        self.assertFalse(torch.allclose(first, second))
+        imagined = model.img_step(
+            None, deter[:, 0], self.action[:, 0], sem[:, 0]
+        )
+        self.assertEqual(len(imagined), 3)
+        with self.assertRaises(RuntimeError):
+            model.prior(deter, sem)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_rssm_matches_r2dreamer_amp_dtypes(self):

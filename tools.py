@@ -162,8 +162,8 @@ _WANDB_DIAGNOSTICS = {
     "train/node_vis_acc",
     "train/relabs_acc",
     "train/reltemp_acc",
-    "train/semtgt_acc",
-    "train/semtgt_frac",
+    "train/node_target_acc",
+    "train/node_target_frac",
     "train/graph_real_edges",
 }
 
@@ -176,9 +176,44 @@ def wandb_scalars(scalars):
         if name.startswith("episode/")
         or name.startswith("train/loss/")
         or name.startswith("train/opt/")
-        or name == "fps/fps"
+        or name in ("fps/policy", "fps/train")
         or name in _WANDB_DIAGNOSTICS
     }
+
+
+def prepare_video(value):
+    """Convert ``[B,T,H,W,C]`` video into tiled ``[T,C,H,B*W]`` uint8."""
+    value = np.asarray(value)
+    if value.ndim != 5 or value.shape[-1] not in (1, 3):
+        raise ValueError(
+            f"video must have shape [B,T,H,W,C], got {value.shape}")
+    if np.issubdtype(value.dtype, np.floating):
+        value = np.clip(255 * value, 0, 255).astype(np.uint8)
+    elif value.dtype != np.uint8:
+        value = np.clip(value, 0, 255).astype(np.uint8)
+    B, T, H, W, C = value.shape
+    tiled = value.transpose(1, 2, 0, 3, 4).reshape(T, H, B * W, C)
+    return tiled.transpose(0, 3, 1, 2)
+
+
+class FPS:
+    """Count completed items per wall-clock second between log writes."""
+
+    def __init__(self, clock=time.time):
+        self._clock = clock
+        self._last_time = clock()
+        self._count = 0
+
+    def step(self, amount=1):
+        self._count += int(amount)
+
+    def result(self):
+        now = self._clock()
+        duration = now - self._last_time
+        value = self._count / duration if duration > 0 else 0.0
+        self._last_time = now
+        self._count = 0
+        return value
 
 
 class Logger:
@@ -187,6 +222,7 @@ class Logger:
         self._filename = filename
         self._writer = SummaryWriter(log_dir=str(logdir), max_queue=1000)
         self._wandb_run = None
+        self._wandb = None
         if wandb_config is not None and bool(wandb_config.enabled):
             try:
                 import wandb
@@ -202,10 +238,9 @@ class Logger:
                 mode=str(wandb_config.mode),
                 dir=str(logdir),
             )
+            self._wandb = wandb
             self._wandb_run.define_metric("env_step")
             self._wandb_run.define_metric("*", step_metric="env_step")
-        self._last_step = None
-        self._last_time = None
         self._scalars = {}
         self._images = {}
         self._videos = {}
@@ -217,16 +252,14 @@ class Logger:
     def image(self, name, value):
         self._images[name] = np.array(value)
 
-    def video(self, name, value):
-        self._videos[name] = np.array(value)
+    def video(self, name, value, fps=16):
+        self._videos[name] = (np.array(value), int(fps))
 
     def histogram(self, name, value):
         self._histograms[name] = np.array(value)
 
-    def write(self, step, fps=False):
+    def write(self, step):
         scalars = list(self._scalars.items())
-        if fps:
-            scalars.append(("fps/fps", self._compute_fps(step)))
         print(f"[{step}]", " / ".join(f"{k} {v:.1f}" for k, v in scalars))
         with (self._logdir / self._filename).open("a") as f:
             f.write(json.dumps({"step": step, **dict(scalars)}) + "\n")
@@ -237,20 +270,28 @@ class Logger:
                 self._writer.add_scalar(name, value, step)
         for name, value in self._images.items():
             self._writer.add_image(name, value, step)
-        for name, value in self._videos.items():
+        wandb_videos = {}
+        for name, (value, fps) in self._videos.items():
             name = name if isinstance(name, str) else name.decode("utf-8")
-            if np.issubdtype(value.dtype, np.floating):
-                value = np.clip(255 * value, 0, 255).astype(np.uint8)
-            B, T, H, W, C = value.shape
-            value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
-            self._writer.add_video(name, value, step, 16)
+            video = prepare_video(value)
+            try:
+                self._writer.add_video(name, video[None], step, fps)
+            except Exception as exc:
+                print(f"Could not encode TensorBoard video {name!r}: {exc}")
+            if self._wandb_run is not None:
+                try:
+                    wandb_videos[f"videos/{name}"] = self._wandb.Video(
+                        video, fps=fps, format="mp4")
+                except Exception as exc:
+                    print(f"Could not encode W&B video {name!r} as mp4: {exc}")
         for name, value in self._histograms.items():
             self._writer.add_histogram(name, value, step)
 
         if self._wandb_run is not None:
             selected = wandb_scalars(scalars)
-            if selected:
-                self._wandb_run.log({"env_step": int(step), **selected})
+            payload = {**selected, **wandb_videos}
+            if payload:
+                self._wandb_run.log({"env_step": int(step), **payload})
 
         self._writer.flush()
         self._scalars = {}
@@ -262,17 +303,6 @@ class Logger:
         if self._wandb_run is not None:
             self._wandb_run.finish()
             self._wandb_run = None
-
-    def _compute_fps(self, step):
-        if self._last_step is None:
-            self._last_time = time.time()
-            self._last_step = step
-            return 0
-        steps = step - self._last_step
-        duration = time.time() - self._last_time
-        self._last_time += duration
-        self._last_step = step
-        return steps / duration
 
     def log_hydra_config(self, config, name="config", step=0, log_hparams=False, hparams_run_name="."):
         """
