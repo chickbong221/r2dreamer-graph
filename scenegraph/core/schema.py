@@ -1,8 +1,8 @@
 """TEEMO manipulation scene-graph schema.
 
-One graph per frame. Two node types (``ee`` and ``object``). The vertex set is
-an append-only per-episode registry: ``index`` is assigned on first sight and
-never reused or reordered while the episode runs.
+One graph per frame. Two node types (``ee`` and ``object``). ``index`` is stable
+after first sight until capacity is reached; a newly seen instance then reuses
+the oldest resident instance's index.
 
 Facts are hyper-relational: one :class:`Edge` per admissible ``(src, rel, dst)``
 instance carrying an absolute state ``label`` and, for families that define one,

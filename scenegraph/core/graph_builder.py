@@ -234,11 +234,19 @@ class GraphBuilder:
 
         nodes = self.registry.assign(nodes)
 
+        # k_persist=-1 must not inject an overflow-evicted old instance again
+        # on the next frame and displace one of the newer residents.
+        overflow_evicted = list(self.registry.evicted_ids)
+        if overflow_evicted:
+            self.selector.evict(overflow_evicted)
+
         expired = self.selector.evict_expired(frame)
-        if expired:
-            self.temporal.purge(expired)
-        for nid in expired:
-            self.registry.release(nid)
+        purged = list(dict.fromkeys([*overflow_evicted, *expired]))
+        if purged:
+            self.temporal.purge(purged)
+        for nid in purged:
+            if nid in expired:
+                self.registry.release(nid)
             self._last_seen.pop(nid, None)
             self._first_unseen.pop(nid, None)
             for key in [k for k in self._edge_history if nid in k[:2]]:

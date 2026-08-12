@@ -1,13 +1,14 @@
-"""Whitelist admission, appearance retention, and the append-only vertex index.
+"""Whitelist admission, appearance retention, and the episode vertex index.
 
 Pipeline per frame:
 
     apply_whitelist(candidates)   # hard eligibility gate
     -> merge_persistent(...)      # re-inject nodes that left the view
-    -> EntityRegistry.assign(...) # append-only vertex index
+    -> EntityRegistry.assign(...) # stable index, oldest-first overflow
 
-No scoring or secondary contact-based admission path exists. Whitelist role
-priority is consulted only when the registry is at capacity.
+No scoring or secondary contact-based admission path exists. When the registry
+is at capacity, a newly seen instance replaces the oldest instance rather than
+being discarded.
 """
 
 from __future__ import annotations
@@ -18,36 +19,34 @@ from .persistence import _snapshot
 from .schema import Node
 from .whitelist import Whitelist, match_key
 
-
-def _role_rank(node: Node) -> int:
-    roles = set(node.attributes.get("whitelist_roles") or [])
-    if "interacted" in roles:
-        return 0
-    if "support" in roles:
-        return 1
-    return 2
-
-
 class EntityRegistry:
-    """Append-only vertex index. One instance per episode.
+    """Bounded, first-seen-ordered vertex index. One instance per episode.
 
     ``ee`` always holds index 0. Object indices are handed out on first sight
-    and never reused or reordered while the episode runs, so a node that leaves
-    and later re-enters the view keeps its position. Appearance retention is
-    separate and lives in the adapter-level cache.
+    and remain stable until capacity is reached. A genuinely new instance then
+    takes the oldest resident's index. First-seen order is retained even after
+    overflow eviction, preventing an old persistent instance from returning on
+    the next frame and displacing a newer one. Appearance retention is separate
+    and lives in the adapter-level cache.
     """
 
     def __init__(self, n_max: int):
         self.n_max = int(n_max)
         self._index: Dict[str, int] = {}
         self._free: List[int] = []
+        self._first_seen: Dict[str, int] = {}
+        self._seen_clock = 0
         self._next = 1  # 0 is reserved for the end effector
+        self.evicted_ids: List[str] = []
         self.overflow_drops = 0
 
     def reset_episode(self) -> None:
         self._index.clear()
         self._free.clear()
+        self._first_seen.clear()
+        self._seen_clock = 0
         self._next = 1
+        self.evicted_ids.clear()
         self.overflow_drops = 0
 
     def __len__(self) -> int:
@@ -57,13 +56,15 @@ class EntityRegistry:
         return self._index.get(entity_id)
 
     def assign(self, nodes: Dict[str, Node]) -> Dict[str, Node]:
-        """Index every object node, dropping the lowest-priority overflow.
+        """Index every object node, evicting the oldest resident on overflow.
 
-        Returns the admitted subset. Capacity is only reachable when the active
-        whitelist admits more instances than ``n_max``; the candidate replaces a
-        resident only when it outranks the worst one, and the displaced entry
-        releases its index.
+        Returns the admitted subset. ``evicted_ids`` reports residents displaced
+        by this call so the graph builder can purge their persistence and edge
+        history. An already-seen overflow instance remains older than the
+        current residents and is rejected instead of causing frame-to-frame
+        slot rotation.
         """
+        self.evicted_ids.clear()
         admitted: Dict[str, Node] = {}
         pending: List[str] = []
         for ent_id, node in nodes.items():
@@ -78,18 +79,23 @@ class EntityRegistry:
             node.index = idx
             admitted[ent_id] = node
 
-        capacity = self.n_max - 1  # excluding the end effector
-        for ent_id in sorted(pending, key=lambda k: (_role_rank(nodes[k]), k)):
+        for ent_id in sorted(pending):
+            if ent_id not in self._first_seen:
+                self._first_seen[ent_id] = self._seen_clock
+                self._seen_clock += 1
+
+        capacity = max(0, self.n_max - 1)  # excluding the end effector
+        for ent_id in sorted(pending, key=lambda k: self._first_seen[k]):
             node = nodes[ent_id]
             if len(self._index) >= capacity:
-                worst = self._worst_resident(admitted)
-                if worst is None or _role_rank(nodes[ent_id]) >= _role_rank(
-                    admitted[worst]
-                ):
+                oldest = self._oldest_resident()
+                if oldest is None or self._first_seen[ent_id] < self._first_seen[oldest]:
                     self.overflow_drops += 1
                     continue
-                self.release(worst)
-                admitted.pop(worst, None)
+                self.release(oldest, forget=False)
+                admitted.pop(oldest, None)
+                self.evicted_ids.append(oldest)
+                self.overflow_drops += 1
             idx = self._free.pop(0) if self._free else self._next
             if idx == self._next:
                 self._next += 1
@@ -98,17 +104,18 @@ class EntityRegistry:
             admitted[ent_id] = node
         return admitted
 
-    def _worst_resident(self, admitted: Dict[str, Node]) -> Optional[str]:
-        candidates = [k for k, n in admitted.items() if n.node_type != "ee"]
-        if not candidates:
+    def _oldest_resident(self) -> Optional[str]:
+        if not self._index:
             return None
-        return max(candidates, key=lambda k: (_role_rank(admitted[k]), k))
+        return min(self._index, key=lambda key: self._first_seen[key])
 
-    def release(self, entity_id: str) -> None:
+    def release(self, entity_id: str, *, forget: bool = True) -> None:
         idx = self._index.pop(entity_id, None)
         if idx is not None:
             self._free.append(idx)
             self._free.sort()
+        if forget:
+            self._first_seen.pop(entity_id, None)
 
 
 class NodeSelector:
