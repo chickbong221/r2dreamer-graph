@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-ms-h100
+#SBATCH --job-name=r2d-ms-go100
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --nodelist=worker-2
@@ -15,7 +15,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Method: hybrid (pixels + z + graph latent)"
+echo "Method: graph-only latent (state + instruction + graph; no z or pixel CNN)"
 echo "================================="
 
 # Activate conda.
@@ -84,7 +84,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   env=mshab \
   model=size100M_graph \
   model.graph.enabled=true \
-  model.graph_only_latent=false \
+  model.graph_only_latent=true \
   model.graph.n_max=8 \
   model.graph.e_max=168 \
   model.amp_dtype=bfloat16 \
@@ -109,8 +109,8 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   wandb.project=RelRL \
   wandb.entity=letuanhf-hanoi-university-of-science-and-technology \
   wandb.group=mshab-prepare-groceries-size100m-b32-s0 \
-  wandb.name=hybrid-size100m-b32-s0 \
-  logdir="$HOME/logdir/r2dreamer-graph/$TIMESTAMP/mshab-hybrid-size100m-b32-s0" \
+  wandb.name=graph-only-size100m-b32-s0 \
+  logdir="$HOME/logdir/r2dreamer-graph/$TIMESTAMP/mshab-graph-only-size100m-b32-s0" \
   seed=0
 
 echo "Job finished"
