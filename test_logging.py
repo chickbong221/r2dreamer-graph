@@ -7,7 +7,7 @@ from unittest import mock
 
 import numpy as np
 
-from tools import FPS, Logger, prepare_video, wandb_scalars
+from tools import FPS, Logger, prepare_video, process_memory_stats, wandb_scalars
 
 
 class _FakeRun:
@@ -45,6 +45,9 @@ class LoggingTest(unittest.TestCase):
                 ("fps/policy", 4.0),
                 ("fps/train", 5.0),
                 ("fps/fps", 6.0),
+                ("system/process_ram_gib", 7.0),
+                ("system/process_peak_ram_gib", 8.0),
+                ("system/machine_ram_gib", 9.0),
                 ("train/action_mean", 5.0),
                 ("train/ret_replay_mean", 6.0),
             ]
@@ -54,7 +57,19 @@ class LoggingTest(unittest.TestCase):
             {
                 "episode/score", "train/loss/dyn", "train/semdyn_raw",
                 "train/node_target_acc", "train/node_target_frac",
-                "fps/policy", "fps/train",
+                "fps/policy", "fps/train", "system/process_ram_gib",
+                "system/process_peak_ram_gib",
+            },
+        )
+
+    @mock.patch("tools._peak_process_rss_bytes", return_value=6 * 1024 ** 3)
+    @mock.patch("tools._linux_process_rss_bytes", return_value=4 * 1024 ** 3)
+    def test_process_memory_reports_current_and_peak_gib(self, _, __):
+        self.assertEqual(
+            process_memory_stats(),
+            {
+                "system/process_ram_gib": 4.0,
+                "system/process_peak_ram_gib": 6.0,
             },
         )
 

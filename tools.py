@@ -176,9 +176,58 @@ def wandb_scalars(scalars):
         if name.startswith("episode/")
         or name.startswith("train/loss/")
         or name.startswith("train/opt/")
+        or name.startswith("system/process_")
         or name in ("fps/policy", "fps/train")
         or name in _WANDB_DIAGNOSTICS
     }
+
+
+def _linux_process_rss_bytes(path="/proc/self/status"):
+    """Return current resident bytes for this process on Linux."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    # Linux reports VmRSS in KiB.
+                    return int(line.split()[1]) * 1024
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _peak_process_rss_bytes():
+    """Return the process lifetime peak RSS using the standard library."""
+    try:
+        import resource
+        import sys
+
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        # ru_maxrss is bytes on macOS and KiB on Linux/BSD.
+        return value if sys.platform == "darwin" else value * 1024
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def process_memory_stats():
+    """Current and peak host RAM owned by the training Python process.
+
+    This intentionally measures process RSS rather than machine-wide memory.
+    The replay buffer, environments, DINO model, and Dreamer modules all live
+    in this process in the MS-HAB runner, so their resident host allocations
+    are included. GPU VRAM is a separate resource and is not counted here.
+    """
+    gib = float(1024 ** 3)
+    current = _linux_process_rss_bytes()
+    peak = _peak_process_rss_bytes()
+    stats = {}
+    if current is not None:
+        stats["system/process_ram_gib"] = current / gib
+    if peak is not None:
+        # Sampling and allocator timing can make a platform-reported peak lag
+        # the current read very briefly; a peak must never plot below current.
+        peak = max(peak, current or 0)
+        stats["system/process_peak_ram_gib"] = peak / gib
+    return stats
 
 
 def prepare_video(value):

@@ -264,4 +264,6 @@ class OnlineTrainer:
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.scalar("fps/policy", policy_fps.result())
                     self.logger.scalar("fps/train", train_fps.result())
+                    for name, value in tools.process_memory_stats().items():
+                        self.logger.scalar(name, value)
                     self.logger.write(step)
