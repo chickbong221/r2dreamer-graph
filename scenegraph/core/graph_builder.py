@@ -32,6 +32,10 @@ _STALE_REPLAY_RELATIONS = frozenset({"contact", "support", "contain"})
 UID_PAD = 0
 UID_EE = 1
 _UID_FIRST_OBJECT = 2
+# UIDs are packed as uint8, the narrowest dtype holding the vocabulary and the
+# one the replay buffer can index. Wider integer types are not universally
+# supported there -- torchrl's index_put has no uint16 kernel.
+UID_VOCAB_MAX = 256
 
 
 class EpisodeUIDs:
@@ -53,6 +57,13 @@ class EpisodeUIDs:
             raise ValueError(
                 f"uid_vocab={self.uid_vocab} leaves no object codes; "
                 f"codes {UID_PAD} and {UID_EE} are reserved"
+            )
+        if self.uid_vocab > UID_VOCAB_MAX:
+            raise ValueError(
+                f"uid_vocab={self.uid_vocab} exceeds {UID_VOCAB_MAX}; "
+                "graph_node_uid is packed as uint8. Widening it means "
+                "changing the packed dtype, and the replay buffer has no "
+                "uint16 index_put kernel -- use int32 if you truly need more."
             )
         self._rng = np.random.default_rng(seed)
         self._codes: Dict[str, int] = {}

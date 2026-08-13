@@ -45,7 +45,7 @@ The replay contract loses appearance and boxes and gains an identity column:
 | Key | Shape | Storage dtype |
 |---|---:|---|
 | `graph_node_ent` | `[8]` | `uint8` |
-| `graph_node_uid` | `[8]` | `uint16` |
+| `graph_node_uid` | `[8]` | `uint8` |
 | `graph_node_target` | `[8]` | `uint8` |
 | `graph_edge_*` | `[168]` | `uint8` |
 
@@ -86,7 +86,10 @@ UIDs are episode-scoped, allocated on first sight, kept when an object leaves
 the view, and never handed to a second object before reset. Codes are permuted
 per episode so a UID means "the same object as before" and nothing more.
 Overflow raises; size `model.graph.uid_vocab` above the peak
-`episode/graph_episode_entities` rather than letting two objects alias.
+`episode/graph_episode_entities` rather than letting two objects alias. The
+ceiling is 256: UIDs are packed as `uint8`, and the replay buffer's
+`index_put` has no `uint16` kernel. Going wider means moving to `int32`, not
+`uint16`.
 
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation

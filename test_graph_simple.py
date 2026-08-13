@@ -6,6 +6,7 @@ Everything here runs on synthetic tensors -- no simulator, no DINO.
 import unittest
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
@@ -21,7 +22,13 @@ from graph import (
 from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
-from scenegraph.core.graph_builder import UID_EE, UID_PAD, EpisodeUIDs
+from scenegraph.adapters.graph_obs import _DTYPES as _PACKED_DTYPES
+from scenegraph.core.graph_builder import (
+    UID_EE,
+    UID_PAD,
+    UID_VOCAB_MAX,
+    EpisodeUIDs,
+)
 
 N_MAX = 8
 E_MAX = 16
@@ -111,6 +118,39 @@ class ContractTest(unittest.TestCase):
         self.assertIsNone(compact.node_bbox)
         self.assertIsNone(compact.appearance_known)
         self.assertIsNone(compact.camera_visible)
+
+
+class ReplayDtypeTest(unittest.TestCase):
+    """Every packed dtype must survive the replay buffer.
+
+    torchrl stores through ``index_put``, which has no uint16 kernel. A key
+    packed in an unsupported dtype builds and acts fine and only fails on the
+    first replay write, well after the run looks healthy.
+    """
+
+    # Types with an index_put kernel that the buffer actually exercises.
+    SUPPORTED = {np.uint8, np.int32, np.int64, np.float16, np.float32}
+
+    def test_every_graph_key_is_storable(self):
+        for key, dtype in _PACKED_DTYPES.items():
+            with self.subTest(key=key):
+                self.assertIn(np.dtype(dtype).type, self.SUPPORTED)
+
+    def test_uid_is_storable_and_holds_the_vocabulary(self):
+        self.assertIs(np.dtype(_PACKED_DTYPES["graph_node_uid"]).type, np.uint8)
+        self.assertLessEqual(UID_VOCAB_MAX - 1, np.iinfo(np.uint8).max)
+
+    def test_index_put_accepts_every_graph_dtype(self):
+        # The exact operation the buffer performs, so this fails here rather
+        # than on the first add_transition of a real run.
+        for key, dtype in _PACKED_DTYPES.items():
+            with self.subTest(key=key):
+                store = torch.zeros(4, dtype=torch.from_numpy(np.zeros(1, dtype)).dtype)
+                store[torch.tensor([0, 2])] = store[torch.tensor([1, 3])]
+
+    def test_uid_vocab_above_the_dtype_raises(self):
+        with self.assertRaises(ValueError):
+            EpisodeUIDs(UID_VOCAB_MAX + 1, seed=0)
 
 
 class EpisodeUIDTest(unittest.TestCase):

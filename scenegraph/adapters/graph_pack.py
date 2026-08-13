@@ -72,7 +72,12 @@ def pack_graph(
     # than no bit at all.
     node_target = np.zeros(n_max, dtype=np.uint8)
     if simple:
-        node_uid = np.zeros(n_max, dtype=np.uint16)
+        if uid_vocab > 256:
+            raise ValueError(
+                f"uid_vocab={uid_vocab} exceeds 256; graph_node_uid is packed "
+                "as uint8 because the replay buffer has no uint16 index kernel"
+            )
+        node_uid = np.zeros(n_max, dtype=np.uint8)
         uids = graph.meta.get("node_uids") or {}
     else:
         node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)

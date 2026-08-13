@@ -47,7 +47,7 @@ _SCENE_CACHE_CAP = 8192
 
 _DTYPES: Dict[str, np.dtype] = {
     "graph_node_ent": np.uint8,
-    "graph_node_uid": np.uint16,
+    "graph_node_uid": np.uint8,
     "graph_node_app": np.float16,
     "graph_node_bbox": np.float16,
     "graph_node_target": np.uint8,
