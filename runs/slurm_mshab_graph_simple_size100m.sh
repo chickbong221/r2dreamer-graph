@@ -73,6 +73,10 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# "b32" in the group and run names is historical. Every arm runs at
+# batch_size=28, the largest the full-graph arms fit on the H100; renaming
+# would orphan the runs already charted in this group.
+
 PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   deterministic_run=true \
   env=mshab \
@@ -84,7 +88,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   model.graph.e_max=168 \
   model.amp_dtype=bfloat16 \
   env.obs_mode=rgb+segmentation \
-  batch_size=32 \
+  batch_size=28 \
   batch_length=64 \
   env.env_num=126 \
   env.train_ratio=64 \

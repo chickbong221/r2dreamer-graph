@@ -2,6 +2,7 @@
 #SBATCH --job-name=r2d-ms-b100
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
+#SBATCH --nodelist=worker-2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=0
@@ -14,7 +15,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Method: graph off"
+echo "Method: graph-free DreamerV3 (matched control)"
 echo "================================="
 
 # Activate conda.
@@ -49,6 +50,10 @@ cd "$HOME/projects/r2dreamer-graph"
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
 export MS_ASSET_DIR=/mnt/data/tuannl
 
+# No DINO: this arm builds no graph. obs_mode stays rgb for the same reason --
+# the encoder reads only image_head/image_hand, so segmentation would render
+# for nothing. Every other setting matches the graph arms exactly.
+
 mkdir -p "$HOME/output" "$HOME/logdir/r2dreamer-graph"
 
 nvidia-smi
@@ -69,12 +74,17 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# "b32" in the group and run names is historical. Every arm runs at
+# batch_size=28, the largest the full-graph arms fit on the H100; renaming
+# would orphan the runs already charted in this group.
+
 PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   deterministic_run=true \
   env=mshab \
   model=size100M_graph \
   model.graph.enabled=false \
-  model.graph.n_max=12 \
+  model.graph_simple=false \
+  model.graph_only_latent=false \
   model.amp_dtype=bfloat16 \
   env.obs_mode=rgb \
   batch_size=28 \
@@ -88,6 +98,8 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   buffer.max_size=500000 \
   trainer.steps=10000000 \
   trainer.eval_every=50000 \
+  trainer.video_pred_log=false \
+  trainer.video_every=1000000 \
   trainer.update_log_every=1500 \
   device=cuda:0 \
   wandb.enabled=true \
