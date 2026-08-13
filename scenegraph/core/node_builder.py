@@ -223,6 +223,7 @@ def build_nodes(
     need_masks: bool = True,
     admit: Optional[Callable[[Any], bool]] = None,
     patch_grid: int = 8,
+    appearance: bool = True,
 ) -> Tuple[Dict[str, Node], MaskAccumulator, str, np.ndarray]:
     """Return (nodes_by_id, masks, record_camera_name, rgb).
 
@@ -271,5 +272,9 @@ def build_nodes(
         )
 
     nodes["ee"].pixel_area = area_by_key["ee"]
-    fill_appearance(nodes, seg_by_cam, patch_grid)
+    # Boxes and patch coverage exist only to feed the appearance encoder. A
+    # relation-only graph reads neither, and the per-node ``isin`` sweep over
+    # every camera is the most expensive step here.
+    if appearance:
+        fill_appearance(nodes, seg_by_cam, patch_grid)
     return nodes, masks, cam, rgb

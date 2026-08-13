@@ -33,6 +33,60 @@ unambiguous.
 - Graph semantic method: use `model=size50M_graph`.
 - Matched graph-free DreamerV3: use `model=size50M_graph model.graph.enabled=false`.
 - Graph-only latent: add `model.graph_only_latent=true` to the graph method.
+- Simple graph: add `model.graph_simple=true` to the graph method.
+
+## Simple graph mode
+
+`model.graph_simple=true` swaps the whole graph path for a relation-only one.
+It is mutually exclusive with `graph_only_latent` and needs `graph.enabled`.
+
+The replay contract loses appearance and boxes and gains an identity column:
+
+| Key | Shape | Storage dtype |
+|---|---:|---|
+| `graph_node_ent` | `[8]` | `uint8` |
+| `graph_node_uid` | `[8]` | `uint16` |
+| `graph_node_target` | `[8]` | `uint8` |
+| `graph_edge_*` | `[168]` | `uint8` |
+
+`graph_node_app` and `graph_node_bbox` are absent from the observation space,
+the transition, replay and the sampled batch -- not zeroed. DINO is never
+constructed, RGB is never read by the graph builder, and per-node boxes and
+patch coverage are never computed. That removes about 12.4 KB per environment
+step, less 16 bytes for the UID column.
+
+The latent model changes in four ways:
+
+- `g` is a deterministic 512-d vector, not a categorical sample. Its prior is
+  `P(h_t)` and its posterior `Q(h_t, c_t)`; neither reads `g_{t-1}`, which
+  already reached `h_t` through the transition.
+- `g` no longer gates `z`. The `z` branch is stock DreamerV3 -- `q(z | h, o)`,
+  `p(z | h)`, `stoch x discrete` rather than `hybrid_stoch x discrete`. Graph
+  information reaches `z` only through `g_{t-1} -> h_t -> z_t`.
+- `g` still enters the transition and the feature `[z, g, h]`, so every
+  downstream head sees it. Image reconstruction reads `g` with a stopped
+  gradient, so pixels cannot reshape the semantic state into a second visual
+  latent; state reconstruction, reward, continuation, actor and value all keep
+  normal gradients.
+- `semdyn`/`semrep` are replaced by `graphdyn`/`graphrep`, an RMS-normalised
+  stop-gradient predictability regularizer. Both take the same forward value
+  (logged once as `graph_align_mse`); only the gradient routing and the
+  weights differ. Nothing in that objective resists collapse -- the graph and
+  task losses do -- so watch `graph_align_cos` against
+  `graph_sem_post_var`.
+
+The graph decoder no longer reads the encoder's node vectors. It reconstructs
+each node by querying `g` with that node's UID, which makes `nodetgt`,
+`relabs` and `reltemp` a measure of what `g` retained. This is conditional
+graph-attribute reconstruction: nodes, edge endpoints and relation families
+are supplied, and only the target flag and the absolute/temporal labels are
+recovered. `node`, appearance, bbox and visibility losses are gone.
+
+UIDs are episode-scoped, allocated on first sight, kept when an object leaves
+the view, and never handed to a second object before reset. Codes are permuted
+per episode so a UID means "the same object as before" and nothing more.
+Overflow raises; size `model.graph.uid_vocab` above the peak
+`episode/graph_episode_entities` rather than letting two objects alias.
 
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation

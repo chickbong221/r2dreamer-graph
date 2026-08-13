@@ -109,19 +109,29 @@ class RSSM(nn.Module):
         semantic=False,
         graph_token_size=0,
         graph_only=False,
+        graph_simple=False,
+        graph_dim=0,
     ):
         super().__init__()
         self.semantic = bool(semantic)
         self.graph_only = bool(graph_only)
+        # Simple mode keeps a semantic state but makes it a deterministic
+        # vector that no longer gates z. z returns to the stock DreamerV3
+        # width and inputs; g survives only in the transition and the feature.
+        self.graph_simple = bool(graph_simple)
         if self.graph_only and not self.semantic:
             raise ValueError("graph-only RSSM requires semantic=True")
+        if self.graph_simple and not self.semantic:
+            raise ValueError("simple-graph RSSM requires semantic=True")
+        if self.graph_simple and self.graph_only:
+            raise ValueError("graph_simple and graph_only are mutually exclusive")
         if self.graph_only:
             self._stoch = 0
             self._discrete = 0
         else:
             self._stoch = int(
                 getattr(config, "hybrid_stoch", config.stoch)
-                if self.semantic else config.stoch
+                if self.semantic and not self.graph_simple else config.stoch
             )
             self._discrete = int(config.discrete)
         self._deter = int(config.deter)
@@ -136,7 +146,16 @@ class RSSM(nn.Module):
         self._dyn_layers = int(config.dyn_layers)
         self._blocks = int(config.blocks)
         self.flat_stoch = self._stoch * self._discrete
-        if self.semantic:
+        if self.graph_simple:
+            # One flat continuous vector: no categorical factorisation, so
+            # _sem_stoch/_sem_discrete stay zero and every reshape keys off
+            # graph_simple instead.
+            self._sem_stoch = self._sem_discrete = 0
+            self._sem_layers = int(config.sem_layers)
+            self.flat_sem = int(graph_dim)
+            if self.flat_sem <= 0:
+                raise ValueError("simple-graph RSSM requires graph_dim > 0")
+        elif self.semantic:
             if self.graph_only:
                 self._sem_stoch = int(getattr(config, "graph_only_stoch", 32))
                 self._sem_discrete = int(
@@ -169,9 +188,13 @@ class RSSM(nn.Module):
 
         self._obs_net = None
         self._img_net = None
+        # Simple mode's z is stock DreamerV3: q(z | h, o) and p(z | h). g is
+        # excluded from both, so graph information reaches z only through the
+        # transition, one step later.
+        z_sem = 0 if self.graph_simple else self.flat_sem
         if not self.graph_only:
             self._obs_net = nn.Sequential()
-            inp_dim = self._deter + embed_size + self.flat_sem
+            inp_dim = self._deter + embed_size + z_sem
             for i in range(self._obs_layers):
                 self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
                 self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -189,7 +212,7 @@ class RSSM(nn.Module):
             )
 
             self._img_net = nn.Sequential()
-            inp_dim = self._deter + self.flat_sem
+            inp_dim = self._deter + z_sem
             for i in range(self._img_layers):
                 self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
                 self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -204,7 +227,15 @@ class RSSM(nn.Module):
                     lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
                 ),
             )
-        if self.semantic:
+        if self.graph_simple:
+            # Q(h, c) and P(h). Neither reads g_{t-1}: it is already in h.
+            self._sem_obs = self._deterministic_head(
+                self._deter + int(graph_token_size), config.act, "sem_obs"
+            )
+            self._sem_img = self._deterministic_head(
+                self._deter, config.act, "sem_img"
+            )
+        elif self.semantic:
             self._sem_obs = self._semantic_head(
                 self._deter
                 + self.flat_sem
@@ -240,6 +271,33 @@ class RSSM(nn.Module):
         )
         return net
 
+    def _deterministic_head(self, inp_dim, act_name, name):
+        """Flat continuous semantic head. No logits, no sampling."""
+        act = getattr(torch.nn, act_name)
+        net = nn.Sequential()
+        for index in range(self._sem_layers):
+            net.add_module(f"{name}_{index}", nn.Linear(inp_dim, self._hidden, bias=True))
+            net.add_module(
+                f"{name}_norm_{index}",
+                nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32),
+            )
+            net.add_module(f"{name}_act_{index}", act())
+            inp_dim = self._hidden
+        net.add_module(f"{name}_out", nn.Linear(inp_dim, self.flat_sem))
+        return net
+
+    def sem_shape(self):
+        """Trailing shape of one semantic state."""
+        if self.graph_simple:
+            return (self.flat_sem,)
+        return (self._sem_stoch, self._sem_discrete)
+
+    def flatten_sem(self, sem):
+        """Flatten a semantic state to (..., flat_sem) in either mode."""
+        if self.graph_simple:
+            return sem
+        return sem.reshape(*sem.shape[:-2], self.flat_sem)
+
     def initial(self, batch_size):
         """Return an initial latent state."""
         # (B, D), (B, S, K)
@@ -247,8 +305,7 @@ class RSSM(nn.Module):
         if self.semantic:
             sem = torch.zeros(
                 batch_size,
-                self._sem_stoch,
-                self._sem_discrete,
+                *self.sem_shape(),
                 dtype=torch.float32,
                 device=self._device,
             )
@@ -325,6 +382,10 @@ class RSSM(nn.Module):
         stochs = torch.stack(stochs, dim=1)
         deters = torch.stack(deters, dim=1)
         logits = torch.stack(logits, dim=1)
+        if self.graph_simple:
+            # No posterior logits exist; the prior is computed in one batched
+            # call from post_deter instead of stacked per step.
+            return stochs, deters, logits, torch.stack(sems, dim=1)
         if self.semantic:
             return (
                 stochs,
@@ -356,7 +417,12 @@ class RSSM(nn.Module):
         # Deterministic transition then posterior logits conditioned on embed.
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action, sem)
-        if self.semantic:
+        if self.graph_simple:
+            # Deterministic posterior: g_t = Q(h_t, c_t). No sampling, no
+            # logits, and no g_{t-1} -- that already reached h_t.
+            sem = self._sem_obs(torch.cat([deter, graph_token], -1))
+            sem_logit = None
+        elif self.semantic:
             sem_inputs = [deter, sem.reshape(sem.shape[0], -1), graph_token]
             if self.graph_only:
                 sem_inputs.append(embed)
@@ -366,7 +432,7 @@ class RSSM(nn.Module):
             return deter, sem, sem_logit
         # (B, D + E)
         inputs = [deter]
-        if self.semantic:
+        if self.semantic and not self.graph_simple:
             inputs.append(sem.reshape(sem.shape[0], -1))
         inputs.append(embed)
         x = torch.cat(inputs, dim=-1)
@@ -405,7 +471,7 @@ class RSSM(nn.Module):
 
         # (B, S, K)
         inputs = [deter]
-        if self.semantic:
+        if self.semantic and not self.graph_simple:
             if sem is None:
                 raise ValueError("semantic prior requires sem")
             inputs.append(sem.reshape(*sem.shape[:-2], -1))
@@ -451,7 +517,7 @@ class RSSM(nn.Module):
         if self.semantic:
             if sem is None:
                 raise ValueError("semantic features require sem")
-            parts.append(sem.reshape(*sem.shape[:-2], self.flat_sem))
+            parts.append(self.flatten_sem(sem))
         parts.append(deter)
         return torch.cat(parts, -1)
 
@@ -468,10 +534,44 @@ class RSSM(nn.Module):
         )
 
     def semantic_prior(self, deter, prev_sem):
+        if self.graph_simple:
+            # Deterministic: g_hat_t = P(h_t). Returned with a None logit so
+            # img_step keeps one arity across modes.
+            return self._sem_img(deter), None
         logit = self._sem_img(
             torch.cat([deter, prev_sem.reshape(*prev_sem.shape[:-2], self.flat_sem)], -1)
         )
         return self.get_sem_dist(logit).rsample(), logit
+
+    def semantic_prior_seq(self, deter):
+        """Batched deterministic prior over a whole posterior rollout."""
+        if not self.graph_simple:
+            raise RuntimeError("semantic_prior_seq is simple-graph only")
+        return self._sem_img(deter)
+
+    @staticmethod
+    def rms(x, eps: float = 1e-8):
+        """Parameter-free fixed-scale normalisation for semantic alignment.
+
+        Without it both branches can drive the MSE down by shrinking their
+        norms instead of agreeing. No learned gain, or the freedom returns.
+        """
+        x = x.float()
+        return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + eps)
+
+    def semantic_align_loss(self, post_sem, prior_sem):
+        """Stop-gradient predictability regularizer, not a KL.
+
+        Both terms take the same value; only their gradient routing differs --
+        ``dyn`` updates the prior and the dynamics that produce h, ``rep``
+        updates the posterior and, through it, the graph encoder. Nothing here
+        resists collapse; the graph and task losses do that.
+        """
+        post = self.rms(post_sem)
+        prior = self.rms(prior_sem)
+        dyn = (prior - post.detach()).square().mean(-1)
+        rep = (post - prior.detach()).square().mean(-1)
+        return dyn, rep
 
     def semantic_prior_logits(self, deter, post_sem, initial_sem, reset):
         shifted = torch.cat([initial_sem[:, None], post_sem[:, :-1]], 1)

@@ -142,7 +142,7 @@ class MultiEncoder(nn.Module):
 
 
 class MultiDecoder(nn.Module):
-    def __init__(self, config, deter, flat_stoch, shapes, flat_sem=0):
+    def __init__(self, config, deter, flat_stoch, shapes, flat_sem=0, detach_sem_cnn=False):
         super().__init__()
         excluded = ("is_first", "is_last", "is_terminal")
         shapes = {k: v for k, v in shapes.items() if k not in excluded}
@@ -153,6 +153,10 @@ class MultiDecoder(nn.Module):
         self.all_keys = list(self.mlp_shapes.keys()) + list(self.cnn_shapes.keys())
         self.flat_stoch = int(flat_stoch)
         self.flat_sem = int(flat_sem)
+        # Pixel reconstruction is the highest-bandwidth signal in the model.
+        # Letting it shape the semantic state would turn g into a second
+        # visual latent, so the CNN may read g but not ask it to change.
+        self.detach_sem_cnn = bool(detach_sem_cnn)
         latent_size = flat_stoch + self.flat_sem
 
         # Unlike the encoder, each decoder is initialized independently.
@@ -182,14 +186,19 @@ class MultiDecoder(nn.Module):
             latent = stoch.reshape(*deter.shape[:-1], self.flat_stoch)
         else:
             latent = deter.new_empty(*deter.shape[:-1], 0)
+        latent_cnn = latent
         if self.flat_sem:
             if sem is None:
                 raise ValueError("semantic decoder requires sem")
-            latent = torch.cat([latent, sem.reshape(*deter.shape[:-1], -1)], -1)
+            sem = sem.reshape(*deter.shape[:-1], -1)
+            latent = torch.cat([latent, sem], -1)
+            latent_cnn = torch.cat(
+                [latent_cnn, sem.detach() if self.detach_sem_cnn else sem], -1
+            )
         if self.cnn_shapes:
             split_sizes = [v[-1] for v in self.cnn_shapes.values()]
             # (B, T, H, W, C_sum)
-            outputs = self._cnn(latent, deter)
+            outputs = self._cnn(latent_cnn, deter)
             outputs = torch.split(outputs, split_sizes, -1)
             dists.update({key: self._image_dist(output) for key, output in zip(self.cnn_shapes.keys(), outputs)})
         if self.mlp_shapes:

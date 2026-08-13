@@ -9,6 +9,9 @@ log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
 graph_only_latent: False
+# Relation-only graph: no appearance/bbox anywhere, deterministic g that never
+# gates z, and a stock DreamerV3 z branch. Drops the app/bbox replay keys.
+graph_simple: False
 
 lr: 4e-5
 agc: 0.3
@@ -39,8 +42,13 @@ loss_scales:
   relabs: 1.0
   reltemp: 1.0
   nodetgt: 1.0
+  # Categorical semantic mode.
   semdyn: 1.0
   semrep: 0.1
+  # Deterministic semantic mode. Same forward value; the asymmetry is the
+  # weighting, and graphrep is small because it also reaches the encoder.
+  graphdyn: 1.0
+  graphrep: 0.05
 
 r2dreamer:
   lambd: 5e-4
@@ -83,6 +91,7 @@ rssm:
 
 graph:
   enabled: False
+  simple: ${model.graph_simple}
   n_max: 8    # end effector plus seven diversity-preserving object slots
   e_max: 168  # truncation-free ceiling: 3 * n_max * (n_max - 1)
   n_cams: 2
@@ -99,6 +108,16 @@ graph:
   bbox_beta: 0.1
   reverse_edges: True
   act: ${model.act}
+  # Simple mode. Node input is 2*embed + uid_embed = 192 wide, so the stock
+  # 768-unit GNN is oversized; 512 also sizes the pooled token, and
+  # semantic_dim matches it so the head predicts the token with no projection.
+  simple_units: 512
+  semantic_dim: 512
+  # Episode-scoped object identity. Codes are permuted per episode so a UID
+  # means "same object as before" and nothing more. Size this above the peak
+  # episode/graph_episode_entities; overflow raises rather than aliasing.
+  uid_vocab: 256
+  uid_embed: 64
 
 encoder:
   mlp_keys: ${env.encoder.mlp_keys}

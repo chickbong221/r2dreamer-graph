@@ -51,20 +51,32 @@ def pack_graph(
     e_max: int,
     n_cams: int,
     app_dim: int,
+    simple: bool = False,
+    uid_vocab: int = 256,
 ) -> Dict[str, np.ndarray]:
+    """Pack one frame.
+
+    ``simple`` emits the relation-only contract: no appearance and no boxes,
+    plus ``graph_node_uid`` so a decoder can address a node across frames
+    without relying on the compact slot, which the registry reuses.
+    """
     if n_max > 255:
         raise ValueError(
             f"n_max={n_max} exceeds 255; edge endpoints are packed as uint8"
         )
 
     node_ent = np.zeros(n_max, dtype=np.uint8)
-    node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)
-    node_bbox = np.zeros((n_max, n_cams, 4), dtype=np.float16)
     # Which vertex the current subtask is acting on. All-zero is the honest
     # encoding of "unknown": the target may be unresolved, not yet admitted, or
     # displaced by vertex overflow, and a bit on the wrong instance is worse
     # than no bit at all.
     node_target = np.zeros(n_max, dtype=np.uint8)
+    if simple:
+        node_uid = np.zeros(n_max, dtype=np.uint16)
+        uids = graph.meta.get("node_uids") or {}
+    else:
+        node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)
+        node_bbox = np.zeros((n_max, n_cams, 4), dtype=np.float16)
     target_id = graph.meta.get("active_target_node_id")
 
     position: Dict[str, int] = {}
@@ -83,10 +95,24 @@ def pack_graph(
                 "entity id; every packed vertex needs a whitelist key"
             )
         node_ent[i] = ent
-        if node.bbox is not None:
-            node_bbox[i] = node.bbox
-        if node.appearance is not None:
-            node_app[i] = node.appearance
+        if simple:
+            uid = uids.get(node.node_id)
+            if uid is None:
+                raise ValueError(
+                    f"node {node.node_id!r} has no uid; the builder must assign "
+                    "one to every emitted vertex in simple mode"
+                )
+            if not 1 <= int(uid) < uid_vocab:
+                raise ValueError(
+                    f"node {node.node_id!r} uid={uid} outside [1, {uid_vocab}); "
+                    "zero is padding and wrapping would alias two objects"
+                )
+            node_uid[i] = int(uid)
+        else:
+            if node.bbox is not None:
+                node_bbox[i] = node.bbox
+            if node.appearance is not None:
+                node_app[i] = node.appearance
         if node.node_id == target_id:
             node_target[i] = 1
         position[node.node_id] = i
@@ -141,10 +167,8 @@ def pack_graph(
     # target, or it named one that is not a vertex.
     graph.meta["target_resolved"] = target_id is not None
 
-    return {
+    packed = {
         "graph_node_ent": node_ent,
-        "graph_node_app": node_app,
-        "graph_node_bbox": node_bbox,
         "graph_node_target": node_target,
         "graph_edge_src": edge_src,
         "graph_edge_dst": edge_dst,
@@ -152,10 +176,31 @@ def pack_graph(
         "graph_edge_abs": edge_abs,
         "graph_edge_temp": edge_temp,
     }
+    if simple:
+        packed["graph_node_uid"] = node_uid
+    else:
+        packed["graph_node_app"] = node_app
+        packed["graph_node_bbox"] = node_bbox
+    return packed
 
 
-GRAPH_KEYS = (
+FULL_GRAPH_KEYS = (
     "graph_node_ent", "graph_node_app", "graph_node_bbox", "graph_node_target",
     "graph_edge_src", "graph_edge_dst", "graph_edge_rel", "graph_edge_abs",
     "graph_edge_temp",
 )
+
+# Relation-only contract. Appearance and boxes are absent everywhere -- the
+# observation space, the transition, replay and the sampled batch -- rather
+# than zeroed, so a simple-mode run pays none of their memory or bandwidth.
+SIMPLE_GRAPH_KEYS = (
+    "graph_node_ent", "graph_node_uid", "graph_node_target",
+    "graph_edge_src", "graph_edge_dst", "graph_edge_rel", "graph_edge_abs",
+    "graph_edge_temp",
+)
+
+GRAPH_KEYS = FULL_GRAPH_KEYS
+
+
+def graph_keys(simple: bool) -> Tuple[str, ...]:
+    return SIMPLE_GRAPH_KEYS if simple else FULL_GRAPH_KEYS

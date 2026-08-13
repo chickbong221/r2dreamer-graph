@@ -13,7 +13,14 @@ from torch.optim.lr_scheduler import LambdaLR
 import networks
 import rssm
 import tools
-from graph import GRAPH_KEYS, GraphDecoder, GraphEncoder, graph_from
+from graph import (
+    GraphDecoder,
+    GraphEncoder,
+    SimpleGraphDecoder,
+    compact_graph,
+    graph_from,
+    graph_keys,
+)
 from networks import Projector
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
@@ -96,8 +103,17 @@ class Dreamer(nn.Module):
         self.rep_loss = str(config.rep_loss)
         self.graph_enabled = bool(config.graph.enabled)
         self.graph_only = bool(getattr(config, "graph_only_latent", False))
+        self.graph_simple = bool(getattr(config, "graph_simple", False))
         if self.graph_only and not self.graph_enabled:
             raise ValueError("graph_only_latent=true requires graph.enabled=true")
+        if self.graph_simple and not self.graph_enabled:
+            raise ValueError("graph_simple=true requires graph.enabled=true")
+        if self.graph_simple and self.graph_only:
+            raise ValueError(
+                "graph_simple and graph_only_latent are mutually exclusive: one "
+                "keeps a stock z branch, the other removes z entirely"
+            )
+        self.graph_keys = graph_keys(self.graph_simple)
         amp_name = str(config.amp_dtype)
         amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
         if amp_name not in amp_dtypes:
@@ -110,11 +126,18 @@ class Dreamer(nn.Module):
 
         # World model components
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
-        graph_present = [key for key in GRAPH_KEYS if key in shapes]
-        if self.graph_enabled and len(graph_present) != len(GRAPH_KEYS):
-            missing = [key for key in GRAPH_KEYS if key not in shapes]
-            raise ValueError(f"graph.enabled observation space is missing: {missing}")
-        model_shapes = {key: value for key, value in shapes.items() if key not in GRAPH_KEYS}
+        if self.graph_enabled:
+            missing = [key for key in self.graph_keys if key not in shapes]
+            if missing:
+                raise ValueError(
+                    f"graph.enabled observation space is missing: {missing}"
+                )
+        # Every graph key of either contract is excluded from the pixel/state
+        # encoder, so a stale key left in the space never reaches the CNN.
+        all_graph_keys = set(graph_keys(True)) | set(graph_keys(False))
+        model_shapes = {
+            key: value for key, value in shapes.items() if key not in all_graph_keys
+        }
         encoder_shapes = (
             {key: value for key, value in model_shapes.items() if len(value) != 3}
             if self.graph_only
@@ -124,13 +147,21 @@ class Dreamer(nn.Module):
         self.image_keys = tuple(self.encoder.cnn_shapes)
         self.embed_size = self.encoder.out_dim
         self.graph_encoder = GraphEncoder(config.graph) if self.graph_enabled else None
+        graph_token_size = (
+            int(self.graph_encoder.units) if self.graph_enabled else 0
+        )
+        self.graph_dim = (
+            int(config.graph.semantic_dim) if self.graph_simple else 0
+        )
         self.rssm = rssm.RSSM(
             config.rssm,
             self.embed_size,
             self.act_dim,
             semantic=self.graph_enabled,
-            graph_token_size=int(config.graph.units) if self.graph_enabled else 0,
+            graph_token_size=graph_token_size,
             graph_only=self.graph_only,
+            graph_simple=self.graph_simple,
+            graph_dim=self.graph_dim,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -174,7 +205,11 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
         if self.graph_enabled:
-            self.graph_decoder = GraphDecoder(config.graph)
+            self.graph_decoder = (
+                SimpleGraphDecoder(config.graph, self.graph_dim)
+                if self.graph_simple
+                else GraphDecoder(config.graph)
+            )
             modules.update(
                 {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
             )
@@ -193,13 +228,19 @@ class Dreamer(nn.Module):
                 self.rssm.flat_stoch,
                 decoder_shapes,
                 flat_sem=self.rssm.flat_sem,
+                detach_sem_cnn=self.graph_simple,
             )
             recon = self._loss_scales.pop("recon")
             graph_image_recon = self._loss_scales.pop("graph_image_recon")
+            # Simple mode detaches g from the CNN, so pixels can no longer
+            # distort the semantic state and the downweight that protected it
+            # is unnecessary. Keeping stock 1.0 also makes the graph-free arm
+            # directly comparable.
+            use_graph_image_scale = self.graph_enabled and not self.graph_simple
             self._loss_scales.update({
                 key: (
                     graph_image_recon
-                    if self.graph_enabled and key in self.decoder.cnn_shapes
+                    if use_graph_image_scale and key in self.decoder.cnn_shapes
                     else recon
                 )
                 for key in self.decoder.all_keys
@@ -387,7 +428,7 @@ class Dreamer(nn.Module):
         # implementation. AMP is used only by the training update.
         embed = self._frozen_encoder(p_obs)
         graph_token = (
-            self._frozen_graph_encoder(graph_from(p_obs)).token
+            self._frozen_graph_encoder(graph_from(p_obs, self.graph_simple)).token
             if self.graph_enabled
             else None
         )
@@ -409,7 +450,7 @@ class Dreamer(nn.Module):
             deter, sem, _ = result
             stoch = None
         elif self.graph_enabled:
-            stoch, deter, _, sem, _ = result
+            stoch, deter, _, sem = result[:4]
         else:
             stoch, deter, _ = result
             sem = None
@@ -453,7 +494,9 @@ class Dreamer(nn.Module):
         embed = self.encoder(data)
         graph_token = None
         if self.graph_enabled:
-            graph_token = self.graph_encoder(graph_from(data)).token
+            graph_token = self.graph_encoder(
+                graph_from(data, self.graph_simple)
+            ).token
             graph_token = _mask_terminal_graph(graph_token, data["is_last"])
         observed = self.rssm.observe(
             embed[:B, :5],
@@ -639,7 +682,11 @@ class Dreamer(nn.Module):
         self._trace_stage_done("encoder")
         if self.graph_enabled:
             self._trace_stage_start("graph encoder")
-        graph_encoding = self.graph_encoder(graph_from(data)) if self.graph_enabled else None
+        graph_encoding = (
+            self.graph_encoder(graph_from(data, self.graph_simple))
+            if self.graph_enabled
+            else None
+        )
         if self.graph_enabled:
             self._trace_stage_done("graph encoder")
         graph_token = graph_encoding.token if graph_encoding is not None else None
@@ -656,7 +703,11 @@ class Dreamer(nn.Module):
         else:
             post_stoch, post_deter, post_logit = observed[:3]
             post_sem = observed[3] if self.graph_enabled else None
-            post_sem_logit = observed[4] if self.graph_enabled else None
+            post_sem_logit = (
+                observed[4]
+                if self.graph_enabled and not self.graph_simple
+                else None
+            )
         # (B, T, S, K)
         prior_logit = None
         if not self.graph_only:
@@ -673,20 +724,50 @@ class Dreamer(nn.Module):
             step_valid = ~data["is_last"].bool()
             if step_valid.ndim == 3 and step_valid.shape[-1] == 1:
                 step_valid = step_valid[..., 0]
-            sem_prior_logit = self.rssm.semantic_prior_logits(
-                post_deter, post_sem, initial[-1], data["is_first"]
-            )
-            sem_dyn, sem_rep, raw_sem_dyn, raw_sem_rep = self.rssm.semantic_kl_loss(
-                post_sem_logit, sem_prior_logit, self.kl_free
-            )
             step_float = step_valid.float()
-            losses["semdyn"] = (sem_dyn * step_float).mean()
-            losses["semrep"] = (sem_rep * step_float).mean()
             denominator = step_float.sum().clamp_min(1)
-            metrics["semdyn_raw"] = (raw_sem_dyn * step_float).sum() / denominator
-            metrics["semrep_raw"] = (raw_sem_rep * step_float).sum() / denominator
-            metrics["sem_entropy"] = self.rssm.get_sem_dist(post_sem_logit).entropy().mean()
-            graph_losses, graph_metrics = self.graph_decoder(graph_encoding, step_valid)
+            if self.graph_simple:
+                prior_sem = self.rssm.semantic_prior_seq(post_deter)
+                sem_dyn, sem_rep = self.rssm.semantic_align_loss(post_sem, prior_sem)
+                # Terminal frames carry a masked graph token, so their
+                # posterior is not a real observation to align against.
+                losses["graphdyn"] = (sem_dyn * step_float).sum() / denominator
+                losses["graphrep"] = (sem_rep * step_float).sum() / denominator
+                # Both terms share one forward value; log it once and let the
+                # scales express the asymmetry.
+                metrics["graph_align_mse"] = losses["graphdyn"].detach()
+                with torch.no_grad():
+                    # Collapse shows up here first: cosine climbing to one
+                    # while both variances fall means the two branches agreed
+                    # on a constant rather than on the graph.
+                    cos = (
+                        self.rssm.rms(post_sem) * self.rssm.rms(prior_sem)
+                    ).mean(-1)
+                    metrics["graph_align_cos"] = (
+                        (cos * step_float).sum() / denominator
+                    )
+                    metrics["graph_sem_post_var"] = post_sem.float().var(-1).mean()
+                    metrics["graph_sem_prior_var"] = prior_sem.float().var(-1).mean()
+                graph_losses, graph_metrics = self.graph_decoder(
+                    post_sem, graph_encoding.compact, step_valid
+                )
+            else:
+                sem_prior_logit = self.rssm.semantic_prior_logits(
+                    post_deter, post_sem, initial[-1], data["is_first"]
+                )
+                sem_dyn, sem_rep, raw_sem_dyn, raw_sem_rep = self.rssm.semantic_kl_loss(
+                    post_sem_logit, sem_prior_logit, self.kl_free
+                )
+                losses["semdyn"] = (sem_dyn * step_float).mean()
+                losses["semrep"] = (sem_rep * step_float).mean()
+                metrics["semdyn_raw"] = (raw_sem_dyn * step_float).sum() / denominator
+                metrics["semrep_raw"] = (raw_sem_rep * step_float).sum() / denominator
+                metrics["sem_entropy"] = (
+                    self.rssm.get_sem_dist(post_sem_logit).entropy().mean()
+                )
+                graph_losses, graph_metrics = self.graph_decoder(
+                    graph_encoding, step_valid
+                )
             losses.update(graph_losses)
             metrics.update(graph_metrics)
             self._trace_stage_done("semantic and graph losses")
@@ -875,6 +956,8 @@ class Dreamer(nn.Module):
             posterior = (post_deter, post_sem)
         else:
             posterior = (post_stoch, post_deter)
+        # Simple mode still stores g: a sampled chunk's first transition needs
+        # g_{t-1} for the transition, exactly as the categorical mode does.
         if self.graph_enabled and not self.graph_only:
             posterior = posterior + (post_sem,)
         return posterior, metrics

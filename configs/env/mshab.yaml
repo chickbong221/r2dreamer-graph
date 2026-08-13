@@ -33,6 +33,10 @@ decoder:
 
 graph:
   enabled: ${model.graph.enabled}
+  # True: relation-only contract. No appearance or bbox keys are produced,
+  # stored or sampled, and DINO is never constructed.
+  simple: ${model.graph_simple}
+  uid_vocab: ${model.graph.uid_vocab}
   profile: room_scale
   thresholds_path: ''
   whitelist_dir: ''

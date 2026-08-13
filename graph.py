@@ -22,7 +22,7 @@ from torch import nn
 from tools import weight_init_
 
 
-GRAPH_KEYS = (
+FULL_GRAPH_KEYS = (
     "graph_node_ent",
     "graph_node_app",
     "graph_node_bbox",
@@ -34,13 +34,36 @@ GRAPH_KEYS = (
     "graph_edge_temp",
 )
 
+# Relation-only contract. Appearance and boxes are absent rather than zeroed,
+# and ``graph_node_uid`` names a node across frames so the decoder can address
+# one without the compact slot, which the vertex registry reuses.
+SIMPLE_GRAPH_KEYS = (
+    "graph_node_ent",
+    "graph_node_uid",
+    "graph_node_target",
+    "graph_edge_src",
+    "graph_edge_dst",
+    "graph_edge_rel",
+    "graph_edge_abs",
+    "graph_edge_temp",
+)
 
-def graph_from(data: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Return and validate the graph observation subset."""
-    missing = [key for key in GRAPH_KEYS if key not in data]
+GRAPH_KEYS = FULL_GRAPH_KEYS
+
+
+def graph_keys(simple: bool) -> tuple[str, ...]:
+    return SIMPLE_GRAPH_KEYS if simple else FULL_GRAPH_KEYS
+
+
+def graph_from(
+    data: Mapping[str, torch.Tensor], simple: bool = False
+) -> dict[str, torch.Tensor]:
+    """Return and validate the graph observation subset for the active mode."""
+    keys = graph_keys(simple)
+    missing = [key for key in keys if key not in data]
     if missing:
         raise KeyError(f"graph.enabled requires observation keys: {missing}")
-    return {key: data[key] for key in GRAPH_KEYS}
+    return {key: data[key] for key in keys}
 
 
 @dataclass
@@ -50,12 +73,16 @@ class CompactGraph:
     batch_shape: tuple[int, ...]
     num_nodes: int
     node_ent: torch.Tensor
-    node_app: torch.Tensor
-    node_bbox: torch.Tensor
     node_target: torch.Tensor
     node_valid: torch.Tensor
-    appearance_known: torch.Tensor
-    camera_visible: torch.Tensor
+    # Simple mode carries ``node_uid`` and no appearance; full mode the
+    # reverse. The unused side stays None so a mode mix-up raises rather than
+    # silently reading zeros.
+    node_uid: torch.Tensor | None
+    node_app: torch.Tensor | None
+    node_bbox: torch.Tensor | None
+    appearance_known: torch.Tensor | None
+    camera_visible: torch.Tensor | None
     edge_src: torch.Tensor
     edge_dst: torch.Tensor
     edge_rel: torch.Tensor
@@ -79,9 +106,11 @@ class GraphEncoding:
     compact: CompactGraph
 
 
-def compact_graph(graph: Mapping[str, torch.Tensor]) -> CompactGraph:
+def compact_graph(
+    graph: Mapping[str, torch.Tensor], simple: bool = False
+) -> CompactGraph:
     """Strip padded edge rows on device without creating Python graph objects."""
-    graph = graph_from(graph)
+    graph = graph_from(graph, simple)
     ent = graph["graph_node_ent"]
     if ent.ndim < 2:
         raise ValueError(f"graph_node_ent must have batch and node axes, got {ent.shape}")
@@ -90,17 +119,22 @@ def compact_graph(graph: Mapping[str, torch.Tensor]) -> CompactGraph:
     num_nodes = int(ent.shape[-1])
 
     node_ent = ent.reshape(graph_count, num_nodes).long()
-    app_tail = graph["graph_node_app"].shape[-2:]
-    bbox_tail = graph["graph_node_bbox"].shape[-2:]
-    node_app = graph["graph_node_app"].reshape(graph_count, num_nodes, *app_tail)
-    node_bbox = graph["graph_node_bbox"].reshape(graph_count, num_nodes, *bbox_tail)
+    node_uid = node_app = node_bbox = None
+    appearance_known = camera_visible = None
+    if simple:
+        node_uid = graph["graph_node_uid"].reshape(graph_count, num_nodes).long()
+    else:
+        app_tail = graph["graph_node_app"].shape[-2:]
+        bbox_tail = graph["graph_node_bbox"].shape[-2:]
+        node_app = graph["graph_node_app"].reshape(graph_count, num_nodes, *app_tail)
+        node_bbox = graph["graph_node_bbox"].reshape(graph_count, num_nodes, *bbox_tail)
+        appearance_known = node_app.float().abs().sum(-1).ne(0)
+        camera_visible = (
+            (node_bbox[..., 1] > node_bbox[..., 0])
+            & (node_bbox[..., 3] > node_bbox[..., 2])
+        )
     node_target = graph["graph_node_target"].reshape(graph_count, num_nodes).long()
     node_valid = node_ent.ne(0)
-    appearance_known = node_app.float().abs().sum(-1).ne(0)
-    camera_visible = (
-        (node_bbox[..., 1] > node_bbox[..., 0])
-        & (node_bbox[..., 3] > node_bbox[..., 2])
-    )
 
     rel = graph["graph_edge_rel"]
     edge_width = int(rel.shape[-1])
@@ -118,10 +152,11 @@ def compact_graph(graph: Mapping[str, torch.Tensor]) -> CompactGraph:
         batch_shape=batch_shape,
         num_nodes=num_nodes,
         node_ent=node_ent,
-        node_app=node_app,
-        node_bbox=node_bbox,
         node_target=node_target,
         node_valid=node_valid,
+        node_uid=node_uid,
+        node_app=node_app,
+        node_bbox=node_bbox,
         appearance_known=appearance_known,
         camera_visible=camera_visible,
         edge_src=local_src + offset,
@@ -151,22 +186,35 @@ class GraphEncoder(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.units = int(config.units)
+        self.simple = bool(getattr(config, "simple", False))
+        self.units = int(config.simple_units if self.simple else config.units)
         self.layers = int(config.layers)
         self.n_cams = int(config.n_cams)
         self.app_dim = int(config.app_dim)
         self.embed_dim = int(config.embed)
         self.reverse_edges = bool(config.reverse_edges)
 
-        self.app_proj = nn.ModuleList(
-            nn.Linear(self.app_dim, int(config.app)) for _ in range(self.n_cams)
-        )
-        self.bbox_proj = nn.ModuleList(
-            nn.Linear(4, int(config.bbox)) for _ in range(self.n_cams)
-        )
         self.entity = nn.Embedding(int(config.entity_vocab), self.embed_dim)
         self.target = nn.Embedding(2, self.embed_dim)
-        node_in = self.n_cams * (int(config.app) + int(config.bbox)) + 2 * self.embed_dim
+        if self.simple:
+            # Same-type siblings are otherwise identical once appearance and
+            # boxes are gone; the UID is the only thing separating them.
+            self.uid = nn.Embedding(int(config.uid_vocab), int(config.uid_embed))
+            self.app_proj = None
+            self.bbox_proj = None
+            node_in = 2 * self.embed_dim + int(config.uid_embed)
+        else:
+            self.uid = None
+            self.app_proj = nn.ModuleList(
+                nn.Linear(self.app_dim, int(config.app)) for _ in range(self.n_cams)
+            )
+            self.bbox_proj = nn.ModuleList(
+                nn.Linear(4, int(config.bbox)) for _ in range(self.n_cams)
+            )
+            node_in = (
+                self.n_cams * (int(config.app) + int(config.bbox))
+                + 2 * self.embed_dim
+            )
         self.node = GraphMLP(node_in, self.units, str(config.act))
 
         self.relation = nn.Embedding(int(config.n_rel), self.embed_dim)
@@ -189,20 +237,23 @@ class GraphEncoder(nn.Module):
         nn.init.normal_(self.query, std=0.02)
 
     def forward(self, graph: Mapping[str, torch.Tensor]) -> GraphEncoding:
-        compact = compact_graph(graph)
+        compact = compact_graph(graph, self.simple)
         valid = compact.node_valid
-        # Replay stores these arrays as float16. Normalize the storage boundary
-        # to float32; the shared acting/training autocast policy selects compute
-        # dtype for the learned projections.
-        node_app = compact.node_app.to(self.app_proj[0].weight.dtype)
-        node_bbox = compact.node_bbox.to(self.bbox_proj[0].weight.dtype)
         parts = []
-        for camera in range(self.n_cams):
-            app = self.app_proj[camera](node_app[..., camera, :])
-            parts.append(app * compact.appearance_known[..., camera, None])
-            box = self.bbox_proj[camera](node_bbox[..., camera, :])
-            parts.append(box * compact.camera_visible[..., camera, None])
+        if not self.simple:
+            # Replay stores these arrays as float16. Normalize the storage
+            # boundary to float32; the shared acting/training autocast policy
+            # selects compute dtype for the learned projections.
+            node_app = compact.node_app.to(self.app_proj[0].weight.dtype)
+            node_bbox = compact.node_bbox.to(self.bbox_proj[0].weight.dtype)
+            for camera in range(self.n_cams):
+                app = self.app_proj[camera](node_app[..., camera, :])
+                parts.append(app * compact.appearance_known[..., camera, None])
+                box = self.bbox_proj[camera](node_bbox[..., camera, :])
+                parts.append(box * compact.camera_visible[..., camera, None])
         parts.extend((self.entity(compact.node_ent), self.target(compact.node_target)))
+        if self.simple:
+            parts.append(self.uid(compact.node_uid))
         nodes = self.node(torch.cat(parts, -1)) * valid[..., None]
 
         temporal = self.temporal(compact.edge_temp)
@@ -257,6 +308,159 @@ def _relation_masks(n_rel: int, n_abs: int) -> torch.Tensor:
     mask[6, 8:13] = True
     mask[7:11, 13:17] = True
     return mask
+
+
+def _frame_mean(values, mask):
+    """Mean over one frame's valid entries, so a frame with seven nodes does
+    not outweigh a frame with one."""
+    axes = tuple(range(1, values.ndim))
+    numerator = (values.float() * mask).sum(axes)
+    denominator = mask.float().sum(axes).clamp_min(1)
+    return numerator / denominator
+
+
+def _masked(values, mask):
+    mask = mask.float()
+    return (values.float() * mask).sum() / mask.sum().clamp_min(1)
+
+
+def _edge_categorical(logits, target, frame, mask, classes, graph_count):
+    """Per-frame-averaged cross entropy over the legal label set."""
+    if logits.shape[0] == 0:
+        zero = logits.sum() * 0
+        return zero, zero.detach()
+    logits = logits.float().masked_fill(~classes, -1e9)
+    safe_target = torch.where(mask, target, torch.ones_like(target))
+    values = F.cross_entropy(logits, safe_target, reduction="none")
+    numerator = torch.zeros(graph_count, device=logits.device).index_add(
+        0, frame, values * mask
+    )
+    denominator = torch.zeros(graph_count, device=logits.device).index_add(
+        0, frame, mask.float()
+    )
+    loss = (numerator / denominator.clamp_min(1)).mean()
+    accuracy = _masked(logits.argmax(-1).eq(target), mask)
+    return loss, accuracy
+
+
+class SimpleGraphDecoder(nn.Module):
+    """Conditional graph-attribute reconstruction from the semantic state.
+
+    Every node is read back out of the single posterior vector ``g`` by
+    querying it with that node's UID, so the losses measure what ``g`` retained
+    rather than what the encoder's own node vectors still hold. Supplied nodes,
+    edge endpoints and relation families are inputs; only their target flag and
+    their absolute/temporal labels are reconstructed.
+    """
+
+    def __init__(self, config, semantic_dim: int):
+        super().__init__()
+        self.units = int(config.simple_units)
+        self.n_abs = int(config.n_abs)
+        self.n_temp = int(config.n_temp)
+        act = str(config.act)
+
+        self.uid = nn.Embedding(int(config.uid_vocab), int(config.uid_embed))
+        self.query = GraphMLP(
+            int(semantic_dim) + int(config.uid_embed), self.units, act
+        )
+        self.target = nn.Linear(self.units, 1)
+        self.reltype = nn.Embedding(int(config.n_rel), int(config.embed))
+        self.pair = GraphMLP(
+            2 * self.units + int(config.embed), self.units, act
+        )
+        self.abs_head = nn.Linear(self.units, self.n_abs)
+        self.temp_head = nn.Linear(self.units, self.n_temp)
+        self.register_buffer(
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
+        )
+        self.apply(weight_init_)
+
+    def forward(
+        self,
+        sem: torch.Tensor,
+        compact: CompactGraph,
+        step_valid: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        graph_count = compact.graph_count
+        num_nodes = compact.num_nodes
+        step = step_valid.reshape(graph_count).bool()
+        valid = compact.node_valid & step[:, None]
+        losses: dict[str, torch.Tensor] = {}
+        metrics: dict[str, torch.Tensor] = {}
+
+        # One shared head, so the node count may vary frame to frame.
+        query = sem.reshape(graph_count, 1, -1).expand(-1, num_nodes, -1)
+        uid = self.uid(compact.node_uid)
+        nodes = self.query(torch.cat([query.to(uid.dtype), uid], -1))
+        nodes = nodes * valid[..., None]
+
+        # Slot zero is the end effector and never carries the target flag.
+        target_logit = self.target(nodes).squeeze(-1).float()
+        target_mask = valid.clone()
+        target_mask[:, 0] = False
+        target_flag = compact.node_target.bool()
+        target_error = F.binary_cross_entropy_with_logits(
+            target_logit, target_flag.float(), reduction="none"
+        )
+        positive = target_mask & target_flag
+        negative = target_mask & ~target_flag
+        has_positive = positive.any(-1)
+        has_negative = negative.any(-1)
+        class_count = has_positive.float() + has_negative.float()
+        losses["nodetgt"] = (
+            (
+                _frame_mean(target_error, positive) * has_positive
+                + _frame_mean(target_error, negative) * has_negative
+            )
+            / class_count.clamp_min(1)
+        ).mean()
+
+        target_index = target_flag.long().argmax(-1)
+        selected = target_logit.masked_fill(~target_mask, -1e9).argmax(-1)
+        metrics["node_target_acc"] = _masked(selected.eq(target_index), has_positive)
+        metrics["node_target_frac"] = has_positive.float().mean()
+
+        edge_step = step.index_select(0, compact.edge_graph)
+        flat_nodes = nodes.reshape(-1, self.units)
+        pair = self.pair(
+            torch.cat(
+                [
+                    flat_nodes.index_select(0, compact.edge_src),
+                    flat_nodes.index_select(0, compact.edge_dst),
+                    self.reltype(compact.edge_rel),
+                ],
+                -1,
+            )
+        )
+        losses["relabs"], metrics["relabs_acc"] = _edge_categorical(
+            self.abs_head(pair),
+            compact.edge_abs,
+            compact.edge_graph,
+            edge_step,
+            self.abs_valid.index_select(0, compact.edge_rel),
+            graph_count,
+        )
+        temp_mask = edge_step & compact.edge_temp.ne(0)
+        temp_logits = self.temp_head(pair)
+        temp_classes = torch.ones_like(temp_logits, dtype=torch.bool)
+        temp_classes[:, 0] = False
+        losses["reltemp"], metrics["reltemp_acc"] = _edge_categorical(
+            temp_logits,
+            compact.edge_temp,
+            compact.edge_graph,
+            temp_mask,
+            temp_classes,
+            graph_count,
+        )
+
+        metrics["graph_real_edges"] = torch.as_tensor(
+            compact.edge_count / max(graph_count, 1),
+            device=nodes.device,
+            dtype=torch.float32,
+        )
+        metrics["graph_nodes_per_frame"] = valid.float().sum(-1).mean()
+        return losses, metrics
 
 
 class GraphDecoder(nn.Module):
@@ -402,33 +606,10 @@ class GraphDecoder(nn.Module):
         return losses, metrics
 
     def _edge_categorical(self, logits, target, frame, mask, classes, graph_count):
-        if logits.shape[0] == 0:
-            zero = logits.sum() * 0
-            return zero, zero.detach()
-        logits = logits.float().masked_fill(~classes, -1e9)
-        safe_target = torch.where(mask, target, torch.ones_like(target))
-        values = F.cross_entropy(logits, safe_target, reduction="none")
-        numerator = torch.zeros(graph_count, device=logits.device).index_add(
-            0, frame, values * mask
-        )
-        denominator = torch.zeros(graph_count, device=logits.device).index_add(
-            0, frame, mask.float()
-        )
-        loss = (numerator / denominator.clamp_min(1)).mean()
-        accuracy = self._masked(logits.argmax(-1).eq(target), mask)
-        return loss, accuracy
+        return _edge_categorical(logits, target, frame, mask, classes, graph_count)
 
-    @staticmethod
-    def _frame_mean(values, mask):
-        axes = tuple(range(1, values.ndim))
-        numerator = (values.float() * mask).sum(axes)
-        denominator = mask.float().sum(axes).clamp_min(1)
-        return numerator / denominator
-
-    @staticmethod
-    def _masked(values, mask):
-        mask = mask.float()
-        return (values.float() * mask).sum() / mask.sum().clamp_min(1)
+    _frame_mean = staticmethod(_frame_mean)
+    _masked = staticmethod(_masked)
 
     @staticmethod
     def _cosine(pred, target):

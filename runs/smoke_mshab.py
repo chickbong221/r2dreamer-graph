@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from dreamer import Dreamer  # noqa: E402
 from envs.maniskill import ManiSkillVecEnv  # noqa: E402
-from graph import GRAPH_KEYS  # noqa: E402
+from graph import graph_keys  # noqa: E402
 
 
 def main():
@@ -29,7 +29,10 @@ def main():
     parser.add_argument("--mshab-obj", default="all")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--graph-only", action="store_true")
+    parser.add_argument("--graph-simple", action="store_true")
     args = parser.parse_args()
+    if args.graph_only and args.graph_simple:
+        parser.error("--graph-only and --graph-simple are mutually exclusive")
 
     overrides = [
         "env=mshab",
@@ -41,9 +44,10 @@ def main():
         f"device={args.device}",
         f"buffer.storage_device={args.device}",
         f"model.graph_only_latent={str(args.graph_only).lower()}",
+        f"model.graph_simple={str(args.graph_simple).lower()}",
     ]
     dino_weights = os.environ.get("DINO_WEIGHTS")
-    if dino_weights:
+    if dino_weights and not args.graph_simple:
         overrides.append(f"env.graph.dino_weights={dino_weights}")
     with initialize_config_dir(version_base=None, config_dir=str(ROOT / "configs")):
         config = compose(config_name="configs", overrides=overrides)
@@ -51,9 +55,16 @@ def main():
     env = None
     try:
         env = ManiSkillVecEnv(config.env)
-        missing = [key for key in GRAPH_KEYS if key not in env.observation_space.spaces]
+        spaces = env.observation_space.spaces
+        missing = [key for key in graph_keys(args.graph_simple) if key not in spaces]
         if missing:
             raise AssertionError(f"observation space is missing graph keys: {missing}")
+        if args.graph_simple:
+            stale = [k for k in ("graph_node_app", "graph_node_bbox") if k in spaces]
+            if stale:
+                raise AssertionError(
+                    f"graph_simple must not emit appearance keys, found: {stale}"
+                )
         node_capacity = int(config.env.graph.n_max)
         edge_capacity = int(config.env.graph.e_max)
         if env.observation_space["graph_node_ent"].shape != (node_capacity,):
@@ -92,7 +103,12 @@ def main():
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
 
-        print(f"MS-HAB {'graph-only' if args.graph_only else 'hybrid'} smoke: OK")
+        mode = (
+            "graph-only" if args.graph_only
+            else "graph-simple" if args.graph_simple
+            else "hybrid"
+        )
+        print(f"MS-HAB {mode} smoke: OK")
         print(f"  env frames: {args.num_envs * args.steps}")
         print(f"  graph+env+policy: {args.num_envs * args.steps / elapsed:.2f} frames/s")
         print(f"  vertices max: {max_nodes}/{node_capacity}")
