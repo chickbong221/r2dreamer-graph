@@ -88,8 +88,11 @@ class MSHABContractTest(unittest.TestCase):
         self.assertEqual(space["graph_edge_rel"].shape, (168,))
         # Overflow is observable again: it is the only signal that the vertex
         # budget bound, and episode_entities says whether it could have.
-        self.assertIn("log_graph_overflow_drops", space)
-        self.assertIn("log_graph_episode_entities", space)
+        # Membership must go through .spaces: ``x in space`` asks whether x is
+        # a valid *sample*, so a key name is always absent and the assertion
+        # would pass whatever the space contains.
+        self.assertIn("log_graph_overflow_drops", space.spaces)
+        self.assertIn("log_graph_episode_entities", space.spaces)
         transition = env._transition(
             self._obs(),
             np.zeros(2, np.float32),
