@@ -36,6 +36,8 @@ class _FakeGraph:
         "graph_edge_abs": np.uint8,
         "graph_edge_temp": np.uint8,
     }
+    overflow_drops = np.zeros(2, np.float32)
+    episode_entities = np.zeros(2, np.float32)
     fact_drops = np.zeros(2, np.float32)
     target_missing = np.zeros(2, np.float32)
     cache_entries = 3
@@ -84,7 +86,10 @@ class MSHABContractTest(unittest.TestCase):
         self.assertEqual(space["image_head"].shape, (112, 112, 3))
         self.assertEqual(space["instruction"].shape, (768,))
         self.assertEqual(space["graph_edge_rel"].shape, (168,))
-        self.assertNotIn("log_graph_overflow_drops", space)
+        # Overflow is observable again: it is the only signal that the vertex
+        # budget bound, and episode_entities says whether it could have.
+        self.assertIn("log_graph_overflow_drops", space)
+        self.assertIn("log_graph_episode_entities", space)
         transition = env._transition(
             self._obs(),
             np.zeros(2, np.float32),
@@ -94,7 +99,8 @@ class MSHABContractTest(unittest.TestCase):
         )
         self.assertEqual(tuple(transition.batch_size), (2,))
         self.assertTrue(set(GRAPH_KEYS).issubset(transition.keys()))
-        self.assertNotIn("log_graph_overflow_drops", transition.keys())
+        self.assertIn("log_graph_overflow_drops", transition.keys())
+        self.assertIn("log_graph_episode_entities", transition.keys())
         self.assertEqual(transition["graph_node_ent"].dtype, torch.uint8)
         self.assertEqual(transition["graph_node_app"].dtype, torch.float16)
         self.assertEqual(transition["is_first"].shape, (2, 1))

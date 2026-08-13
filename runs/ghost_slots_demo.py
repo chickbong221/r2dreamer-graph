@@ -1,9 +1,11 @@
-"""Show what EntityRegistry does with staleness_enabled=false.
+"""Show what EntityRegistry does with staleness_enabled=false, with and
+without the retain() sweep.
 
 With history off, GraphBuilder only ever hands `assign()` the objects that have
-at least one segmentation pixel this frame, but the registry still holds an
-index for every object it has ever admitted. Nothing releases those indices:
+at least one segmentation pixel this frame, but the registry keeps an index for
+every object it has ever admitted. Nothing releases those indices:
 `selector.commit` is skipped, so `evict_expired` has nothing to expire.
+`retain()` sweeps them before assigning, so capacity describes the frame.
 
 Run from the repo root:
 
@@ -32,9 +34,6 @@ def ee():
     return Node(node_id="ee", node_type="ee", name="end_effector")
 
 
-# The shipped config: n_max=8 -> ee + 7 object slots.
-reg = EntityRegistry(n_max=8)
-
 # A plausible camera trace. The robot pans along a counter, turns away, then
 # faces the fridge area, then swings back to where it started.
 TRACE = [
@@ -50,26 +49,48 @@ TRACE = [
     (8, [("apple-1", "apple"), ("can-1", "can"), ("can-2", "can")]),
 ]
 
+
+def run(use_retain):
+    reg = EntityRegistry(n_max=8)   # ee + 7 object slots, the shipped config
+    rows = []
+    for frame, visible in TRACE:
+        nodes = {"ee": ee()}
+        for nid, kind in visible:
+            nodes[nid] = obj(nid, kind)
+
+        if use_retain:
+            reg.retain(nodes.keys())
+        admitted = reg.assign(nodes)   # no target flagged in this scene
+
+        seen = {nid for nid, _ in visible}
+        rows.append((
+            frame,
+            sorted(seen),
+            sorted(k for k in admitted if k != "ee"),
+            sorted(seen - set(admitted)),
+            sorted(k for k in reg._index if k not in seen),
+        ))
+    return rows, reg
+
+
 print("capacity = 7 object slots (n_max=8 minus the ee)\n")
-for frame, visible in TRACE:
-    nodes = {"ee": ee()}
-    for nid, kind in visible:
-        nodes[nid] = obj(nid, kind)
+before, reg_before = run(use_retain=False)
+after, reg_after = run(use_retain=True)
 
-    admitted = reg.assign(nodes)          # no target flagged in this scene
+head = f"{'f':>2}  {'cameras see':<34} {'vertices now':<26} {'vertices with retain()'}"
+print(head)
+print("-" * len(head))
+for (f, seen, emit_b, lost_b, ghost_b), (_, _, emit_a, lost_a, _) in zip(before, after):
+    print(f"{f:>2}  {', '.join(seen):<34} {str(len(emit_b)) + ': ' + ', '.join(emit_b):<26} "
+          f"{len(emit_a)}: {', '.join(emit_a)}")
+    if lost_b:
+        print(f"{'':>2}  {'':<34} !! visible but dropped: {', '.join(lost_b)}"
+              f"   (with retain: {', '.join(lost_a) if lost_a else 'none'})")
+    if ghost_b:
+        print(f"{'':>2}  {'':<34} .. {len(ghost_b)} slots held by invisible objects")
 
-    seen = {nid for nid, _ in visible}
-    emitted = sorted(k for k in admitted if k != "ee")
-    lost = sorted(seen - set(admitted))
-    ghosts = sorted(k for k in reg._index if k not in seen)
-
-    print(f"frame {frame}  camera sees: {', '.join(sorted(seen))}")
-    print(f"          emitted vertices ({len(emitted)}): {emitted}")
-    if lost:
-        print(f"          !! VISIBLE BUT NOT A VERTEX: {lost}")
-    print(f"          slots wasted on invisible objects ({len(ghosts)}): {ghosts}")
-    print()
-
-print(f"total overflow_drops over 9 frames: {reg.overflow_drops}")
-print("(this counter is no longer logged: log_graph_overflow_drops was removed"
-      " from envs/maniskill.py in 92dddad)")
+print()
+print(f"overflow_drops   now: {reg_before.overflow_drops}"
+      f"   with retain(): {reg_after.overflow_drops}")
+print(f"episode_entities: {reg_after.episode_entities} distinct instances "
+      f"(vertex budget binds only at >= 7)")

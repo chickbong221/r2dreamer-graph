@@ -231,6 +231,13 @@ class GraphBuilder:
             else:
                 n.steps_since_seen = frame - self._last_seen[nid]
 
+        # With history off the vertex set is exactly this frame, so slots held
+        # for absent objects are slots nothing can use -- and nothing else
+        # frees them, because commit/evict_expired are both skipped below.
+        # Capacity has to describe what the cameras can see.
+        if not self.staleness_enabled:
+            self.registry.retain(nodes.keys())
+
         # History-off graphs protect the target only while its exact instance
         # is present in the current observation. If it later reappears, the
         # registry force-admits it by evicting a non-target.

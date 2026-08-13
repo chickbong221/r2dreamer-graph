@@ -145,5 +145,126 @@ class EntityRegistryEvictionTest(unittest.TestCase):
         self.assertIn("can", current)
 
 
+class EntityRegistryRetainTest(unittest.TestCase):
+    """``retain`` is what keeps capacity describing the current frame.
+
+    Without it, history-off graphs never release a slot: ``commit`` is skipped
+    so ``evict_expired`` has nothing to expire, and the registry fills with
+    objects that are no longer vertices.
+    """
+
+    def test_absent_resident_releases_its_slot(self):
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+
+        registry.retain({"ee", "a"})
+
+        self.assertEqual(len(registry), 1)
+        self.assertIsNone(registry.index_of("b"))
+
+    def test_absent_resident_is_forgotten_not_merely_unseated(self):
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+
+        registry.retain({"ee", "a"})
+
+        self.assertNotIn("b", registry._first_seen)
+
+    def test_absent_rejected_instance_is_forgotten_too(self):
+        # assign stamps _first_seen on every pending id, including ones that
+        # overflow then rejects. Sweeping only residents would leave that age
+        # behind and keep re-rejecting the instance every time it returns.
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+        registry.assign({
+            "ee": ee(), "a": node("a"), "b": node("b"), "c": node("c"),
+        })
+        registry.assign({
+            "ee": ee(), "a": node("a"), "b": node("b"), "c": node("c"),
+        })
+        self.assertIn("a", registry._first_seen)  # rejected, not a resident
+        self.assertIsNone(registry.index_of("a"))
+
+        registry.retain({"ee", "b", "c"})
+
+        self.assertNotIn("a", registry._first_seen)
+
+    def test_returning_instance_is_admitted_after_retain(self):
+        # The end-to-end failure: an instance displaced while absent used to
+        # stay locked out for the rest of the episode by its stale age.
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+        registry.assign({
+            "ee": ee(), "a": node("a"), "b": node("b"), "c": node("c"),
+        })
+        self.assertIsNone(registry.index_of("a"))
+
+        registry.retain({"ee", "a"})
+        current = registry.assign({"ee": ee(), "a": node("a")})
+
+        self.assertIn("a", current)
+
+    def test_retain_is_not_an_eviction(self):
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+
+        registry.retain({"ee"})
+
+        self.assertEqual(registry.overflow_drops, 0)
+        self.assertEqual(registry.evicted_ids, [])
+
+    def test_same_frame_overflow_still_evicts_by_diversity(self):
+        # retain must not disarm the real capacity gate: four objects visible
+        # at once with three slots still costs one, chosen by type count.
+        registry = EntityRegistry(n_max=4)
+        visible = {
+            "ee": ee(),
+            "a-bowl": node("a-bowl", object_type="bowl"),
+            "b-can-1": node("b-can-1", object_type="can"),
+            "c-can-2": node("c-can-2", object_type="can"),
+        }
+        registry.assign(visible)
+        registry.retain(set(visible))
+
+        current = registry.assign(
+            {**visible, "d-mug": node("d-mug", object_type="mug")}
+        )
+
+        self.assertIn("a-bowl", current)
+        self.assertIn("d-mug", current)
+        self.assertEqual(registry.evicted_ids, ["b-can-1"])
+        self.assertEqual(registry.overflow_drops, 1)
+
+    def test_retain_is_a_noop_when_nothing_is_absent(self):
+        # Why history-on is unaffected beyond the builder's guard: with
+        # k_persist=-1, merge_persistent re-injects every node ever seen, so
+        # the keep set is a superset of everything tracked.
+        registry = EntityRegistry(n_max=4)
+        visible = {"ee": ee(), "a": node("a"), "b": node("b"), "c": node("c")}
+        first = registry.assign(visible)
+        before = {k: v.index for k, v in first.items()}
+        ages = dict(registry._first_seen)
+
+        registry.retain(set(visible))
+        current = registry.assign(visible)
+
+        self.assertEqual({k: v.index for k, v in current.items()}, before)
+        self.assertEqual(registry._first_seen, ages)
+        self.assertEqual(registry.overflow_drops, 0)
+
+    def test_episode_entities_counts_distinct_instances(self):
+        # Independent of retain, so it still reports whether the episode ever
+        # held enough instances for the vertex budget to bind.
+        registry = EntityRegistry(n_max=3)
+        registry.assign({"ee": ee(), "a": node("a"), "b": node("b")})
+        registry.retain({"ee"})
+        registry.assign({"ee": ee(), "c": node("c")})
+
+        self.assertEqual(registry.episode_entities, 3)
+
+        registry.reset_episode()
+        self.assertEqual(registry.episode_entities, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ Pipeline per frame:
 
     apply_whitelist(candidates)   # hard eligibility gate
     -> merge_persistent(...)      # re-inject nodes that left the view
+    -> EntityRegistry.retain(...) # history off: slots track the current frame
     -> EntityRegistry.assign(...) # stable index, diversity-aware overflow
 
 No scoring or secondary contact-based admission path exists. When the registry
@@ -13,7 +14,7 @@ breaks ties and selects the instance within that type.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Set
 
 from .persistence import _snapshot
 from .schema import Node
@@ -36,6 +37,7 @@ class EntityRegistry:
         self._free: List[int] = []
         self._first_seen: Dict[str, int] = {}
         self._type: Dict[str, str] = {}
+        self._ever_seen: Set[str] = set()
         self._seen_clock = 0
         self._next = 1  # 0 is reserved for the end effector
         self.evicted_ids: List[str] = []
@@ -46,6 +48,7 @@ class EntityRegistry:
         self._free.clear()
         self._first_seen.clear()
         self._type.clear()
+        self._ever_seen.clear()
         self._seen_clock = 0
         self._next = 1
         self.evicted_ids.clear()
@@ -56,6 +59,37 @@ class EntityRegistry:
 
     def index_of(self, entity_id: str) -> Optional[int]:
         return self._index.get(entity_id)
+
+    @property
+    def episode_entities(self) -> int:
+        """Distinct object instances presented to ``assign`` this episode.
+
+        Independent of ``retain``, so it still reports the episode's true
+        instance count. Reaching ``n_max - 1`` is exactly the condition under
+        which a registry that never released absent residents would have
+        saturated, which is what makes a zero ``overflow_drops`` readable.
+        """
+        return len(self._ever_seen)
+
+    def retain(self, entity_ids: Iterable[str]) -> None:
+        """Drop every entity outside ``entity_ids`` from the slot bookkeeping.
+
+        History-off graphs hand ``assign`` only what a camera sees this frame,
+        so an index held for an absent object is a slot no vertex can occupy.
+        Nothing else frees it: ``NodeSelector.commit`` is skipped in that mode,
+        leaving ``evict_expired`` with nothing to expire.
+
+        Ages are dropped too. ``_first_seen`` also carries instances that
+        overflow rejected, and a retained age keeps re-rejecting them every
+        time they return.
+
+        This is not an eviction: ``evicted_ids`` and ``overflow_drops`` are
+        left alone so they keep meaning "capacity was genuinely exceeded".
+        """
+        keep = set(entity_ids)
+        tracked = set(self._index) | set(self._first_seen)
+        for entity_id in tracked - keep:
+            self.release(entity_id, forget=True)
 
     def assign(
         self,
@@ -80,6 +114,7 @@ class EntityRegistry:
                 node.index = 0
                 admitted[ent_id] = node
                 continue
+            self._ever_seen.add(ent_id)
             idx = self._index.get(ent_id)
             if idx is None:
                 pending.append(ent_id)

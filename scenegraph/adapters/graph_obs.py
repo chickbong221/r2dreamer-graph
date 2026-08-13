@@ -222,6 +222,17 @@ class GraphObsBuilder:
             [b.registry.overflow_drops for b in self.builders], np.float32)
 
     @property
+    def episode_entities(self) -> np.ndarray:
+        """Per-env distinct object instances presented this episode.
+
+        Reaching ``n_max - 1`` means the vertex budget is the binding
+        constraint; staying below it means overflow never had a chance to
+        fire, which is what makes a zero ``overflow_drops`` readable.
+        """
+        return np.array(
+            [b.registry.episode_entities for b in self.builders], np.float32)
+
+    @property
     def fact_drops(self) -> np.ndarray:
         """Per-env facts the packer could not seat in the last packed frame."""
         return self._fact_drops.copy()
