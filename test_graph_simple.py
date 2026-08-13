@@ -18,6 +18,7 @@ from graph import (
     graph_from,
     graph_keys,
 )
+from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
 from scenegraph.core.graph_builder import UID_EE, UID_PAD, EpisodeUIDs
@@ -339,6 +340,35 @@ class SimpleRSSMTest(unittest.TestCase):
         stoch, deter, sem = model.initial(3)
         feat = model.get_feat(stoch, deter, sem)
         self.assertEqual(tuple(feat.shape), (3, model.feat_size))
+
+
+class EnvConfigPlumbingTest(unittest.TestCase):
+    """The env config is flattened key by key, so a new key is easy to drop."""
+
+    def test_every_env_graph_key_is_forwarded(self):
+        env_config = OmegaConf.load("configs/env/mshab.yaml")
+        declared = set(env_config.graph.keys())
+        forwarded = set(_GRAPH_CONFIG_KEYS) | {"cameras"}
+        self.assertEqual(
+            declared - forwarded,
+            set(),
+            "configs/env/mshab.yaml declares graph keys the adapter never "
+            "passes to build_graph_obs; they would be silently ignored",
+        )
+
+    def test_simple_mode_reaches_the_builder(self):
+        graph_config = OmegaConf.create({
+            "enabled": True, "simple": True, "uid_vocab": 64,
+            "profile": "room_scale", "thresholds_path": "", "whitelist_dir": "",
+            "n_max": 8, "e_max": 168, "k_persist": -1, "app_dim": 384,
+            "dino_model": "dinov2_vits14_reg", "dino_res": 112,
+            "dino_weights": "", "staleness_enabled": False,
+            "bypass_teemo": False,
+        })
+        out = graph_observation_config(graph_config, ["fetch_head"])
+        self.assertIs(out["simple"], True)
+        self.assertEqual(out["uid_vocab"], 64)
+        self.assertEqual(out["cameras"], ["fetch_head"])
 
 
 class DecoderDetachTest(unittest.TestCase):

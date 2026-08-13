@@ -24,6 +24,42 @@ def _repo_path(value: str | Path) -> Path:
     return path.resolve()
 
 
+# Every key ``build_graph_obs`` reads. Kept explicit and asserted in tests: a
+# key added to the env config but forgotten here silently downgrades the run
+# to the previous behaviour instead of failing.
+_GRAPH_CONFIG_KEYS = (
+    "enabled", "simple", "uid_vocab", "profile", "thresholds_path",
+    "whitelist_dir", "n_max", "e_max", "k_persist", "app_dim", "dino_model",
+    "dino_res", "dino_weights", "staleness_enabled", "bypass_teemo",
+)
+
+_GRAPH_CONFIG_CASTS = {
+    "enabled": bool,
+    "simple": bool,
+    "staleness_enabled": bool,
+    "bypass_teemo": bool,
+    "uid_vocab": int,
+    "n_max": int,
+    "e_max": int,
+    "k_persist": int,
+    "app_dim": int,
+    "dino_res": int,
+}
+
+
+def graph_observation_config(graph_config, camera_names) -> dict:
+    """Flatten the env's graph config into the dict ``build_graph_obs`` reads."""
+    out = {
+        key: _GRAPH_CONFIG_CASTS.get(key, str)(getattr(graph_config, key))
+        for key in _GRAPH_CONFIG_KEYS
+    }
+    out["cameras"] = list(camera_names)
+    for key in ("thresholds_path", "whitelist_dir", "dino_weights"):
+        if out[key]:
+            out[key] = str(_repo_path(out[key]))
+    return out
+
+
 def _select_build_configs(task_plans, count: int):
     if count <= 0:
         return list(task_plans)
@@ -129,28 +165,9 @@ class ManiSkillVecEnv:
             env, ignore_terminations=True, record_metrics=True
         )
 
-        graph_cfg = {
-            "enabled": bool(config.graph.enabled),
-            "profile": str(config.graph.profile),
-            "thresholds_path": str(config.graph.thresholds_path),
-            "whitelist_dir": str(config.graph.whitelist_dir),
-            "n_max": int(config.graph.n_max),
-            "e_max": int(config.graph.e_max),
-            "k_persist": int(config.graph.k_persist),
-            "cameras": self._camera_names,
-            "app_dim": int(config.graph.app_dim),
-            "dino_model": str(config.graph.dino_model),
-            "dino_res": int(config.graph.dino_res),
-            "dino_weights": str(config.graph.dino_weights),
-            "staleness_enabled": bool(config.graph.staleness_enabled),
-            "bypass_teemo": bool(config.graph.bypass_teemo),
-        }
-        for key in ("thresholds_path", "whitelist_dir", "dino_weights"):
-            if graph_cfg[key]:
-                graph_cfg[key] = str(_repo_path(graph_cfg[key]))
         self._graph = build_graph_obs(
             self._env,
-            graph_cfg,
+            graph_observation_config(config.graph, self._camera_names),
             num_envs=self._num_envs,
             sensor_source=named,
         )
