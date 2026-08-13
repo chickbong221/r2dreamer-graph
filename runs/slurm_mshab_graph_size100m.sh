@@ -89,7 +89,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   model.graph.e_max=168 \
   model.amp_dtype=bfloat16 \
   env.obs_mode=rgb+segmentation \
-  batch_size=32 \
+  batch_size=28 \
   batch_length=64 \
   env.env_num=126 \
   env.train_ratio=64 \
