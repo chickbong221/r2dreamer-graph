@@ -6,8 +6,8 @@ Everything here runs on synthetic tensors -- no simulator, no DINO.
 import unittest
 from types import SimpleNamespace
 
-import numpy as np
 import torch
+from omegaconf import OmegaConf
 
 from graph import (
     FULL_GRAPH_KEYS,
@@ -345,20 +345,25 @@ class DecoderDetachTest(unittest.TestCase):
     """Pixel reconstruction may read g but must not reshape it."""
 
     def _decoder(self, detach):
-        config = SimpleNamespace(
-            cnn_keys="^image$", mlp_keys="^state$",
-            mlp_dist=SimpleNamespace(name="symlog_mse"),
-            cnn_dist=SimpleNamespace(name="mse"),
-            mlp=SimpleNamespace(
-                shape=None, layers=1, units=8, act="SiLU", norm=True,
-                dist=SimpleNamespace(name="identity"), device="cpu",
-                outscale=1.0, symlog_inputs=False, name="mlp_decoder",
-            ),
-            cnn=SimpleNamespace(
-                depth=4, units=8, bspace=2, mults=[1, 1], act="SiLU",
-                norm=True, kernel_size=3, minres=4, outscale=1.0,
-            ),
-        )
+        # MultiDecoder splats the dist nodes (``**config.cnn_dist``) and also
+        # reads them by attribute, so this has to be a real config node rather
+        # than a namespace.
+        config = OmegaConf.create({
+            "cnn_keys": "^image$",
+            "mlp_keys": "^state$",
+            "mlp_dist": {"name": "symlog_mse"},
+            "cnn_dist": {"name": "mse"},
+            "mlp": {
+                "shape": None, "layers": 1, "units": 8, "act": "SiLU",
+                "norm": True, "dist": {"name": "identity"}, "device": "cpu",
+                "outscale": 1.0, "symlog_inputs": False, "name": "mlp_decoder",
+            },
+            "cnn": {
+                "depth": 4, "units": 8, "bspace": 2, "mults": [1, 1],
+                "act": "SiLU", "norm": True, "kernel_size": 3, "minres": 4,
+                "outscale": 1.0,
+            },
+        })
         return MultiDecoder(
             config, deter=8, flat_stoch=6,
             shapes={"image": (16, 16, 3), "state": (5,)},
