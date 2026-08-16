@@ -3,6 +3,8 @@ from tensordict import TensorDict
 from torchrl.data.replay_buffers import LazyTensorStorage, ReplayBuffer
 from torchrl.data.replay_buffers.samplers import SliceSampler
 
+from rssm import LATENT_STATE_KEYS
+
 
 class Buffer:
     def __init__(self, config):
@@ -36,9 +38,7 @@ class Buffer:
         elif src_dev != self.device:
             sample_td = sample_td.to(self.device, non_blocking=True)
         # The initial ones are used only to extract the latent vector
-        state_keys = [
-            key for key in ("stoch", "deter", "sem") if key in sample_td
-        ]
+        state_keys = [key for key in LATENT_STATE_KEYS if key in sample_td]
         initial = tuple(sample_td[key][:, 0] for key in state_keys)
         data = sample_td[:, 1:]
         # Action is 1 step back; clone because source and destination overlap.

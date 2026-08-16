@@ -29,6 +29,18 @@ def config():
     )
 
 
+def slot_graph_config():
+    """Only the fields the RSSM reads to size its slot state."""
+    return SimpleNamespace(
+        n_max=4,
+        slot_dim=8,
+        slot_heads=2,
+        slot_mixer_layers=1,
+        entity_vocab=14,
+        embed=4,
+    )
+
+
 class SemanticRSSMTest(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(0)
@@ -114,6 +126,59 @@ class SemanticRSSMTest(unittest.TestCase):
         self.assertEqual(len(imagined), 3)
         with self.assertRaises(RuntimeError):
             model.prior(deter, sem)
+
+    def test_slot_mode_replaces_the_semantic_vector_with_a_slot_table(self):
+        model = RSSM(
+            config(),
+            embed_size=5,
+            act_dim=3,
+            semantic=True,
+            graph_simple=True,
+            graph_slots=True,
+            graph_config=slot_graph_config(),
+        )
+        # graph_simple and graph_slots arrive together (slot mode is the
+        # relation-only contract), but only one of them may be active.
+        self.assertTrue(model.graph_slots)
+        self.assertFalse(model.graph_simple)
+        self.assertEqual(model.state_keys, ("stoch", "deter", "sem", "slot_meta"))
+        self.assertIsNone(model._sem_obs)
+        self.assertIsNone(model._sem_img)
+        # z stays stock DreamerV3 and reads neither the slots nor a readout.
+        self.assertEqual(model._stoch, 2)
+        self.assertEqual(model._obs_net[0].in_features, 16 + 5)
+        self.assertEqual(model._img_net[0].in_features, 16)
+        # The transition takes the whole masked slot matrix plus its mask.
+        self.assertEqual(model._deter_net._dyn_in3[0].in_features, 4 * 8 + 4)
+        # The heads take the pooled readout, and only the heads.
+        self.assertEqual(model.flat_sem, 8)
+        self.assertEqual(model.feat_size, 2 * 4 + 8 + 16)
+        stoch, deter, sem, meta = model.initial(self.batch)
+        self.assertEqual(tuple(sem.shape), (self.batch, 4, 8))
+        self.assertEqual(tuple(meta.shape), (self.batch, 4, 3))
+
+    def test_slot_mode_imagination_returns_slots_and_keeps_metadata(self):
+        model = RSSM(
+            config(),
+            embed_size=5,
+            act_dim=3,
+            semantic=True,
+            graph_simple=True,
+            graph_slots=True,
+            graph_config=slot_graph_config(),
+        )
+        stoch, deter, sem, meta = model.initial(self.batch)
+        meta[..., 0] = 1  # every slot occupied
+        step = model.img_step(stoch, deter, self.action[:, 0], sem, meta)
+        self.assertEqual(
+            set(step), {"stoch", "deter", "sem", "slot_meta", "logit"}
+        )
+        self.assertEqual(tuple(step["sem"].shape), (self.batch, 4, 8))
+        self.assertTrue(torch.equal(step["slot_meta"], meta))
+
+    def test_slot_mode_requires_its_graph_config(self):
+        with self.assertRaisesRegex(ValueError, "graph config"):
+            RSSM(config(), embed_size=5, act_dim=3, semantic=True, graph_slots=True)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_rssm_matches_r2dreamer_amp_dtypes(self):

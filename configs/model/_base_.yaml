@@ -13,6 +13,17 @@ graph_only_latent: False
 # gates z, and a stock DreamerV3 z branch. Drops the app/bbox replay keys.
 graph_simple: False
 
+# End-effector-to-target shaping, read from *predicted* slot relations. Kept off
+# by default: it is a separate contribution from slot dynamics and the paper
+# comparison needs the two measured apart.
+progress:
+  enabled: False
+  beta: 0.05
+  # Empty uses the built-in Pick stages. A path loads a compiled JSON stage
+  # table instead; there are no runtime LLM calls either way.
+  stages: ''
+  soft: True
+
 lr: 4e-5
 agc: 0.3
 pmin: 1e-3
@@ -49,6 +60,12 @@ loss_scales:
   # weighting, and graphrep is small because it also reaches the encoder.
   graphdyn: 1.0
   graphrep: 0.05
+  # Slot mode. graphdyn/graphrep have no meaning here: there is no single g to
+  # align, so the dynamics are supervised slot-wise instead.
+  slotdyn: 1.0
+  prior_relabs: 1.0
+  prior_reltemp: 0.25
+  progress_value: 1.0
 
 r2dreamer:
   lambd: 5e-4
@@ -92,8 +109,18 @@ rssm:
 graph:
   enabled: False
   simple: ${model.graph_simple}
+  # pooled: the frozen comparison baseline. One attention-pooled token becomes
+  # the single semantic vector g, exactly as shipped.
+  # slots: no pooling anywhere in the dynamics. The GNN's n_max node vectors are
+  # the semantic state, aligned across time by UID. Requires simple=True.
+  state_mode: pooled
   n_max: 8    # end effector plus seven diversity-preserving object slots
   e_max: 168  # truncation-free ceiling: 3 * n_max * (n_max - 1)
+  # Slot mode only. Six 256-wide slots are 1,536 values -- small enough to feed
+  # the deterministic transition directly instead of a summary of them.
+  slot_dim: 256
+  slot_mixer_layers: 1
+  slot_heads: 4
   n_cams: 2
   app_dim: 384
   entity_vocab: 14

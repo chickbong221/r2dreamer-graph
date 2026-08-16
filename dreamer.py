@@ -17,11 +17,15 @@ from graph import (
     GraphDecoder,
     GraphEncoder,
     SimpleGraphDecoder,
+    SlotGraphDecoder,
     compact_graph,
     graph_from,
     graph_keys,
+    graph_state_mode,
 )
 from networks import Projector
+from progress import ProgressReward, ProgressScorer, load_stages
+from progress import slot_pair as progress_slots
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
@@ -89,6 +93,19 @@ def _mask_terminal_graph(token, is_last):
     return token * valid.to(token.dtype)
 
 
+def _masked_mean(values, mask):
+    mask = mask.float()
+    return (values.float() * mask).sum() / mask.sum().clamp_min(1)
+
+
+def _step_valid(is_last):
+    """(B, T) mask of frames that are a real observation."""
+    valid = ~is_last.bool()
+    if valid.ndim == 3 and valid.shape[-1] == 1:
+        valid = valid[..., 0]
+    return valid
+
+
 class Dreamer(nn.Module):
     def __init__(self, config, obs_space, act_space):
         super().__init__()
@@ -104,10 +121,20 @@ class Dreamer(nn.Module):
         self.graph_enabled = bool(config.graph.enabled)
         self.graph_only = bool(getattr(config, "graph_only_latent", False))
         self.graph_simple = bool(getattr(config, "graph_simple", False))
+        self.graph_slots = (
+            self.graph_enabled and graph_state_mode(config.graph) == "slots"
+        )
         if self.graph_only and not self.graph_enabled:
             raise ValueError("graph_only_latent=true requires graph.enabled=true")
         if self.graph_simple and not self.graph_enabled:
             raise ValueError("graph_simple=true requires graph.enabled=true")
+        if self.graph_slots and not self.graph_simple:
+            raise ValueError(
+                "graph.state_mode=slots is a relation-only mode; set "
+                "model.graph_simple=true as well"
+            )
+        if self.graph_slots and self.graph_only:
+            raise ValueError("graph.state_mode=slots and graph_only_latent conflict")
         if self.graph_simple and self.graph_only:
             raise ValueError(
                 "graph_simple and graph_only_latent are mutually exclusive: one "
@@ -148,10 +175,13 @@ class Dreamer(nn.Module):
         self.embed_size = self.encoder.out_dim
         self.graph_encoder = GraphEncoder(config.graph) if self.graph_enabled else None
         graph_token_size = (
-            int(self.graph_encoder.units) if self.graph_enabled else 0
+            0 if self.graph_slots
+            else (int(self.graph_encoder.units) if self.graph_enabled else 0)
         )
         self.graph_dim = (
-            int(config.graph.semantic_dim) if self.graph_simple else 0
+            int(config.graph.semantic_dim)
+            if (self.graph_simple and not self.graph_slots)
+            else 0
         )
         self.rssm = rssm.RSSM(
             config.rssm,
@@ -162,6 +192,8 @@ class Dreamer(nn.Module):
             graph_only=self.graph_only,
             graph_simple=self.graph_simple,
             graph_dim=self.graph_dim,
+            graph_slots=self.graph_slots,
+            graph_config=config.graph if self.graph_enabled else None,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -187,6 +219,44 @@ class Dreamer(nn.Module):
             param.requires_grad = False
         self._slow_value_updates = 0
 
+        # Progress shaping. A second critic on a second reward, never mixed into
+        # the reported score: evaluation still reports MS-HAB reward and success
+        # only. Disabled by default so slot dynamics can be measured alone.
+        progress_config = getattr(config, "progress", None)
+        self.progress_beta = (
+            float(progress_config.beta) if progress_config is not None else 0.0
+        )
+        self.progress_enabled = bool(
+            progress_config is not None and progress_config.enabled
+        )
+        if self.progress_enabled and not self.graph_slots:
+            raise ValueError(
+                "progress.enabled requires graph.state_mode=slots: the scorer "
+                "reads predicted per-slot relations"
+            )
+        self.progress = None
+        self.progress_value = None
+        if self.progress_enabled:
+            scorer = ProgressScorer(
+                load_stages(str(progress_config.stages)), int(config.graph.n_abs)
+            )
+            self.progress = ProgressReward(
+                scorer, 1 - 1 / self.horizon, soft=bool(progress_config.soft)
+            )
+            self.progress_feat_size = (
+                self.rssm.flat_stoch
+                + self.rssm._deter
+                + 2 * self.rssm.slot_dim
+                + int(scorer.relations.numel()) * int(config.graph.n_abs)
+            )
+            self.progress_value = networks.MLPHead(
+                config.critic, self.progress_feat_size
+            )
+            self._slow_progress = copy.deepcopy(self.progress_value)
+            for param in self._slow_progress.parameters():
+                param.requires_grad = False
+            self.progress_return_ema = networks.ReturnEMA(device=self.device)
+
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
@@ -205,14 +275,17 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
         if self.graph_enabled:
-            self.graph_decoder = (
-                SimpleGraphDecoder(config.graph, self.graph_dim)
-                if self.graph_simple
-                else GraphDecoder(config.graph)
-            )
+            if self.graph_slots:
+                self.graph_decoder = SlotGraphDecoder(config.graph)
+            elif self.graph_simple:
+                self.graph_decoder = SimpleGraphDecoder(config.graph, self.graph_dim)
+            else:
+                self.graph_decoder = GraphDecoder(config.graph)
             modules.update(
                 {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
             )
+        if self.progress_enabled:
+            modules.update({"progress_value": self.progress_value})
 
         if self.rep_loss == "dreamer":
             decoder_shapes = {
@@ -228,7 +301,11 @@ class Dreamer(nn.Module):
                 self.rssm.flat_stoch,
                 decoder_shapes,
                 flat_sem=self.rssm.flat_sem,
-                detach_sem_cnn=self.graph_simple,
+                # Slot mode passes the attention readout here. Pixels may read
+                # it, never reshape it: reconstruction is the highest-bandwidth
+                # signal in the model and would turn slots into a second visual
+                # latent.
+                detach_sem_cnn=self.graph_simple or self.graph_slots,
             )
             recon = self._loss_scales.pop("recon")
             graph_image_recon = self._loss_scales.pop("graph_image_recon")
@@ -236,7 +313,9 @@ class Dreamer(nn.Module):
             # distort the semantic state and the downweight that protected it
             # is unnecessary. Keeping stock 1.0 also makes the graph-free arm
             # directly comparable.
-            use_graph_image_scale = self.graph_enabled and not self.graph_simple
+            use_graph_image_scale = self.graph_enabled and not (
+                self.graph_simple or self.graph_slots
+            )
             self._loss_scales.update({
                 key: (
                     graph_image_recon
@@ -336,12 +415,20 @@ class Dreamer(nn.Module):
                 mix = self.slow_target_fraction
                 for v, s in zip(self.value.parameters(), self._slow_value.parameters()):
                     s.data.copy_(mix * v.data + (1 - mix) * s.data)
+                if self.progress_enabled:
+                    for v, s in zip(
+                        self.progress_value.parameters(),
+                        self._slow_progress.parameters(),
+                    ):
+                        s.data.copy_(mix * v.data + (1 - mix) * s.data)
         self._slow_value_updates += 1
 
     def train(self, mode=True):
         super().train(mode)
         # slow_value should be always eval mode
         self._slow_value.train(False)
+        if self.progress_enabled:
+            self._slow_progress.train(False)
         return self
 
     def clone_and_freeze(self):
@@ -359,6 +446,37 @@ class Dreamer(nn.Module):
             self._frozen_graph_encoder = copy.deepcopy(self.graph_encoder)
             for (name_orig, param_orig), (name_new, param_new) in zip(
                 self.graph_encoder.named_parameters(), self._frozen_graph_encoder.named_parameters()
+            ):
+                assert name_orig == name_new
+                param_new.data = param_orig.data
+                param_new.requires_grad_(False)
+
+            # Imagination decodes relations from predicted slots, so the graph
+            # decoder joins the frozen set: the actor update must not train the
+            # world model through the shaping term.
+            self._frozen_graph_decoder = copy.deepcopy(self.graph_decoder)
+            for (name_orig, param_orig), (name_new, param_new) in zip(
+                self.graph_decoder.named_parameters(),
+                self._frozen_graph_decoder.named_parameters(),
+            ):
+                assert name_orig == name_new
+                param_new.data = param_orig.data
+                param_new.requires_grad_(False)
+
+        if self.progress_enabled:
+            self._frozen_progress_value = copy.deepcopy(self.progress_value)
+            for (name_orig, param_orig), (name_new, param_new) in zip(
+                self.progress_value.named_parameters(),
+                self._frozen_progress_value.named_parameters(),
+            ):
+                assert name_orig == name_new
+                param_new.data = param_orig.data
+                param_new.requires_grad_(False)
+
+            self._frozen_slow_progress = copy.deepcopy(self._slow_progress)
+            for (name_orig, param_orig), (name_new, param_new) in zip(
+                self._slow_progress.named_parameters(),
+                self._frozen_slow_progress.named_parameters(),
             ):
                 assert name_orig == name_new
                 param_new.data = param_orig.data
@@ -427,34 +545,55 @@ class Dreamer(nn.Module):
         # Keep policy collection in float32, matching the working r2dreamer
         # implementation. AMP is used only by the training update.
         embed = self._frozen_encoder(p_obs)
-        graph_token = (
-            self._frozen_graph_encoder(graph_from(p_obs, self.graph_simple)).token
+        encoded = (
+            self._frozen_graph_encoder(graph_from(p_obs, self.graph_simple))
             if self.graph_enabled
             else None
         )
-        if graph_token is not None:
-            graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
         prev_stoch = state.get("stoch")
         prev_deter = state["deter"]
         prev_action = state["prev_action"]
-        result = self._frozen_rssm.obs_step(
-            prev_stoch,
-            prev_deter,
-            prev_action,
-            embed,
-            obs["is_first"],
-            sem=state.get("sem") if self.graph_enabled else None,
-            graph_token=graph_token,
-        )
-        if self.graph_only:
-            deter, sem, _ = result
-            stoch = None
-        elif self.graph_enabled:
-            stoch, deter, _, sem = result[:4]
+        if self.graph_slots:
+            # A terminal frame is an auto-reset artifact, not a scene: blanking
+            # it makes the aligner match nothing and every slot fall back to its
+            # prior rather than to a graph from the next episode.
+            slot_obs = encoded.slots.keep(_step_valid(obs["is_last"]))
+            step = self._frozen_rssm.obs_step(
+                prev_stoch,
+                prev_deter,
+                prev_action,
+                embed,
+                obs["is_first"],
+                sem=state.get("sem"),
+                slot_meta=state.get("slot_meta"),
+                slot_obs=slot_obs,
+            )
+            stoch, deter = step["stoch"], step["deter"]
+            sem, slot_meta = step["sem"], step["slot_meta"]
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem, slot_meta)
         else:
-            stoch, deter, _ = result
-            sem = None
-        feat = self._frozen_rssm.get_feat(stoch, deter, sem)
+            graph_token = encoded.token if encoded is not None else None
+            if graph_token is not None:
+                graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
+            result = self._frozen_rssm.obs_step(
+                prev_stoch,
+                prev_deter,
+                prev_action,
+                embed,
+                obs["is_first"],
+                sem=state.get("sem") if self.graph_enabled else None,
+                graph_token=graph_token,
+            )
+            slot_meta = None
+            if self.graph_only:
+                deter, sem, _ = result
+                stoch = None
+            elif self.graph_enabled:
+                stoch, deter, _, sem = result[:4]
+            else:
+                stoch, deter, _ = result
+                sem = None
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
         action_dist = self._frozen_actor(feat)
         action = action_dist.mode if eval else action_dist.rsample()
 
@@ -464,6 +603,8 @@ class Dreamer(nn.Module):
             entries["stoch"] = to_f32(stoch)
         if self.graph_enabled:
             entries["sem"] = to_f32(sem)
+        if self.graph_slots:
+            entries["slot_meta"] = to_f32(slot_meta)
         return action, TensorDict(entries, batch_size=state.batch_size)
 
     @torch.no_grad()
@@ -492,12 +633,43 @@ class Dreamer(nn.Module):
         B = min(data["action"].shape[0], 6)
         # (B, T, E)
         embed = self.encoder(data)
+        encoded = (
+            self.graph_encoder(graph_from(data, self.graph_simple))
+            if self.graph_enabled
+            else None
+        )
+        if self.graph_slots:
+            slot_obs = encoded.slots.keep(_step_valid(data["is_last"]))
+            observed = self.rssm.observe(
+                embed[:B, :5],
+                data["action"][:B, :5],
+                tuple(val[:B] for val in initial),
+                data["is_first"][:B, :5],
+                slot_obs=slot_obs[:B, :5],
+            )
+            post_stoch, post_deter = observed["stoch"], observed["deter"]
+            post_sem, post_meta = observed["sem"], observed["slot_meta"]
+            readout = self.rssm.semantic_feature(post_sem, post_meta)
+            recon = self.decoder(post_stoch, post_deter, readout)["image"].mode()[:B]
+            imagined = self.rssm.imagine_with_action(
+                post_stoch[:, -1],
+                post_deter[:, -1],
+                data["action"][:B, 5:],
+                post_sem[:, -1],
+                post_meta[:, -1],
+            )
+            prior_readout = self.rssm.semantic_feature(
+                imagined["sem"], imagined["slot_meta"]
+            )
+            openl = self.decoder(
+                imagined["stoch"], imagined["deter"], prior_readout
+            )["image"].mode()
+            model = torch.cat([recon[:, :5], openl], 1)
+            truth = data["image"][:B]
+            return torch.cat([truth, model, (model - truth + 1.0) / 2.0], 2)
         graph_token = None
         if self.graph_enabled:
-            graph_token = self.graph_encoder(
-                graph_from(data, self.graph_simple)
-            ).token
-            graph_token = _mask_terminal_graph(graph_token, data["is_last"])
+            graph_token = _mask_terminal_graph(encoded.token, data["is_last"])
         observed = self.rssm.observe(
             embed[:B, :5],
             data["action"][:B, :5],
@@ -689,30 +861,49 @@ class Dreamer(nn.Module):
         )
         if self.graph_enabled:
             self._trace_stage_done("graph encoder")
-        graph_token = graph_encoding.token if graph_encoding is not None else None
-        if graph_token is not None:
-            graph_token = _mask_terminal_graph(graph_token, data["is_last"])
+        step_valid = _step_valid(data["is_last"])
+        # Slot mode carries the slot table and its identity metadata; every
+        # other mode carries a single vector, so these stay None.
+        post_meta = prior_slot = slot_align = None
         self._trace_stage_start("RSSM posterior rollout")
-        observed = self.rssm.observe(
-            embed, data["action"], initial, data["is_first"], graph_token
-        )
-        self._trace_stage_done("RSSM posterior rollout")
-        if self.graph_only:
-            post_deter, post_sem, post_sem_logit = observed
-            post_stoch = post_logit = None
-        else:
-            post_stoch, post_deter, post_logit = observed[:3]
-            post_sem = observed[3] if self.graph_enabled else None
-            post_sem_logit = (
-                observed[4]
-                if self.graph_enabled and not self.graph_simple
-                else None
+        if self.graph_slots:
+            observed = self.rssm.observe(
+                embed,
+                data["action"],
+                initial,
+                data["is_first"],
+                slot_obs=graph_encoding.slots.keep(step_valid),
             )
+            post_stoch, post_deter = observed["stoch"], observed["deter"]
+            post_logit, prior_logit = observed["logit"], observed["prior_logit"]
+            post_sem, post_meta = observed["sem"], observed["slot_meta"]
+            prior_slot, slot_align = observed["prior_slot"], observed
+            post_sem_logit = None
+        else:
+            graph_token = graph_encoding.token if graph_encoding is not None else None
+            if graph_token is not None:
+                graph_token = _mask_terminal_graph(graph_token, data["is_last"])
+            observed = self.rssm.observe(
+                embed, data["action"], initial, data["is_first"], graph_token
+            )
+            prior_logit = None
+            if self.graph_only:
+                post_deter, post_sem, post_sem_logit = observed
+                post_stoch = post_logit = None
+            else:
+                post_stoch, post_deter, post_logit = observed[:3]
+                post_sem = observed[3] if self.graph_enabled else None
+                post_sem_logit = (
+                    observed[4]
+                    if self.graph_enabled and not self.graph_simple
+                    else None
+                )
+        self._trace_stage_done("RSSM posterior rollout")
         # (B, T, S, K)
-        prior_logit = None
         if not self.graph_only:
             self._trace_stage_start("RSSM prior and KL")
-            _, prior_logit = self.rssm.prior(post_deter, post_sem)
+            if prior_logit is None:
+                _, prior_logit = self.rssm.prior(post_deter, post_sem)
             dyn_loss, rep_loss = self.rssm.kl_loss(
                 post_logit, prior_logit, self.kl_free
             )
@@ -721,12 +912,45 @@ class Dreamer(nn.Module):
             self._trace_stage_done("RSSM prior and KL")
         if self.graph_enabled:
             self._trace_stage_start("semantic and graph losses")
-            step_valid = ~data["is_last"].bool()
-            if step_valid.ndim == 3 and step_valid.shape[-1] == 1:
-                step_valid = step_valid[..., 0]
             step_float = step_valid.float()
             denominator = step_float.sum().clamp_min(1)
-            if self.graph_simple:
+            if self.graph_slots:
+                slot_mask = self.rssm.slot_mask(post_meta)
+                # Only slots that kept their identity across the step are a
+                # one-step prediction problem; a slot that just received a new
+                # entity has nothing to have predicted.
+                matched = (
+                    slot_align["matched"] & slot_mask & step_valid[..., None]
+                )
+                losses["slotdyn"] = self.rssm.slot_dynamics_loss(
+                    prior_slot, post_sem, matched
+                )
+                graph_losses, graph_metrics = self.graph_decoder(
+                    post_sem,
+                    prior_slot,
+                    graph_encoding.compact,
+                    slot_align["dest"],
+                    slot_mask,
+                    post_meta[..., rssm.SLOT_META_TARGET],
+                    slot_align["matched"],
+                    step_valid,
+                )
+                with torch.no_grad():
+                    metrics["slot_matched_frac"] = (
+                        matched.float().sum() / slot_mask.float().sum().clamp_min(1)
+                    )
+                    metrics["slot_occupancy"] = slot_mask.float().sum(-1).mean()
+                    metrics["slot_overflow"] = slot_align["overflow"].float().mean()
+                    metrics["slot_post_var"] = (
+                        post_sem.float().var(-1) * slot_mask
+                    ).sum() / slot_mask.float().sum().clamp_min(1)
+                    metrics["slot_prior_cos"] = _masked_mean(
+                        F.cosine_similarity(
+                            prior_slot.float(), post_sem.float(), dim=-1, eps=1e-6
+                        ),
+                        matched,
+                    )
+            elif self.graph_simple:
                 prior_sem = self.rssm.semantic_prior_seq(post_deter)
                 sem_dyn, sem_rep = self.rssm.semantic_align_loss(post_sem, prior_sem)
                 # Terminal frames carry a masked graph token, so their
@@ -774,11 +998,20 @@ class Dreamer(nn.Module):
         # === Representation / auxiliary losses ===
         # (B, T, F)
         self._trace_stage_start("representation and reconstruction losses")
-        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem, post_meta)
+        # The decoder takes the pooled readout in slot mode: reconstruction is a
+        # head, and heads never see the slot table directly.
+        decoder_sem = (
+            self.rssm.semantic_feature(post_sem, post_meta)
+            if self.graph_slots
+            else post_sem
+        )
         if self.rep_loss == "dreamer":
             recon_losses = {
                 key: torch.mean(-dist.log_prob(data[key]))
-                for key, dist in self.decoder(post_stoch, post_deter, post_sem).items()
+                for key, dist in self.decoder(
+                    post_stoch, post_deter, decoder_sem
+                ).items()
             }
             losses.update(recon_losses)
         elif self.rep_loss == "r2dreamer":
@@ -857,9 +1090,13 @@ class Dreamer(nn.Module):
             )
         if self.graph_enabled and not self.graph_only:
             start = start + (post_sem.reshape(-1, *post_sem.shape[2:]).detach(),)
+        if self.graph_slots:
+            start = start + (post_meta.reshape(-1, *post_meta.shape[2:]).detach(),)
         # (B, T, ...) -> (B*T, ...)
         self._trace_stage_start("imagination rollout")
-        imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
+        imag_feat, imag_action, imag_extra = self._imagine(
+            start, self.imag_horizon + 1
+        )
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
         self._trace_stage_done("imagination rollout")
 
@@ -882,6 +1119,35 @@ class Dreamer(nn.Module):
         ret_offset, ret_scale = self.return_ema(ret)
         # (B*T, T_imag-1, 1)
         adv = (ret - imag_value[:, :-1]) / ret_scale
+
+        if self.progress_enabled:
+            # A second return on the shaping reward, with its own critic and its
+            # own normalisation, added to the advantage rather than to the
+            # reward: the environment return the run reports stays untouched.
+            progress_feat = imag_extra["progress_feat"].detach()
+            progress_reward = imag_extra["progress_reward"].detach()
+            progress_value = self._frozen_progress_value(progress_feat).mode()
+            progress_slow = self._frozen_slow_progress(progress_feat).mode()
+            progress_ret = self._lambda_return(
+                last, term, progress_reward, progress_value, progress_value, disc, self.lamb
+            )
+            _, progress_scale = self.progress_return_ema(progress_ret)
+            progress_adv = (progress_ret - progress_value[:, :-1]) / progress_scale
+            adv = adv + self.progress_beta * progress_adv
+            progress_dist = self.progress_value(progress_feat)
+            progress_padded = torch.cat([progress_ret, 0 * progress_ret[:, -1:]], 1)
+            losses["progress_value"] = torch.mean(
+                weight[:, :-1].detach()
+                * (
+                    -progress_dist.log_prob(progress_padded.detach())
+                    - progress_dist.log_prob(progress_slow.detach())
+                )[:, :-1].unsqueeze(-1)
+            )
+            metrics["progress_potential"] = torch.mean(imag_extra["progress_potential"])
+            metrics["progress_reward"] = torch.mean(progress_reward)
+            metrics["progress_ret"] = torch.mean(progress_ret)
+            metrics["progress_adv"] = torch.mean(progress_adv)
+            metrics["progress_val"] = torch.mean(progress_value)
 
         policy = self.actor(imag_feat)
         # (B*T, T_imag-1, 1)
@@ -922,7 +1188,7 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem, post_meta)
         boot = ret[:, 0].reshape(B, T, 1)
         value = self._frozen_value(feat).mode()
         slow_value = self._frozen_slow_value(feat).mode()
@@ -960,7 +1226,34 @@ class Dreamer(nn.Module):
         # g_{t-1} for the transition, exactly as the categorical mode does.
         if self.graph_enabled and not self.graph_only:
             posterior = posterior + (post_sem,)
+        if self.graph_slots:
+            posterior = posterior + (post_meta,)
         return posterior, metrics
+
+    def _progress_step(self, stoch, deter, sem, slot_meta):
+        """Shaping reward and progress-critic input for one imagined state.
+
+        Everything here is predicted: the slots come from the slot prior and the
+        relations from the frozen slot decoder reading those slots. No observed
+        label enters an imagined rollout.
+        """
+        mask = self._frozen_rssm.slot_mask(slot_meta)
+        target_flag = slot_meta[..., rssm.SLOT_META_TARGET]
+        reward, potential, probs = self.progress(
+            self._frozen_graph_decoder, sem, target_flag, mask
+        )
+        source, target, _ = progress_slots(sem, target_flag, mask)
+        feat = torch.cat(
+            [
+                stoch.reshape(*deter.shape[:-1], -1),
+                deter,
+                source,
+                target,
+                probs.reshape(*probs.shape[:-2], -1).to(deter.dtype),
+            ],
+            -1,
+        )
+        return reward.unsqueeze(-1), potential.unsqueeze(-1), feat
 
     @torch.no_grad()
     def _imagine(self, start, imag_horizon):
@@ -968,20 +1261,35 @@ class Dreamer(nn.Module):
         # (B, S, K), (B, D)
         feats = []
         actions = []
+        extra = {}
+        slot_meta = None
         if self.graph_only:
             deter, sem = start
             stoch = None
         else:
             stoch, deter = start[:2]
             sem = start[2] if self.graph_enabled else None
+            slot_meta = start[3] if self.graph_slots else None
+        progress_rewards, progress_potentials, progress_feats = [], [], []
         for _ in range(imag_horizon):
             # (B, F)
-            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem, slot_meta)
             # (B, A)
             action = self._frozen_actor(feat).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)
+            if self.progress_enabled:
+                reward, potential, progress_feat = self._progress_step(
+                    stoch, deter, sem, slot_meta
+                )
+                progress_rewards.append(reward)
+                progress_potentials.append(potential)
+                progress_feats.append(progress_feat)
+            if self.graph_slots:
+                step = self._frozen_rssm.img_step(stoch, deter, action, sem, slot_meta)
+                stoch, deter, sem = step["stoch"], step["deter"], step["sem"]
+                continue
             result = self._frozen_rssm.img_step(stoch, deter, action, sem)
             if self.graph_only:
                 deter, sem, _ = result
@@ -990,9 +1298,15 @@ class Dreamer(nn.Module):
             else:
                 stoch, deter = result
 
+        if self.progress_enabled:
+            extra = {
+                "progress_reward": torch.stack(progress_rewards, dim=1),
+                "progress_potential": torch.stack(progress_potentials, dim=1),
+                "progress_feat": torch.stack(progress_feats, dim=1),
+            }
         # Stack along sequence dim T_imag.
         # (B, T_imag, F), (B, T_imag, A)
-        return torch.stack(feats, dim=1), torch.stack(actions, dim=1)
+        return torch.stack(feats, dim=1), torch.stack(actions, dim=1), extra
 
     @torch.no_grad()
     def _lambda_return(self, last, term, reward, value, boot, disc, lamb):

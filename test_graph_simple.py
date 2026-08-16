@@ -396,6 +396,37 @@ class EnvConfigPlumbingTest(unittest.TestCase):
             "passes to build_graph_obs; they would be silently ignored",
         )
 
+    def test_pooled_stays_the_default_state_mode(self):
+        # The frozen baseline must not move because slot mode exists.
+        model_config = OmegaConf.load("configs/model/_base_.yaml")
+        self.assertEqual(model_config.graph.state_mode, "pooled")
+        self.assertEqual(model_config.graph.n_max, 8)
+        self.assertEqual(model_config.graph.e_max, 168)
+        self.assertIs(model_config.graph_simple, False)
+        self.assertIs(model_config.progress.enabled, False)
+        self.assertEqual(model_config.loss_scales.reltemp, 1.0)
+
+    def test_the_slot_preset_pins_the_six_node_contract(self):
+        slot_config = OmegaConf.load("configs/model/size100M_graph_slots.yaml")
+        self.assertEqual(slot_config.graph.state_mode, "slots")
+        self.assertEqual(slot_config.graph.n_max, 6)
+        self.assertEqual(slot_config.graph.e_max, 64)
+        self.assertEqual(slot_config.graph.slot_dim, 256)
+        self.assertEqual(slot_config.graph.slot_heads, 4)
+        self.assertEqual(slot_config.graph.slot_mixer_layers, 1)
+        self.assertIs(slot_config.graph_simple, True)
+        # The relation-only contract stays relation-only.
+        pooled = OmegaConf.load("configs/model/size100M_graph.yaml")
+        for key in ("deter", "hidden", "discrete", "depth", "units", "rep_loss"):
+            self.assertEqual(slot_config[key], pooled[key], key)
+
+    def test_every_arm_sees_the_same_privileged_observation(self):
+        # The graph is built from privileged state in every graph arm, so the
+        # graph-free baseline has to see the same fields or the comparison
+        # measures privilege instead of representation.
+        env_config = OmegaConf.load("configs/env/mshab.yaml")
+        self.assertIs(env_config.nonprivileged_obs, False)
+
     def test_simple_mode_reaches_the_builder(self):
         graph_config = OmegaConf.create({
             "enabled": True, "simple": True, "uid_vocab": 64,

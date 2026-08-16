@@ -22,6 +22,27 @@ from torch import nn
 from tools import weight_init_
 
 
+# Mirrors ``scenegraph.core.graph_builder``. Duplicated rather than imported so
+# the model package never reaches into the simulator-side package; the tests
+# assert the two constants agree.
+UID_PAD = 0
+UID_EE = 1
+
+# ``pooled``: the shipped model. One attention-pooled token becomes the single
+# semantic vector g. ``slots``: no pooling anywhere in the dynamics path -- the
+# GNN's six node vectors are the semantic state.
+STATE_MODES = ("pooled", "slots")
+
+
+def graph_state_mode(config) -> str:
+    mode = str(getattr(config, "state_mode", "pooled"))
+    if mode not in STATE_MODES:
+        raise ValueError(
+            f"graph.state_mode={mode!r} is not one of {STATE_MODES}"
+        )
+    return mode
+
+
 FULL_GRAPH_KEYS = (
     "graph_node_ent",
     "graph_node_app",
@@ -100,10 +121,59 @@ class CompactGraph:
 
 
 @dataclass
+class SlotObservation:
+    """One frame's graph as six observed slots plus their structural labels.
+
+    Every field is indexed by the *observation* node position, which the vertex
+    registry reuses; ``uid`` is what names an entity across frames and the only
+    thing :class:`SlotAligner` is allowed to match on.
+    """
+
+    slots: torch.Tensor  # (..., n, D) contextual node embeddings
+    uid: torch.Tensor  # (..., n) long
+    ent: torch.Tensor  # (..., n) long
+    target: torch.Tensor  # (..., n) long
+    mask: torch.Tensor  # (..., n) bool
+
+    def __getitem__(self, key) -> "SlotObservation":
+        """Index every field the same way."""
+        return SlotObservation(
+            self.slots[key],
+            self.uid[key],
+            self.ent[key],
+            self.target[key],
+            self.mask[key],
+        )
+
+    def step(self, index: int) -> "SlotObservation":
+        """Select one time index from a (B, T, ...) observation."""
+        return self[:, index]
+
+    def keep(self, valid: torch.Tensor) -> "SlotObservation":
+        """Blank whole frames, e.g. auto-reset terminal observations.
+
+        A blanked frame is not "an empty scene": it is *no observation*, so the
+        aligner matches nothing, every carried slot keeps its identity, and the
+        posterior falls back to the prior for all of them.
+        """
+        while valid.ndim < self.uid.ndim:
+            valid = valid.unsqueeze(-1)
+        return SlotObservation(
+            self.slots * valid[..., None].to(self.slots.dtype),
+            self.uid * valid.long(),
+            self.ent * valid.long(),
+            self.target * valid.long(),
+            self.mask & valid.bool(),
+        )
+
+
+@dataclass
 class GraphEncoding:
     nodes: torch.Tensor
-    token: torch.Tensor
+    # ``None`` in slot mode: no pooled token is computed at all.
+    token: torch.Tensor | None
     compact: CompactGraph
+    slots: SlotObservation | None = None
 
 
 def compact_graph(
@@ -187,7 +257,17 @@ class GraphEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.simple = bool(getattr(config, "simple", False))
-        self.units = int(config.simple_units if self.simple else config.units)
+        self.state_mode = graph_state_mode(config)
+        self.slot_mode = self.state_mode == "slots"
+        if self.slot_mode and not self.simple:
+            raise ValueError(
+                "graph.state_mode=slots is a relation-only mode; set "
+                "model.graph_simple=true (graph.simple) as well"
+            )
+        if self.slot_mode:
+            self.units = int(config.slot_dim)
+        else:
+            self.units = int(config.simple_units if self.simple else config.units)
         self.layers = int(config.layers)
         self.n_cams = int(config.n_cams)
         self.app_dim = int(config.app_dim)
@@ -196,7 +276,15 @@ class GraphEncoder(nn.Module):
 
         self.entity = nn.Embedding(int(config.entity_vocab), self.embed_dim)
         self.target = nn.Embedding(2, self.embed_dim)
-        if self.simple:
+        if self.slot_mode:
+            # No UID embedding. A UID is an episode-random code; letting it into
+            # the node representation would make two identical scenes embed
+            # differently. Identity is used for alignment only.
+            self.uid = None
+            self.app_proj = None
+            self.bbox_proj = None
+            node_in = 2 * self.embed_dim
+        elif self.simple:
             # Same-type siblings are otherwise identical once appearance and
             # boxes are gone; the UID is the only thing separating them.
             self.uid = nn.Embedding(int(config.uid_vocab), int(config.uid_embed))
@@ -229,12 +317,21 @@ class GraphEncoder(nn.Module):
             GraphMLP(2 * self.units, self.units, str(config.act))
             for _ in range(self.layers)
         )
-        self.query = nn.Parameter(torch.empty(self.units))
-        self.key = nn.Linear(self.units, self.units)
-        self.value = nn.Linear(self.units, self.units)
-        self.out = nn.Linear(self.units, self.units)
+        if self.slot_mode:
+            # Attention pooling exists only as a head readout in slot mode, and
+            # it lives next to the heads. Building it here would leave unused
+            # parameters in the optimizer and invite pooling back into the
+            # dynamics path by accident.
+            self.query = None
+            self.key = self.value = self.out = None
+        else:
+            self.query = nn.Parameter(torch.empty(self.units))
+            self.key = nn.Linear(self.units, self.units)
+            self.value = nn.Linear(self.units, self.units)
+            self.out = nn.Linear(self.units, self.units)
         self.apply(weight_init_)
-        nn.init.normal_(self.query, std=0.02)
+        if self.query is not None:
+            nn.init.normal_(self.query, std=0.02)
 
     def forward(self, graph: Mapping[str, torch.Tensor]) -> GraphEncoding:
         compact = compact_graph(graph, self.simple)
@@ -252,7 +349,7 @@ class GraphEncoder(nn.Module):
                 box = self.bbox_proj[camera](node_bbox[..., camera, :])
                 parts.append(box * compact.camera_visible[..., camera, None])
         parts.extend((self.entity(compact.node_ent), self.target(compact.node_target)))
-        if self.simple:
+        if self.uid is not None:
             parts.append(self.uid(compact.node_uid))
         nodes = self.node(torch.cat(parts, -1)) * valid[..., None]
 
@@ -284,6 +381,17 @@ class GraphEncoder(nn.Module):
             flat = update(torch.cat([flat, agg], -1))
             flat = flat * valid.reshape(-1, 1)
         nodes = flat.reshape(compact.graph_count, compact.num_nodes, self.units)
+
+        if self.slot_mode:
+            shape = (*compact.batch_shape, compact.num_nodes)
+            slots = SlotObservation(
+                slots=nodes.reshape(*shape, self.units),
+                uid=compact.node_uid.reshape(shape),
+                ent=compact.node_ent.reshape(shape),
+                target=compact.node_target.reshape(shape),
+                mask=valid.reshape(shape),
+            )
+            return GraphEncoding(slots.slots, None, compact, slots)
 
         score = (self.key(nodes) * self.query).sum(-1) / math.sqrt(self.units)
         # Apply masks in float32: -1e9 is outside float16's finite range and
@@ -460,6 +568,356 @@ class SimpleGraphDecoder(nn.Module):
             dtype=torch.float32,
         )
         metrics["graph_nodes_per_frame"] = valid.float().sum(-1).mean()
+        return losses, metrics
+
+
+@dataclass
+class SlotAlignment:
+    """Where each observed node belongs in the recurrent slot table."""
+
+    # (B, n) destination slot per *observed* node; ``num_slots`` means dropped.
+    dest: torch.Tensor
+    present: torch.Tensor  # (B, n) slot received an observation this step
+    matched: torch.Tensor  # (B, n) slot kept its identity and was observed
+    slots: torch.Tensor  # (B, n, D) observed embeddings, slot-ordered
+    uid: torch.Tensor  # (B, n) long
+    ent: torch.Tensor  # (B, n) long
+    target: torch.Tensor  # (B, n) long
+    mask: torch.Tensor  # (B, n) bool occupancy after this step
+    overflow: torch.Tensor  # (B,) observed nodes with nowhere to go
+
+
+class SlotAligner(nn.Module):
+    """UID-to-slot assignment. No parameters, no learning, no categories.
+
+    Six slots make the whole thing a ``[6, 6]`` equality matrix. The rules are
+    deliberately rigid: slot zero is the end effector, a UID keeps whatever slot
+    it already had, a new UID takes a free slot -- preferring never-used slots
+    over ones holding an entity that has since left the graph -- and zero (the
+    padding UID) matches nothing. Entity category is never consulted, or two
+    interchangeable cans would swap latents whenever the registry reordered
+    them.
+    """
+
+    def __init__(self, num_slots: int, uid_ee: int = UID_EE):
+        super().__init__()
+        self.num_slots = int(num_slots)
+        self.uid_ee = int(uid_ee)
+
+    @staticmethod
+    def _place(values: torch.Tensor, dest: torch.Tensor, keep: torch.Tensor) -> torch.Tensor:
+        """Scatter observation-ordered rows into slot order.
+
+        Rows with nowhere to go address one extra scratch row that is sliced
+        off, so no padded observation can land on a real slot.
+        """
+        batch, count = dest.shape
+        trailing = values.shape[2:]
+        view = (batch, count) + (1,) * len(trailing)
+        out = values.new_zeros(batch, count + 1, *trailing)
+        index = dest.reshape(view).expand(batch, count, *trailing)
+        out.scatter_(1, index, values * keep.reshape(view).to(values.dtype))
+        return out[:, :count]
+
+    def forward(
+        self,
+        obs: SlotObservation,
+        prev_uid: torch.Tensor,
+        prev_ent: torch.Tensor,
+        prev_target: torch.Tensor,
+    ) -> SlotAlignment:
+        count = self.num_slots
+        if obs.uid.shape[-1] != count:
+            raise ValueError(
+                f"slot mode needs one latent slot per observation row: got "
+                f"{obs.uid.shape[-1]} nodes for {count} slots. Set "
+                f"graph.n_max to the slot count."
+            )
+        device = obs.uid.device
+        index = torch.arange(count, device=device)
+        valid = obs.mask.bool()
+        # A padded row's UID is meaningless; zero it so it cannot match.
+        uid = obs.uid.long() * valid
+        prev_uid = prev_uid.long()
+        prev_valid = prev_uid.ne(0)
+
+        is_ee = valid & uid.eq(self.uid_ee)
+        obj = valid & ~is_ee
+        # Slot zero belongs to the end effector, so object matching never
+        # considers it even if a stale UID somehow sits there.
+        same = (
+            uid.unsqueeze(-1).eq(prev_uid.unsqueeze(1))
+            & obj.unsqueeze(-1)
+            & (prev_valid & index.gt(0)).unsqueeze(1)
+        )
+        matched_obs = same.any(-1)
+        matched_slot = same.long().argmax(-1)
+
+        taken = same.any(1) | index.eq(0)
+        fresh = obj & ~matched_obs
+        rank = fresh.long().cumsum(-1) - 1
+        # Free slots first, and among them empty before stale, so a returning
+        # object is only evicted when the scene genuinely needs the room.
+        order = (taken.long() * 1000 + (prev_valid & ~taken).long() * 100 + index).argsort(-1)
+        room = (~taken).long().sum(-1, keepdim=True)
+        overflow = fresh & rank.ge(room)
+        free = order.gather(1, rank.clamp_min(0))
+
+        dropped = torch.full_like(free, count)
+        dest = torch.where(
+            is_ee,
+            torch.zeros_like(free),
+            torch.where(
+                matched_obs,
+                matched_slot,
+                torch.where(fresh & ~overflow, free, dropped),
+            ),
+        )
+        keep = valid & dest.lt(count)
+
+        present = self._place(torch.ones_like(dest, dtype=torch.bool), dest, keep)
+        slots = self._place(obs.slots, dest, keep)
+        uid_slot = self._place(uid, dest, keep)
+        ent_slot = self._place(obs.ent.long(), dest, keep)
+        target_slot = self._place(obs.target.long(), dest, keep)
+
+        # An unobserved slot keeps its identity; an evicted one is overwritten
+        # wholesale, which is what "clear the old latent" means here.
+        new_uid = torch.where(present, uid_slot, prev_uid)
+        new_ent = torch.where(present, ent_slot, prev_ent.long())
+        new_target = torch.where(present, target_slot, prev_target.long())
+        matched = torch.where(
+            index.eq(0).unsqueeze(0),
+            (is_ee.any(-1) & prev_uid[:, 0].eq(self.uid_ee)).unsqueeze(-1),
+            same.any(1),
+        )
+        return SlotAlignment(
+            dest=dest,
+            present=present,
+            matched=matched & present,
+            slots=slots,
+            uid=new_uid,
+            ent=new_ent,
+            target=new_target,
+            mask=new_uid.ne(0),
+            overflow=overflow.sum(-1),
+        )
+
+
+class SlotReadout(nn.Module):
+    """Learned-query attention pooling, for heads only.
+
+    This is the one place pooling is allowed in slot mode. It never feeds the
+    slot transition, is never a prediction target, and never decides identity;
+    it exists so the ordinary Dreamer heads keep a fixed-width input.
+    """
+
+    def __init__(self, slot_dim: int, out_dim: int):
+        super().__init__()
+        self.slot_dim = int(slot_dim)
+        self.out_dim = int(out_dim)
+        self.query = nn.Parameter(torch.empty(self.slot_dim))
+        self.key = nn.Linear(self.slot_dim, self.slot_dim)
+        self.value = nn.Linear(self.slot_dim, self.slot_dim)
+        self.out = nn.Linear(self.slot_dim, self.out_dim)
+        self.apply(weight_init_)
+        nn.init.normal_(self.query, std=0.02)
+
+    def forward(self, slots: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # (..., n, D), (..., n)
+        mask = mask.bool()
+        score = (self.key(slots) * self.query).sum(-1) / math.sqrt(self.slot_dim)
+        # float32 for the mask: -1e9 is outside float16's finite range.
+        score = score.float().masked_fill(~mask, -1e9)
+        attention = torch.softmax(score, -1).to(slots.dtype) * mask
+        attention = attention / attention.sum(-1, keepdim=True).clamp_min(1e-6)
+        token = self.out((attention[..., None] * self.value(slots)).sum(-2))
+        return token * mask.any(-1, keepdim=True)
+
+
+class SlotGraphDecoder(nn.Module):
+    """Slot-native reconstruction of the relation-only graph.
+
+    Unlike :class:`SimpleGraphDecoder` there is no global vector to query and no
+    UID embedding to query it with: a node's prediction comes from its own slot,
+    and a fact's prediction from its two endpoint slots plus the relation type.
+    The same heads read posterior slots and predicted prior slots, which is what
+    makes relations decodable from an imagined rollout.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.units = int(config.slot_dim)
+        self.n_abs = int(config.n_abs)
+        self.n_temp = int(config.n_temp)
+        act = str(config.act)
+
+        self.node = GraphMLP(self.units, self.units, act)
+        self.target = nn.Linear(self.units, 1)
+        self.reltype = nn.Embedding(int(config.n_rel), int(config.embed))
+        self.pair = GraphMLP(2 * self.units + int(config.embed), self.units, act)
+        self.abs_head = nn.Linear(self.units, self.n_abs)
+        self.temp_head = nn.Linear(self.units, self.n_temp)
+        self.register_buffer(
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
+        )
+        self.apply(weight_init_)
+
+    def _pairs(self, slots, src, dst, relation):
+        """Fact features for flattened endpoint indices."""
+        flat = self.node(slots).reshape(-1, self.units)
+        return self.pair(
+            torch.cat(
+                [
+                    flat.index_select(0, src),
+                    flat.index_select(0, dst),
+                    self.reltype(relation),
+                ],
+                -1,
+            )
+        )
+
+    def relation_probs(self, src_slot, dst_slot, relations):
+        """Admissible-label distributions for one ordered pair of slots.
+
+        ``src_slot``/``dst_slot`` are (..., D) and ``relations`` is a 1-D list
+        of relation ids; the result is (..., R, n_abs). Used by the progress
+        scorer, which must read predicted facts and never observed ones.
+        """
+        relations = relations.long()
+        count = int(relations.numel())
+        shape = src_slot.shape[:-1]
+        src = self.node(src_slot).unsqueeze(-2).expand(*shape, count, self.units)
+        dst = self.node(dst_slot).unsqueeze(-2).expand(*shape, count, self.units)
+        rel = self.reltype(relations).expand(*shape, count, -1)
+        pair = self.pair(torch.cat([src, dst, rel], -1))
+        logits = self.abs_head(pair).float()
+        legal = self.abs_valid.index_select(0, relations).expand(*shape, count, self.n_abs)
+        return torch.softmax(logits.masked_fill(~legal, -1e9), -1)
+
+    def forward(
+        self,
+        post_slots: torch.Tensor,
+        prior_slots: torch.Tensor,
+        compact: CompactGraph,
+        slot_index: torch.Tensor,
+        slot_mask: torch.Tensor,
+        slot_target: torch.Tensor,
+        prior_valid: torch.Tensor,
+        step_valid: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        graph_count = compact.graph_count
+        count = post_slots.shape[-2]
+        step = step_valid.reshape(graph_count).bool()
+        post_slots = post_slots.reshape(graph_count, count, self.units)
+        prior_slots = prior_slots.reshape(graph_count, count, self.units)
+        slot_mask = slot_mask.reshape(graph_count, count).bool()
+        slot_target = slot_target.reshape(graph_count, count).long()
+        prior_valid = prior_valid.reshape(graph_count, count).bool() & slot_mask
+        valid = slot_mask & step[:, None]
+        losses: dict[str, torch.Tensor] = {}
+        metrics: dict[str, torch.Tensor] = {}
+
+        nodes = self.node(post_slots) * valid[..., None]
+        # Slot zero is the end effector and never carries the target flag.
+        target_logit = self.target(nodes).squeeze(-1).float()
+        target_mask = valid.clone()
+        target_mask[:, 0] = False
+        target_flag = slot_target.bool()
+        target_error = F.binary_cross_entropy_with_logits(
+            target_logit, target_flag.float(), reduction="none"
+        )
+        positive = target_mask & target_flag
+        negative = target_mask & ~target_flag
+        has_positive = positive.any(-1)
+        has_negative = negative.any(-1)
+        class_count = has_positive.float() + has_negative.float()
+        losses["nodetgt"] = (
+            (
+                _frame_mean(target_error, positive) * has_positive
+                + _frame_mean(target_error, negative) * has_negative
+            )
+            / class_count.clamp_min(1)
+        ).mean()
+        target_index = target_flag.long().argmax(-1)
+        selected = target_logit.masked_fill(~target_mask, -1e9).argmax(-1)
+        metrics["node_target_acc"] = _masked(selected.eq(target_index), has_positive)
+        metrics["node_target_frac"] = has_positive.float().mean()
+
+        # Edge endpoints address observation rows; route them through the
+        # alignment so both branches read the same slots the dynamics carry.
+        route = slot_index.reshape(-1)
+        src_slot = route.index_select(0, compact.edge_src)
+        dst_slot = route.index_select(0, compact.edge_dst)
+        routed = src_slot.lt(count) & dst_slot.lt(count)
+        offset = compact.edge_graph * count
+        src = src_slot.clamp(max=count - 1) + offset
+        dst = dst_slot.clamp(max=count - 1) + offset
+        edge_step = step.index_select(0, compact.edge_graph) & routed
+        legal = self.abs_valid.index_select(0, compact.edge_rel)
+        temporal = edge_step & compact.edge_temp.ne(0)
+
+        post_pair = self._pairs(post_slots, src, dst, compact.edge_rel)
+        losses["relabs"], metrics["relabs_acc"] = _edge_categorical(
+            self.abs_head(post_pair),
+            compact.edge_abs,
+            compact.edge_graph,
+            edge_step,
+            legal,
+            graph_count,
+        )
+        temp_logits = self.temp_head(post_pair)
+        temp_classes = torch.ones_like(temp_logits, dtype=torch.bool)
+        temp_classes[:, 0] = False
+        losses["reltemp"], metrics["reltemp_acc"] = _edge_categorical(
+            temp_logits,
+            compact.edge_temp,
+            compact.edge_graph,
+            temporal,
+            temp_classes,
+            graph_count,
+        )
+
+        # The prior branch is supervised only where both endpoints are slots the
+        # model was already tracking: predicting a fact about an entity that
+        # entered the scene this step is not a dynamics failure.
+        flat_prior = prior_valid.reshape(-1)
+        prior_step = (
+            edge_step
+            & flat_prior.index_select(0, src)
+            & flat_prior.index_select(0, dst)
+        )
+        prior_pair = self._pairs(prior_slots, src, dst, compact.edge_rel)
+        losses["prior_relabs"], metrics["prior_relabs_acc"] = _edge_categorical(
+            self.abs_head(prior_pair),
+            compact.edge_abs,
+            compact.edge_graph,
+            prior_step,
+            legal,
+            graph_count,
+        )
+        prior_temp_logits = self.temp_head(prior_pair)
+        prior_temp_classes = torch.ones_like(prior_temp_logits, dtype=torch.bool)
+        prior_temp_classes[:, 0] = False
+        losses["prior_reltemp"], metrics["prior_reltemp_acc"] = _edge_categorical(
+            prior_temp_logits,
+            compact.edge_temp,
+            compact.edge_graph,
+            prior_step & compact.edge_temp.ne(0),
+            prior_temp_classes,
+            graph_count,
+        )
+
+        metrics["graph_real_edges"] = torch.as_tensor(
+            compact.edge_count / max(graph_count, 1),
+            device=post_slots.device,
+            dtype=torch.float32,
+        )
+        metrics["graph_nodes_per_frame"] = valid.float().sum(-1).mean()
+        metrics["slot_prior_facts"] = prior_step.float().sum() / max(graph_count, 1)
+        metrics["slot_unrouted_facts"] = (
+            (~routed).float().sum() / max(graph_count, 1)
+        )
         return losses, metrics
 
 

@@ -1,6 +1,7 @@
 import torch
 
 import tools
+from rssm import LATENT_STATE_KEYS
 
 
 def _observation_frame(trans):
@@ -118,9 +119,7 @@ class OnlineTrainer:
                 "eval_video", tools.to_np(video[None]), fps=self.video_fps)
         if self.video_pred_log and cache is not None:
             initial = agent.get_initial_state(1)
-            latent_keys = [
-                key for key in ("stoch", "deter", "sem") if key in initial
-            ]
+            latent_keys = [key for key in LATENT_STATE_KEYS if key in initial]
             self.logger.video(
                 "eval_open_loop",
                 tools.to_np(
@@ -218,7 +217,7 @@ class OnlineTrainer:
             # We keep the observation and the action that produced it together.
             # Mask actions after an episode has ended.
             trans["action"] = act * ~done.unsqueeze(-1)
-            for key in ("stoch", "deter", "sem"):
+            for key in LATENT_STATE_KEYS:
                 if key in agent_state:
                     trans[key] = agent_state[key]
             trans["episode"] = episode_ids  # Don't lift dim

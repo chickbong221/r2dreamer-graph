@@ -18,7 +18,7 @@ sim_backend: gpu
 control_mode: ''
 reward_mode: normalized_dense
 shader_dir: minimal
-nonprivileged_obs: true
+nonprivileged_obs: false
 sim_config: {}  # merged into ManiSkill's SimConfig, e.g. gpu_memory_config
 size: [112, 112]
 cameras: [fetch_head, fetch_hand]
@@ -40,6 +40,8 @@ graph:
   profile: room_scale
   thresholds_path: ''
   whitelist_dir: ''
+  # The node/edge contract follows the model config. size100M_graph_slots pins
+  # it to six nodes and 64 edges; the pooled baseline keeps 8/168.
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
   k_persist: -1
