@@ -1,0 +1,27 @@
+defaults:
+  - _base_
+
+deter: 4096
+hidden: 512
+discrete: 32
+depth: 32
+units: 512
+act: 'SiLU'
+norm: True
+
+rep_loss: dreamer
+compile: False
+
+graph_simple: True
+
+graph:
+  enabled: True
+  state_mode: slots
+  n_max: 6
+  e_max: 64
+  slot_dim: 256
+  slot_mixer_layers: 1
+  slot_heads: 4
+
+loss_scales:
+  reltemp: 0.25
