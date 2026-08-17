@@ -410,8 +410,12 @@ class Dreamer(nn.Module):
         )
         self._skipped_updates = 0
         self._consecutive_skips = 0
+        self._scale_settled = False
         self._max_consecutive_skips = 8
-        self._min_loss_scale = 128.0
+        # Below this the scale is no longer protecting anything: fp16's smallest
+        # normal is ~6e-5, so a gradient that still overflows here is genuinely
+        # out of range rather than merely small.
+        self._min_loss_scale = 32.0
 
         def lr_lambda(step):
             if config.warmup:
@@ -456,29 +460,43 @@ class Dreamer(nn.Module):
             }
 
     def _note_optimizer_step(self, stepped):
-        """Tolerate warm-up overflow; fail on a loss-scale collapse.
+        """Tolerate warm-up back-off; fail on a loss-scale collapse.
 
-        A healthy float16 run backs the scale off once or twice and settles. A
-        run that skips update after update, or drives the scale into the floor,
-        is not warming up -- and skipping forever would hide a divergence behind
-        a loss curve that still looks reasonable.
+        Two different failures need two different instruments, and they are easy
+        to confuse. While the scale is still coming down from its initial value,
+        consecutive skips and halvings are the same number -- the scale only
+        moves when a step is skipped -- so a consecutive-skip limit just
+        restates the floor with a tighter bound, and forbids ever reaching a
+        scale that fits. The floor is the honest guard there.
+
+        The consecutive limit is for the other failure: a run that settled and
+        then started skipping every update. That only means something once the
+        scale has proven it can fit at least one step, so it is enforced from
+        the first successful update onward.
         """
         if stepped:
             self._consecutive_skips = 0
+            self._scale_settled = True
             return
         self._skipped_updates += 1
         self._consecutive_skips += 1
         scale = self._scaler.get_scale()
-        if (
-            self._consecutive_skips >= self._max_consecutive_skips
-            or scale < self._min_loss_scale
-        ):
+        collapsed = scale < self._min_loss_scale
+        stalled = (
+            self._scale_settled
+            and self._consecutive_skips >= self._max_consecutive_skips
+        )
+        if collapsed or stalled:
+            reason = (
+                f"fell below the {self._min_loss_scale:g} floor"
+                if collapsed
+                else f"stalled for {self._consecutive_skips} consecutive updates"
+            )
             raise FloatingPointError(
-                f"float16 loss scale fell to {scale:g} after "
-                f"{self._consecutive_skips} consecutive skipped updates "
-                f"({self._skipped_updates} total). This is past warm-up "
-                "overflow: find the loss term that is diverging rather than "
-                "lowering the semantic weights to hide it. Set "
+                f"float16 loss scale {reason} at {scale:g} "
+                f"({self._skipped_updates} skipped updates total). This is past "
+                "warm-up back-off: find the loss term that is diverging rather "
+                "than lowering the semantic weights to hide it. Set "
                 "model.amp_dtype=bfloat16 to remove loss scaling entirely."
             )
 
