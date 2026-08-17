@@ -432,8 +432,16 @@ def _masked(values, mask):
     return (values.float() * mask).sum() / mask.sum().clamp_min(1)
 
 
-def _edge_categorical(logits, target, frame, mask, classes, graph_count):
-    """Per-frame-averaged cross entropy over the legal label set."""
+def _edge_categorical(
+    logits, target, frame, mask, classes, graph_count, only_present=False
+):
+    """Per-frame-averaged cross entropy over the legal label set.
+
+    ``only_present`` averages over frames that actually carry a supervised fact
+    instead of over every frame. Use it where a missing fact means "no label",
+    not "no progress" -- a frame with nothing to supervise must not be counted
+    as a frame with zero loss.
+    """
     if logits.shape[0] == 0:
         zero = logits.sum() * 0
         return zero, zero.detach()
@@ -446,9 +454,54 @@ def _edge_categorical(logits, target, frame, mask, classes, graph_count):
     denominator = torch.zeros(graph_count, device=logits.device).index_add(
         0, frame, mask.float()
     )
-    loss = (numerator / denominator.clamp_min(1)).mean()
+    per_frame = numerator / denominator.clamp_min(1)
+    if only_present:
+        present = denominator.gt(0).float()
+        loss = (per_frame * present).sum() / present.sum().clamp_min(1)
+    else:
+        loss = per_frame.mean()
     accuracy = _masked(logits.argmax(-1).eq(target), mask)
     return loss, accuracy
+
+
+def slot_target_logits(logits, alive, null_logit: float = 0.0):
+    """Categorical logits over object slots plus one null-target class.
+
+    Slot zero is the end effector and is never a target class, so the layout is
+    ``[slot 1, ..., slot n-1, null]`` and the null index is ``n - 1``. Inactive
+    object slots are masked out; when none is alive the distribution collapses
+    onto null, which is the honest answer rather than an arbitrary object.
+    """
+    objects = logits[..., 1:].float()
+    objects = objects.masked_fill(
+        ~alive[..., 1:].bool(), torch.finfo(torch.float32).min
+    )
+    null = objects.new_full((*objects.shape[:-1], 1), float(null_logit))
+    return torch.cat([objects, null], -1)
+
+
+def slot_target_label(target_flag, alive):
+    """Teacher label for the slot-or-null objective.
+
+    Latched, not read off the current frame: with history-off graphs the target
+    leaves the observation whenever it is occluded, and a label that went null
+    there would teach "is the target visible" instead of "which slot is it".
+    Requires no additional state -- the flag is already latched in ``slot_meta``.
+    """
+    live = target_flag.bool() & alive.bool()
+    objects = live[..., 1:]
+    count = objects.long().sum(-1)
+    if bool(count.gt(1).any()):
+        raise ValueError(
+            "more than one live slot carries the target flag; the subtask "
+            "target is unique per episode, so this is an alignment bug rather "
+            "than something to resolve with argmax"
+        )
+    null = objects.shape[-1]
+    label = torch.where(
+        count.eq(1), objects.long().argmax(-1), torch.full_like(count, null)
+    )
+    return label, count.eq(1)
 
 
 class SimpleGraphDecoder(nn.Module):
@@ -579,24 +632,37 @@ class SlotAlignment:
     dest: torch.Tensor
     present: torch.Tensor  # (B, n) slot received an observation this step
     matched: torch.Tensor  # (B, n) slot kept its identity and was observed
+    born: torch.Tensor  # (B, n) inactive slot that received a fresh node
+    replaced: torch.Tensor  # (B, n) live slot overwritten by a different entity
     slots: torch.Tensor  # (B, n, D) observed embeddings, slot-ordered
     uid: torch.Tensor  # (B, n) long
     ent: torch.Tensor  # (B, n) long
     target: torch.Tensor  # (B, n) long
-    mask: torch.Tensor  # (B, n) bool occupancy after this step
+    alive: torch.Tensor  # (B, n) float posterior presence
     overflow: torch.Tensor  # (B,) observed nodes with nowhere to go
 
 
 class SlotAligner(nn.Module):
-    """UID-to-slot assignment. No parameters, no learning, no categories.
+    """Observation-to-slot correspondence. No parameters, no categories.
 
-    Six slots make the whole thing a ``[6, 6]`` equality matrix. The rules are
-    deliberately rigid: slot zero is the end effector, a UID keeps whatever slot
-    it already had, a new UID takes a free slot -- preferring never-used slots
-    over ones holding an entity that has since left the graph -- and zero (the
-    padding UID) matches nothing. Entity category is never consulted, or two
-    interchangeable cans would swap latents whenever the registry reordered
-    them.
+    Assignment order, in full:
+
+    1. the end effector takes slot zero;
+    2. an observed UID returns to whatever slot it already held;
+    3. a newly observed *target* takes a free or replaceable non-target slot;
+    4. a newly observed non-target prefers an inactive slot;
+    5. otherwise a live non-target slot is replaced;
+    6. the retained target slot is never given to a non-target.
+
+    With births enabled, step 4 is decided by matching predicted birth
+    candidates against the fresh observations instead of by index order. The
+    graph-side registry normally guarantees the observation fits, so step 5 is a
+    rare fallback and an unplaceable row is dropped and counted rather than
+    displacing the target.
+
+    Entity category is never consulted -- two interchangeable cans would swap
+    latents whenever the registry reordered them -- and UID is used here and
+    nowhere else in the model.
     """
 
     def __init__(self, num_slots: int, uid_ee: int = UID_EE):
@@ -619,12 +685,65 @@ class SlotAligner(nn.Module):
         out.scatter_(1, index, values * keep.reshape(view).to(values.dtype))
         return out[:, :count]
 
+    @staticmethod
+    def _flag(reference: torch.Tensor, hit: torch.Tensor, position: torch.Tensor):
+        """One-hot ``position`` along the last axis, gated by ``hit``."""
+        index = torch.arange(reference.shape[-1], device=reference.device)
+        return hit[:, None] & index[None, :].eq(position[:, None])
+
+    def _birth_cost(self, candidates: torch.Tensor, observed: torch.Tensor) -> torch.Tensor:
+        """Cost of explaining observed node j with birth candidate i.
+
+        float32 and detached: the assignment is a discrete decision, and the
+        gradient belongs to the losses that use the assignment, not to the
+        arg-min that produced it.
+        """
+        with torch.no_grad():
+            left = observed.float().unsqueeze(2)  # (B, obs, 1, D)
+            right = candidates.float().unsqueeze(1)  # (B, 1, slot, D)
+            cosine = 1.0 - F.cosine_similarity(left, right, dim=-1, eps=1e-6)
+            l1 = F.smooth_l1_loss(
+                left.expand(-1, -1, right.shape[2], -1),
+                right.expand(-1, left.shape[1], -1, -1),
+                reduction="none",
+                beta=1.0,
+            ).mean(-1)
+        return cosine + l1
+
+    def _greedy(self, cost: torch.Tensor, allowed: torch.Tensor) -> torch.Tensor:
+        """Batched greedy assignment of rows to columns.
+
+        A fixed column-count loop over an ``[B, rows*cols]`` arg-min. No
+        ``.item()``, no host synchronisation, and each graph is matched inside
+        its own row -- costs never cross frames.
+        """
+        batch, rows, cols = cost.shape
+        big = torch.finfo(torch.float32).max
+        cost = cost.float().masked_fill(~allowed, big)
+        used_row = torch.zeros(batch, rows, dtype=torch.bool, device=cost.device)
+        used_col = torch.zeros(batch, cols, dtype=torch.bool, device=cost.device)
+        dest = torch.full((batch, rows), cols, dtype=torch.long, device=cost.device)
+        for _ in range(cols):
+            blocked = used_row[:, :, None] | used_col[:, None, :]
+            flat = cost.masked_fill(blocked, big).reshape(batch, -1)
+            best = flat.argmin(-1)
+            found = flat.gather(1, best[:, None]).squeeze(1).lt(big * 0.5)
+            row, col = best.div(cols, rounding_mode="floor"), best.remainder(cols)
+            picked = self._flag(used_row, found, row)
+            dest = torch.where(picked, col[:, None].expand_as(dest), dest)
+            used_row = used_row | picked
+            used_col = used_col | self._flag(used_col, found, col)
+        return dest
+
     def forward(
         self,
         obs: SlotObservation,
         prev_uid: torch.Tensor,
         prev_ent: torch.Tensor,
         prev_target: torch.Tensor,
+        prev_alive: torch.Tensor,
+        prior_slot: torch.Tensor | None = None,
+        births: bool = False,
     ) -> SlotAlignment:
         count = self.num_slots
         if obs.uid.shape[-1] != count:
@@ -639,7 +758,9 @@ class SlotAligner(nn.Module):
         # A padded row's UID is meaningless; zero it so it cannot match.
         uid = obs.uid.long() * valid
         prev_uid = prev_uid.long()
-        prev_valid = prev_uid.ne(0)
+        # Occupancy is now an explicit state, not ``uid != 0``.
+        alive = prev_alive.bool()
+        idx = index[None, :].expand_as(alive)
 
         is_ee = valid & uid.eq(self.uid_ee)
         obj = valid & ~is_ee
@@ -648,29 +769,64 @@ class SlotAligner(nn.Module):
         same = (
             uid.unsqueeze(-1).eq(prev_uid.unsqueeze(1))
             & obj.unsqueeze(-1)
-            & (prev_valid & index.gt(0)).unsqueeze(1)
+            & (alive & index.gt(0)).unsqueeze(1)
         )
         matched_obs = same.any(-1)
         matched_slot = same.long().argmax(-1)
-
         taken = same.any(1) | index.eq(0)
-        fresh = obj & ~matched_obs
-        rank = fresh.long().cumsum(-1) - 1
-        # Free slots first, and among them empty before stale, so a returning
-        # object is only evicted when the scene genuinely needs the room.
-        order = (taken.long() * 1000 + (prev_valid & ~taken).long() * 100 + index).argsort(-1)
-        room = (~taken).long().sum(-1, keepdim=True)
-        overflow = fresh & rank.ge(room)
-        free = order.gather(1, rank.clamp_min(0))
 
-        dropped = torch.full_like(free, count)
+        fresh = obj & ~matched_obs
+        # The retained target keeps its slot even while unobserved, and no
+        # non-target may take it. This is the one asymmetry in the table.
+        retained_target = alive & prev_target.bool() & ~taken
+        inactive = ~alive & ~taken & index.gt(0)
+        stale = alive & ~taken & index.gt(0) & ~retained_target
+
+        birth_dest = torch.full_like(matched_slot, count)
+        if births and prior_slot is not None:
+            cost = self._birth_cost(prior_slot, obs.slots)
+            # A fresh target is assigned before any non-target, so a capacity
+            # shortfall can never cost us the target.
+            cost = cost - (fresh & obs.target.bool()).float()[..., None] * 1e6
+            birth_dest = self._greedy(cost, fresh[..., None] & inactive[:, None, :])
+        born_here = fresh & birth_dest.lt(count)
+        claimed = self._place(
+            torch.ones_like(birth_dest, dtype=torch.bool), birth_dest, born_here
+        )
+
+        # Whatever birth matching did not place falls through to index order:
+        # inactive slots first, then replaceable live non-targets.
+        free = inactive & ~claimed
+        spare = stale & ~claimed
+        usable = free | spare
+        order = torch.where(
+            free, idx, torch.where(spare, idx + count, idx + 4 * count)
+        ).argsort(-1)
+        left = fresh & ~born_here
+        is_target = left & obs.target.bool()
+        rank = torch.where(
+            is_target,
+            is_target.long().cumsum(-1) - 1,
+            is_target.long().sum(-1, keepdim=True)
+            + (left & ~is_target).long().cumsum(-1)
+            - 1,
+        )
+        room = usable.long().sum(-1, keepdim=True)
+        fits = left & rank.lt(room)
+        fallback = order.gather(1, rank.clamp(0, count - 1))
+
+        dropped = torch.full_like(matched_slot, count)
         dest = torch.where(
             is_ee,
-            torch.zeros_like(free),
+            torch.zeros_like(matched_slot),
             torch.where(
                 matched_obs,
                 matched_slot,
-                torch.where(fresh & ~overflow, free, dropped),
+                torch.where(
+                    born_here,
+                    birth_dest,
+                    torch.where(fits, fallback, dropped),
+                ),
             ),
         )
         keep = valid & dest.lt(count)
@@ -681,7 +837,7 @@ class SlotAligner(nn.Module):
         ent_slot = self._place(obs.ent.long(), dest, keep)
         target_slot = self._place(obs.target.long(), dest, keep)
 
-        # An unobserved slot keeps its identity; an evicted one is overwritten
+        # An unobserved slot keeps its identity; a replaced one is overwritten
         # wholesale, which is what "clear the old latent" means here.
         new_uid = torch.where(present, uid_slot, prev_uid)
         new_ent = torch.where(present, ent_slot, prev_ent.long())
@@ -695,12 +851,19 @@ class SlotAligner(nn.Module):
             dest=dest,
             present=present,
             matched=matched & present,
+            born=present & ~alive & index.gt(0),
+            # A live slot handed to a different entity: the prior predicted the
+            # old one, so no dynamics loss has a correspondence this step.
+            replaced=present & alive & ~matched & index.gt(0),
             slots=slots,
             uid=new_uid,
             ent=new_ent,
             target=new_target,
-            mask=new_uid.ne(0),
-            overflow=overflow.sum(-1),
+            # Presence is monotone inside the bounded memory: absence from the
+            # graph is not death, and only a capacity replacement changes who
+            # occupies a live slot.
+            alive=(alive | present).to(torch.float32),
+            overflow=(fresh & ~keep).sum(-1),
         )
 
 
@@ -777,6 +940,32 @@ class SlotGraphDecoder(nn.Module):
             )
         )
 
+    def target_logits(self, slots):
+        """Per-slot target logit. One head, one interpretation everywhere."""
+        return self.target(self.node(slots)).squeeze(-1)
+
+    def target_loss(self, slots, alive, target_flag, step_valid):
+        """Categorical slot-or-null cross entropy.
+
+        The same objective supervises the posterior slots and the predicted
+        prior slots, so the logits mean ``P(target identity | S)`` in both and
+        there is no scale conflict between a per-node BCE and a categorical
+        head.
+        """
+        logits = slot_target_logits(self.target_logits(slots), alive)
+        label, has_target = slot_target_label(target_flag, alive)
+        keep = step_valid.reshape(-1).bool()
+        flat = logits.reshape(-1, logits.shape[-1])
+        error = F.cross_entropy(flat, label.reshape(-1), reduction="none")
+        weight = keep.float()
+        loss = (error * weight).sum() / weight.sum().clamp_min(1)
+        with torch.no_grad():
+            picked = flat.argmax(-1)
+            accuracy = _masked(
+                picked.eq(label.reshape(-1)), keep & has_target.reshape(-1)
+            )
+        return loss, accuracy
+
     def relation_probs(self, src_slot, dst_slot, relations):
         """Admissible-label distributions for one ordered pair of slots.
 
@@ -801,48 +990,33 @@ class SlotGraphDecoder(nn.Module):
         prior_slots: torch.Tensor,
         compact: CompactGraph,
         slot_index: torch.Tensor,
-        slot_mask: torch.Tensor,
+        slot_alive: torch.Tensor,
         slot_target: torch.Tensor,
-        prior_valid: torch.Tensor,
         step_valid: torch.Tensor,
+        relations: torch.Tensor,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         graph_count = compact.graph_count
         count = post_slots.shape[-2]
         step = step_valid.reshape(graph_count).bool()
         post_slots = post_slots.reshape(graph_count, count, self.units)
         prior_slots = prior_slots.reshape(graph_count, count, self.units)
-        slot_mask = slot_mask.reshape(graph_count, count).bool()
-        slot_target = slot_target.reshape(graph_count, count).long()
-        prior_valid = prior_valid.reshape(graph_count, count).bool() & slot_mask
-        valid = slot_mask & step[:, None]
+        alive = slot_alive.reshape(graph_count, count)
+        target_flag = slot_target.reshape(graph_count, count)
+        valid = alive.bool() & step[:, None]
         losses: dict[str, torch.Tensor] = {}
         metrics: dict[str, torch.Tensor] = {}
 
-        nodes = self.node(post_slots) * valid[..., None]
-        # Slot zero is the end effector and never carries the target flag.
-        target_logit = self.target(nodes).squeeze(-1).float()
-        target_mask = valid.clone()
-        target_mask[:, 0] = False
-        target_flag = slot_target.bool()
-        target_error = F.binary_cross_entropy_with_logits(
-            target_logit, target_flag.float(), reduction="none"
+        losses["nodetgt"], metrics["node_target_acc"] = self.target_loss(
+            post_slots, alive, target_flag, step
         )
-        positive = target_mask & target_flag
-        negative = target_mask & ~target_flag
-        has_positive = positive.any(-1)
-        has_negative = negative.any(-1)
-        class_count = has_positive.float() + has_negative.float()
-        losses["nodetgt"] = (
-            (
-                _frame_mean(target_error, positive) * has_positive
-                + _frame_mean(target_error, negative) * has_negative
-            )
-            / class_count.clamp_min(1)
-        ).mean()
-        target_index = target_flag.long().argmax(-1)
-        selected = target_logit.masked_fill(~target_mask, -1e9).argmax(-1)
-        metrics["node_target_acc"] = _masked(selected.eq(target_index), has_positive)
-        metrics["node_target_frac"] = has_positive.float().mean()
+        # The prior target head is masked by *posterior* presence during
+        # training. Masking by its own prediction would let a slot the prior
+        # believes dead carry the correct label at an infinite loss.
+        losses["prior_nodetgt"], metrics["prior_target_acc"] = self.target_loss(
+            prior_slots, alive, target_flag, step
+        )
+        label, has_target = slot_target_label(target_flag, alive)
+        metrics["node_target_frac"] = has_target.float().mean()
 
         # Edge endpoints address observation rows; route them through the
         # alignment so both branches read the same slots the dynamics carry.
@@ -878,34 +1052,31 @@ class SlotGraphDecoder(nn.Module):
             graph_count,
         )
 
-        # The prior branch is supervised only where both endpoints are slots the
-        # model was already tracking: predicting a fact about an entity that
-        # entered the scene this step is not a dynamics failure.
-        flat_prior = prior_valid.reshape(-1)
-        prior_step = (
+        # Prior relations are supervised on the one pair progress is computed
+        # from, using the *observed* target identity as the teacher. Letting the
+        # predicted target choose which edge supplies the label would make the
+        # model gather facts about the wrong object and reinforce its own error.
+        teacher = label.clamp(max=count - 1) + 1  # object slot index, 1..n-1
+        edge_target = teacher.index_select(0, compact.edge_graph)
+        progress_edge = (
             edge_step
-            & flat_prior.index_select(0, src)
-            & flat_prior.index_select(0, dst)
+            & src_slot.eq(0)
+            & dst_slot.eq(edge_target)
+            & has_target.index_select(0, compact.edge_graph)
+            & (compact.edge_rel.unsqueeze(-1) == relations.reshape(1, -1)).any(-1)
         )
         prior_pair = self._pairs(prior_slots, src, dst, compact.edge_rel)
-        losses["prior_relabs"], metrics["prior_relabs_acc"] = _edge_categorical(
+        (
+            losses["prior_progress_relabs"],
+            metrics["prior_progress_acc"],
+        ) = _edge_categorical(
             self.abs_head(prior_pair),
             compact.edge_abs,
             compact.edge_graph,
-            prior_step,
+            progress_edge,
             legal,
             graph_count,
-        )
-        prior_temp_logits = self.temp_head(prior_pair)
-        prior_temp_classes = torch.ones_like(prior_temp_logits, dtype=torch.bool)
-        prior_temp_classes[:, 0] = False
-        losses["prior_reltemp"], metrics["prior_reltemp_acc"] = _edge_categorical(
-            prior_temp_logits,
-            compact.edge_temp,
-            compact.edge_graph,
-            prior_step & compact.edge_temp.ne(0),
-            prior_temp_classes,
-            graph_count,
+            only_present=True,
         )
 
         metrics["graph_real_edges"] = torch.as_tensor(
@@ -914,7 +1085,9 @@ class SlotGraphDecoder(nn.Module):
             dtype=torch.float32,
         )
         metrics["graph_nodes_per_frame"] = valid.float().sum(-1).mean()
-        metrics["slot_prior_facts"] = prior_step.float().sum() / max(graph_count, 1)
+        metrics["slot_progress_facts"] = (
+            progress_edge.float().sum() / max(graph_count, 1)
+        )
         metrics["slot_unrouted_facts"] = (
             (~routed).float().sum() / max(graph_count, 1)
         )

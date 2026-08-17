@@ -5,6 +5,9 @@ horizon: 333
 lamb: 0.95
 compile: True
 amp_dtype: float16
+# GradScaler's initial loss scale. Lower it to skip the warm-up back-off; it
+# does not change the objective.
+grad_scale_init: 65536
 log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
@@ -63,8 +66,9 @@ loss_scales:
   # Slot mode. graphdyn/graphrep have no meaning here: there is no single g to
   # align, so the dynamics are supervised slot-wise instead.
   slotdyn: 1.0
-  prior_relabs: 1.0
-  prior_reltemp: 0.25
+  slotalive: 1.0
+  prior_nodetgt: 1.0
+  prior_progress_relabs: 1.0
   progress_value: 1.0
 
 r2dreamer:
@@ -121,6 +125,11 @@ graph:
   slot_dim: 256
   slot_mixer_layers: 1
   slot_heads: 4
+  # False: presence is predicted and supervised but never consumed, so
+  # imagination carries occupancy forward unchanged -- the persistent-only
+  # baseline. True: birth proposals, observation matching, and straight-through
+  # predicted presence during imagination.
+  slot_births: False
   n_cams: 2
   app_dim: 384
   entity_vocab: 14

@@ -21,6 +21,77 @@ def ee():
     return Node(node_id="ee", node_type="ee", name="end_effector")
 
 
+class RetainedTargetTest(unittest.TestCase):
+    """The subtask target keeps its registry position once admitted.
+
+    History-off graphs emit only what a camera sees, so ``retain`` releases
+    absent objects. The target is the exception: it is fixed for the episode, the
+    world model has to keep predicting it while it is occluded, and releasing its
+    index would let the next arriving object take the slot.
+    """
+
+    TARGET = "t-apple"
+
+    def frame(self, registry, ids, keep_target=True):
+        """One builder step: retain what is visible plus the retained target."""
+        nodes = {"ee": ee(), **{i: node(i, object_type=i.split("-")[1]) for i in ids}}
+        retain = set(nodes)
+        if keep_target and registry.index_of(self.TARGET) is not None:
+            retain.add(self.TARGET)
+        registry.retain(retain)
+        return registry.assign(nodes, protected_id=self.TARGET)
+
+    def test_an_absent_target_keeps_its_index_and_its_protection(self):
+        registry = EntityRegistry(n_max=4)  # ee plus three objects
+        first = self.frame(registry, [self.TARGET, "a-can", "b-can"])
+        index = first[self.TARGET].index
+
+        # The target leaves the view while two other objects stay and a third
+        # arrives. It is not emitted, but its slot is still its own.
+        later = self.frame(registry, ["a-can", "b-can", "c-box"])
+        self.assertNotIn(self.TARGET, later)
+        self.assertEqual(registry.index_of(self.TARGET), index)
+        for other in later.values():
+            if other.node_type != "ee":
+                self.assertNotEqual(other.index, index)
+
+        # And it returns to exactly the same position.
+        back = self.frame(registry, [self.TARGET, "a-can"])
+        self.assertEqual(back[self.TARGET].index, index)
+
+    def test_a_retained_target_costs_one_object_slot(self):
+        registry = EntityRegistry(n_max=4)
+        self.frame(registry, [self.TARGET, "a-can"])
+        # Three non-targets compete for the two remaining object slots.
+        current = self.frame(registry, ["a-can", "b-can", "c-can"])
+        self.assertEqual(len(registry), 3)  # target plus two non-targets
+        self.assertEqual(len([n for n in current.values() if n.node_type != "ee"]), 2)
+        self.assertGreater(registry.overflow_drops, 0)
+
+    def test_the_target_force_admits_after_the_table_filled_without_it(self):
+        registry = EntityRegistry(n_max=4)
+        # Three non-targets take every object slot before the target is seen.
+        self.frame(registry, ["a-can", "b-can", "c-can"])
+        self.assertEqual(len(registry), 3)
+        current = self.frame(registry, [self.TARGET, "a-can", "b-can", "c-can"])
+        self.assertIn(self.TARGET, current)
+
+    def test_releasing_the_target_is_a_no_op_before_it_is_admitted(self):
+        registry = EntityRegistry(n_max=4)
+        # No slot sits reserved for a target that has never appeared.
+        current = self.frame(registry, ["a-can", "b-can", "c-can"])
+        self.assertEqual(len([n for n in current.values() if n.node_type != "ee"]), 3)
+        self.assertIsNone(registry.index_of(self.TARGET))
+
+    def test_reset_clears_the_retained_target(self):
+        registry = EntityRegistry(n_max=4)
+        self.frame(registry, [self.TARGET, "a-can"])
+        registry.reset_episode()
+        self.assertIsNone(registry.index_of(self.TARGET))
+        self.assertEqual(len(registry), 0)
+        self.assertEqual(registry.episode_entities, 0)
+
+
 class EntityRegistryEvictionTest(unittest.TestCase):
 
     def test_overrepresented_type_is_evicted_before_oldest_singleton(self):

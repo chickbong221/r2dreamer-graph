@@ -68,6 +68,10 @@ class EntityRegistry:
         instance count. Reaching ``n_max - 1`` is exactly the condition under
         which a registry that never released absent residents would have
         saturated, which is what makes a zero ``overflow_drops`` readable.
+
+        Live occupancy can exceed what the cameras see: the builder retains the
+        subtask target's index while it is absent, so one of the ``n_max - 1``
+        object positions may be held by a vertex that is not in the frame.
         """
         return len(self._ever_seen)
 

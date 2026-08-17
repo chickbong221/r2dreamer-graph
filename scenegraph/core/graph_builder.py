@@ -311,19 +311,25 @@ class GraphBuilder:
         # With history off the vertex set is exactly this frame, so slots held
         # for absent objects are slots nothing can use -- and nothing else
         # frees them, because commit/evict_expired are both skipped below.
-        # Capacity has to describe what the cameras can see.
+        # Capacity has to describe what the cameras can see, with one exception:
+        # the subtask target keeps its registry position once admitted. It is
+        # fixed for the episode, the world model has to keep predicting it while
+        # it is occluded, and releasing it would let the next arriving object
+        # take its slot.
         if not self.staleness_enabled:
-            self.registry.retain(nodes.keys())
+            retain_ids = set(nodes.keys())
+            if (
+                active_target_node_id is not None
+                and self.registry.index_of(active_target_node_id) is not None
+            ):
+                retain_ids.add(active_target_node_id)
+            self.registry.retain(retain_ids)
 
-        # History-off graphs protect the target only while its exact instance
-        # is present in the current observation. If it later reappears, the
-        # registry force-admits it by evicting a non-target.
-        protected_target = (
-            active_target_node_id
-            if active_target_node_id is not None and active_target_node_id in nodes
-            else None
-        )
-        nodes = self.registry.assign(nodes, protected_id=protected_target)
+        # Protection is unconditional, not "while visible": an absent retained
+        # target must also be ineligible for category-balanced eviction. Before
+        # the target is ever admitted this is a no-op, so no slot sits reserved
+        # for it; when it first appears it force-admits by evicting a non-target.
+        nodes = self.registry.assign(nodes, protected_id=active_target_node_id)
 
         # k_persist=-1 must not inject an overflow-evicted old instance again
         # on the next frame and displace one of the newer residents.

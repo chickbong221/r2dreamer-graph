@@ -46,7 +46,7 @@ def make_config(enabled, graph_only=False):
     return config
 
 
-SLOT_NODES = 6
+SLOT_NODES = 8
 SLOT_EDGES = 16
 
 
@@ -96,8 +96,8 @@ def slot_spaces():
         "graph_node_ent": gym.spaces.Box(0, 255, (SLOT_NODES,), np.uint8),
         "graph_node_uid": gym.spaces.Box(0, 255, (SLOT_NODES,), np.uint8),
         "graph_node_target": gym.spaces.Box(0, 1, (SLOT_NODES,), np.uint8),
-        "graph_edge_src": gym.spaces.Box(0, 5, (SLOT_EDGES,), np.uint8),
-        "graph_edge_dst": gym.spaces.Box(0, 5, (SLOT_EDGES,), np.uint8),
+        "graph_edge_src": gym.spaces.Box(0, SLOT_NODES - 1, (SLOT_EDGES,), np.uint8),
+        "graph_edge_dst": gym.spaces.Box(0, SLOT_NODES - 1, (SLOT_EDGES,), np.uint8),
         "graph_edge_rel": gym.spaces.Box(0, 10, (SLOT_EDGES,), np.uint8),
         "graph_edge_abs": gym.spaces.Box(0, 16, (SLOT_EDGES,), np.uint8),
         "graph_edge_temp": gym.spaces.Box(0, 5, (SLOT_EDGES,), np.uint8),
@@ -280,29 +280,75 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         self.assertIsNone(model.graph_encoder.query)
         self.assertEqual(model.rssm.n_slots, SLOT_NODES)
         self.assertEqual(model.rssm.flat_sem, 8)  # the readout, not the slots
-        self.assertEqual(model.rssm._deter_net._dyn_in3[0].in_features, 6 * 8 + 6)
+        self.assertEqual(
+            model.rssm._deter_net._dyn_in3[0].in_features, SLOT_NODES * 8 + SLOT_NODES
+        )
         self.assertEqual(model._loss_scales["image"], 1.0)
 
         raw = slot_sequence()
         action, state = model.act(raw[:, 0].clone(), model.get_initial_state(2))
         self.assertEqual(action.shape, (2, 3))
         self.assertIn("slot_meta", state)
+        self.assertIn("slot_alive", state)
         self.assertEqual(tuple(state["slot_meta"].shape), (2, SLOT_NODES, 3))
+        self.assertEqual(tuple(state["slot_alive"].shape), (2, SLOT_NODES))
 
         posterior, metrics = model._cal_grad(model.preprocess(raw), model.rssm.initial(2))
-        self.assertEqual(len(posterior), 4)
+        self.assertEqual(len(posterior), 5)
         self.assertEqual(tuple(posterior[2].shape), (2, 3, SLOT_NODES, 8))
+        self.assertEqual(tuple(posterior[4].shape), (2, 3, SLOT_NODES))
         for key in (
-            "loss/slotdyn", "loss/nodetgt", "loss/relabs", "loss/reltemp",
-            "loss/prior_relabs", "loss/prior_reltemp", "loss/dyn", "loss/rep",
+            "loss/slotdyn", "loss/slotalive", "loss/nodetgt", "loss/prior_nodetgt",
+            "loss/relabs", "loss/reltemp", "loss/prior_progress_relabs",
+            "loss/dyn", "loss/rep",
         ):
             self.assertIn(key, metrics)
             self.assertTrue(torch.isfinite(metrics[key]), key)
+        # Replaced by the teacher-forced end-effector-to-target loss.
+        self.assertNotIn("loss/prior_relabs", metrics)
+        self.assertNotIn("loss/prior_reltemp", metrics)
         # The pooled-mode losses have no meaning here and must not appear.
         self.assertNotIn("loss/graphdyn", metrics)
         self.assertNotIn("loss/graphrep", metrics)
         self.assertNotIn("loss/progress_value", metrics)
         self.assertEqual(float(metrics["slot_overflow"]), 0.0)
+        self.assertIn("presence_brier", metrics)
+
+    def test_object_slot_permutation_does_not_move_the_heads(self):
+        model = Dreamer(make_slot_config(), *slot_spaces()).to("cpu").eval()
+        rssm_model = model.rssm
+        stoch, deter, sem, meta, alive = rssm_model.initial(1)
+        torch.manual_seed(0)
+        sem = torch.randn_like(sem)
+        alive = torch.ones_like(alive)
+        order = [0, 4, 2, 7, 1, 6, 3, 5][:SLOT_NODES]
+        with torch.no_grad():
+            feat = rssm_model.get_feat(stoch, deter, sem, alive)
+            other = rssm_model.get_feat(
+                stoch, deter, sem[:, order], alive[:, order]
+            )
+            torch.testing.assert_close(feat, other, atol=1e-5, rtol=1e-5)
+            for head in (model.reward, model.cont, model.value):
+                torch.testing.assert_close(
+                    head(feat).mode(), head(other).mode(), atol=1e-5, rtol=1e-5
+                )
+            torch.testing.assert_close(
+                model.actor(feat).mode, model.actor(other).mode,
+                atol=1e-5, rtol=1e-5,
+            )
+
+    def test_slot_births_off_keeps_imagined_occupancy_fixed(self):
+        config = make_slot_config()
+        config.graph.slot_births = False
+        model = Dreamer(config, *slot_spaces()).to("cpu")
+        self.assertFalse(model.rssm.slot_births)
+        _, metrics = model._cal_grad(
+            model.preprocess(slot_sequence()), model.rssm.initial(2)
+        )
+        # Presence is still predicted and supervised, but imagination carries
+        # occupancy forward unchanged, so the rollout creates nothing.
+        self.assertIn("loss/slotalive", metrics)
+        self.assertEqual(float(metrics["imag_births"]), 0.0)
 
     def test_slot_mode_needs_the_relation_only_contract(self):
         config = make_slot_config()

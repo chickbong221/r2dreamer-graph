@@ -12,7 +12,7 @@ from tools import rpad, weight_init_
 # Replay and the trainer copy latents by name. Slot mode adds one metadata
 # tensor beside the slot values; both are ordinary float32 rows, so nothing in
 # the storage path needs to know what they mean.
-LATENT_STATE_KEYS = ("stoch", "deter", "sem", "slot_meta")
+LATENT_STATE_KEYS = ("stoch", "deter", "sem", "slot_meta", "slot_alive")
 
 # Channels of ``slot_meta``. Identity, entity type and the subtask target flag
 # are latched with the slot they describe and survive imagination unchanged.
@@ -55,17 +55,73 @@ class SlotMixer(nn.Module):
         score = score.float().masked_fill(~allow, -1e9)
         attention = torch.softmax(score, -1).to(x.dtype)
         out = (attention @ value).transpose(1, 2).reshape(batch, count, -1)
-        return x + self.proj(out) * mask[..., None].to(x.dtype)
+        # Inactive slots are excluded as keys but not as queries: an empty birth
+        # proposal has to be able to read the end effector and the objects that
+        # already exist, or every proposal sees the same thing and none of them
+        # can propose anything.
+        return x + self.proj(out)
+
+
+class SetSummary(nn.Module):
+    """Permutation-invariant view of the slot table for the global state.
+
+    Flattening ``slot 0 | slot 1 | ... | slot 7`` makes h depend on which slot
+    two interchangeable cans happened to land in. Mean, max and count over a
+    *shared* object projection do not: mean carries the overall configuration,
+    max the salient object, count the cardinality. The end effector stays
+    separate because slot zero has a fixed semantic role.
+
+    Computed in float32 throughout. The masked max needs a sentinel below every
+    real feature, and under AMP a literal ``-inf`` is one refactor away from a
+    ``0 * inf``.
+    """
+
+    def __init__(self, slot_dim: int, out_dim: int | None = None):
+        super().__init__()
+        width = int(out_dim or slot_dim)
+        # Parameter-free: a learned gain would let one slot dominate h by
+        # magnitude alone.
+        self.norm = nn.LayerNorm(slot_dim, elementwise_affine=False)
+        self.ee = nn.Linear(slot_dim, width)
+        self.objects = nn.Linear(slot_dim, width)
+        self.out_dim = 3 * width + 1
+        self.apply(weight_init_)
+
+    def forward(self, slots: torch.Tensor, alive: torch.Tensor) -> torch.Tensor:
+        # (B, n, D), (B, n)
+        slots = self.norm(slots.float())
+        alive = alive.float()
+        # Mask the end effector too: an MLP with biases turns a zeroed reset
+        # slot into a nonzero summary otherwise.
+        ee = self.ee(slots[:, 0]) * alive[:, :1]
+        objects = self.objects(slots[:, 1:])
+        weight = alive[:, 1:]
+        live = weight > 0
+        total = weight.sum(-1, keepdim=True)
+        mean = (objects * weight[..., None]).sum(-2) / total.clamp_min(1.0)
+        sentinel = torch.finfo(torch.float32).min
+        maximum = objects.masked_fill(~live[..., None], sentinel).max(-2).values
+        maximum = torch.where(
+            live.any(-1, keepdim=True), maximum, torch.zeros_like(maximum)
+        )
+        return torch.cat([ee, mean, maximum, total], -1)
 
 
 class SlotPrior(nn.Module):
-    """Shared per-slot one-step prediction.
+    """Shared per-slot one-step prediction, with births.
 
-    Every slot is pushed through the same parameters, so nothing about the model
-    depends on which slot an object landed in. The global part of the state --
-    h, the predicted z and the action -- enters as one broadcast context vector;
-    the only slot-specific inputs are the slot itself, its entity type and its
-    occupancy.
+    Every slot goes through the same parameters, so nothing depends on which
+    slot an object landed in. The global part of the state -- h, the predicted z
+    and the action -- enters as one broadcast context; the only slot-specific
+    inputs are the slot itself and its occupancy. No entity embedding: entity
+    semantics are already in the GNN slot, and no target flag: reading the
+    current label would make the target objective trivial.
+
+    An inactive object slot substitutes a learned birth query for its (empty)
+    content, which is what lets it propose an object rather than being
+    indistinguishable from every other empty slot. Persistence predicts a
+    residual; birth predicts an absolute vector, because a residual from padding
+    is the wrong parameterisation for something that did not exist.
     """
 
     def __init__(
@@ -74,8 +130,7 @@ class SlotPrior(nn.Module):
         deter: int,
         flat_stoch: int,
         act_dim: int,
-        entity_vocab: int,
-        entity_embed: int,
+        num_slots: int,
         hidden: int,
         heads: int = 4,
         layers: int = 1,
@@ -84,14 +139,14 @@ class SlotPrior(nn.Module):
     ):
         super().__init__()
         act_cls = getattr(nn, act)
+        self.num_slots = int(num_slots)
         self.ctx = nn.Sequential(
             nn.Linear(deter + flat_stoch + act_dim, slot_dim),
             nn.RMSNorm(slot_dim, eps=1e-04, dtype=torch.float32),
             act_cls(),
         )
-        self.entity = nn.Embedding(entity_vocab, entity_embed)
         self.inp = nn.Sequential(
-            nn.Linear(2 * slot_dim + entity_embed + 1, slot_dim),
+            nn.Linear(2 * slot_dim + 1, slot_dim),
             nn.RMSNorm(slot_dim, eps=1e-04, dtype=torch.float32),
             act_cls(),
         )
@@ -103,42 +158,54 @@ class SlotPrior(nn.Module):
             nn.Linear(hidden, slot_dim),
         )
         self.delta = nn.Linear(slot_dim, slot_dim)
+        self.birth = nn.Linear(slot_dim, slot_dim)
+        self.alive = nn.Linear(slot_dim, 1)
+        # Proposal identifiers, not object identities: they enter only while a
+        # slot is inactive and leave the transition once it is matched, so the
+        # occupied-slot permutation guarantee is untouched.
+        self.birth_query = nn.Parameter(torch.empty(self.num_slots - 1, slot_dim))
         self.outscale = float(outscale)
         self.apply(weight_init_)
-        self.scale_delta()
+        self.reset_heads()
 
-    def scale_delta(self):
-        """Start near the identity so an untrained prior carries slots forward
-        rather than scrambling them. Re-applied after the owner's global
-        ``apply(weight_init_)``, which would otherwise undo it."""
+    def reset_heads(self):
+        """Near-identity persistence and an inactive-by-default presence head.
+
+        Re-applied after the owner's global ``apply(weight_init_)``, which would
+        otherwise undo it.
+        """
         with torch.no_grad():
             self.delta.weight.mul_(self.outscale)
             self.delta.bias.zero_()
+            nn.init.normal_(self.birth_query, std=0.02)
+            # Births are rare; start the presence head predicting "not alive"
+            # so the class-balanced loss shapes it rather than fighting it.
+            self.alive.bias.fill_(-2.0)
 
-    def forward(self, slots, deter, stoch, action, ent, mask):
-        # (B, n, D), (B, D_h), (B, S, K), (B, A), (B, n), (B, n)
-        batch, count = mask.shape
+    def forward(self, slots, deter, stoch, action, alive):
+        # (B, n, D), (B, D_h), (B, S, K), (B, A), (B, n)
+        batch, count = alive.shape
         action = action / torch.clip(torch.abs(action), min=1.0).detach()
         parts = [deter, action]
         if stoch is not None:
             parts.insert(1, stoch.reshape(batch, -1))
         ctx = self.ctx(torch.cat(parts, -1))
-        keep = mask[..., None].to(slots.dtype)
+        live = alive.bool()
+        keep = alive[..., None].to(slots.dtype)
+
+        query = self.birth_query.to(slots.dtype)[None].expand(batch, -1, -1)
+        query = torch.cat([torch.zeros_like(query[:, :1]), query], 1)
+        base = torch.where(live[..., None], slots, query)
         x = self.inp(
-            torch.cat(
-                [
-                    slots,
-                    ctx[:, None].expand(batch, count, -1),
-                    self.entity(ent.long()),
-                    keep,
-                ],
-                -1,
-            )
+            torch.cat([base, ctx[:, None].expand(batch, count, -1), keep], -1)
         )
         for mixer in self.mixers:
-            x = mixer(x, mask)
+            x = mixer(x, live)
         x = x + self.res(x)
-        return (slots + self.delta(x)) * keep
+        candidate = torch.where(
+            live[..., None], slots + self.delta(x), self.birth(x)
+        )
+        return candidate, self.alive(x).squeeze(-1)
 
 
 class Deter(nn.Module):
@@ -305,8 +372,11 @@ class RSSM(nn.Module):
             self._sem_layers = int(config.sem_layers)
             self.n_slots = int(graph_config.n_max)
             self.slot_dim = int(graph_config.slot_dim)
+            self.slot_births = bool(getattr(graph_config, "slot_births", False))
             self.flat_sem = self.slot_dim
-            self._slot_input = self.n_slots * self.slot_dim + self.n_slots
+            # Set the width from the summary module rather than the slot table:
+            # h sees an invariant summary, never the ordered flatten.
+            self._slot_input = 3 * self.slot_dim + 1
         elif self.graph_simple:
             # One flat continuous vector: no categorical factorisation, so
             # _sem_stoch/_sem_discrete stay zero and every reshape keys off
@@ -334,7 +404,7 @@ class RSSM(nn.Module):
         if self.graph_only:
             self.state_keys = ("deter", "sem")
         elif self.graph_slots:
-            self.state_keys = ("stoch", "deter", "sem", "slot_meta")
+            self.state_keys = ("stoch", "deter", "sem", "slot_meta", "slot_alive")
         elif self.semantic:
             self.state_keys = ("stoch", "deter", "sem")
         else:
@@ -395,25 +465,22 @@ class RSSM(nn.Module):
             # No semantic head at all: the posterior is the observed slot and
             # the prior is the shared slot transition.
             self._sem_obs = self._sem_img = None
-            # Parameter-free on purpose. This normalisation exists to put every
-            # slot on a common scale before they are flattened into one wide
-            # transition input; a learned gain would let the model undo it and
-            # let one slot dominate h by magnitude alone.
-            self._slot_norm = nn.LayerNorm(self.slot_dim, elementwise_affine=False)
+            self._summary = SetSummary(self.slot_dim)
             self._aligner = SlotAligner(self.n_slots)
             self._slot_prior = SlotPrior(
                 self.slot_dim,
                 self._deter,
                 self.flat_stoch,
                 act_dim,
-                int(graph_config.entity_vocab),
-                int(graph_config.embed),
+                self.n_slots,
                 self._hidden,
                 heads=int(graph_config.slot_heads),
                 layers=int(graph_config.slot_mixer_layers),
                 act=str(config.act),
             )
             self._slot_readout = SlotReadout(self.slot_dim, self.flat_sem)
+            if self._summary.out_dim != self._slot_input:
+                raise ValueError("set-summary width does not match the transition input")
         elif self.graph_simple:
             # Q(h, c) and P(h). Neither reads g_{t-1}: it is already in h.
             self._sem_obs = self._deterministic_head(
@@ -436,7 +503,7 @@ class RSSM(nn.Module):
             )
         self.apply(weight_init_)
         if self.graph_slots:
-            self._slot_prior.scale_delta()
+            self._slot_prior.reset_heads()
             nn.init.normal_(self._slot_readout.query, std=0.02)
 
     def _semantic_head(self, inp_dim, act_name, name):
@@ -492,40 +559,65 @@ class RSSM(nn.Module):
 
     # ---------------------------------------------------------------- slots --
     @staticmethod
-    def slot_mask(slot_meta):
-        """Occupancy. A slot is live exactly while it holds an identity."""
-        return slot_meta[..., SLOT_META_UID].ne(0)
+    def slot_mask(slot_alive):
+        """Occupancy. Predicted by the prior, corrected by the posterior.
+
+        Never ``uid != 0``: identity is observation bookkeeping and must not
+        gate a generative state.
+        """
+        return slot_alive > 0.5
 
     @staticmethod
     def slot_meta_from(uid, ent, target):
         return torch.stack([uid, ent, target], -1).to(torch.float32)
 
-    def slot_transition_input(self, sem, mask):
-        """The whole masked slot matrix, flattened, plus the mask itself.
+    def slot_transition_input(self, sem, alive):
+        """Permutation-invariant set summary of the slot table."""
+        return self._summary(sem, alive)
 
-        Six 256-wide slots are 1,536 values -- small enough to hand the
-        deterministic transition directly, which is the point: the temporal
-        model sees slots, not a summary of them.
-        """
-        keep = mask[..., None].to(sem.dtype)
-        normed = self._slot_norm(sem) * keep
-        return torch.cat(
-            [normed.reshape(*normed.shape[:-2], -1), mask.to(sem.dtype)], -1
-        )
-
-    def semantic_feature(self, sem, slot_meta):
+    def semantic_feature(self, sem, slot_alive):
         """Readout for the ordinary Dreamer heads. Never for the dynamics."""
-        return self._slot_readout(sem, self.slot_mask(slot_meta))
+        return self._slot_readout(sem, self.slot_mask(slot_alive))
 
-    def slot_prior(self, sem, deter, stoch, action, slot_meta):
-        return self._slot_prior(
-            sem,
-            deter,
-            stoch,
-            action,
-            slot_meta[..., SLOT_META_ENT],
-            self.slot_mask(slot_meta),
+    def slot_prior(self, sem, deter, stoch, action, slot_alive):
+        return self._slot_prior(sem, deter, stoch, action, slot_alive)
+
+    def slot_presence(self, alive_logit, previous):
+        """Straight-through presence for imagination.
+
+        Hard occupancy forward, gradient through the probability. Gated by
+        ``slot_births``: with births off the carried presence passes through
+        unchanged, which is what keeps the persistent-only model behaviourally
+        identical to the version that had no presence head.
+        """
+        if not self.slot_births:
+            return previous
+        probability = torch.sigmoid(alive_logit.float())
+        hard = probability.gt(0.5).float()
+        alive = hard + probability - probability.detach()
+        # The end effector exists for the whole episode once initialised.
+        ee = previous[:, :1]
+        return torch.cat([ee, alive[:, 1:]], 1)
+
+    def slot_alive_loss(self, logit, target, persistent, born, inactive):
+        """Class-balanced presence BCE.
+
+        Each group is averaged before the groups are averaged. Births are rare;
+        pooling them with the many inactive negatives would let the head reach a
+        good loss by predicting "empty" forever.
+        """
+        error = F.binary_cross_entropy_with_logits(
+            logit.float(), target.float(), reduction="none"
         )
+        total = error.new_zeros(())
+        available = error.new_zeros(())
+        for group in (persistent, born, inactive):
+            weight = group.to(error.dtype)
+            count = weight.sum()
+            present = count.gt(0).to(error.dtype)
+            total = total + ((error * weight).sum() / count.clamp_min(1)) * present
+            available = available + present
+        return total / available.clamp_min(1)
 
     def initial(self, batch_size):
         """Return an initial latent state."""
@@ -555,7 +647,12 @@ class RSSM(nn.Module):
                 dtype=torch.float32,
                 device=self._device,
             )
-            return stoch, deter, sem, slot_meta
+            # Every slot starts inactive, the end effector included: the first
+            # observation initialises it, and no birth loss crosses a reset.
+            slot_alive = torch.zeros(
+                batch_size, self.n_slots, dtype=torch.float32, device=self._device
+            )
+            return stoch, deter, sem, slot_meta, slot_alive
         if self.semantic:
             return stoch, deter, sem
         return stoch, deter
@@ -567,7 +664,7 @@ class RSSM(nn.Module):
         if self.graph_slots:
             if slot_obs is None:
                 raise ValueError("slot-graph RSSM.observe requires slot_obs")
-            stoch, deter, sem, slot_meta = initial
+            stoch, deter, sem, slot_meta, slot_alive = initial
             steps = []
             for i in range(L):
                 step = self.obs_step(
@@ -578,10 +675,12 @@ class RSSM(nn.Module):
                     reset[:, i],
                     sem=sem,
                     slot_meta=slot_meta,
+                    slot_alive=slot_alive,
                     slot_obs=slot_obs.step(i),
                 )
                 stoch, deter = step["stoch"], step["deter"]
                 sem, slot_meta = step["sem"], step["slot_meta"]
+                slot_alive = step["slot_alive"]
                 steps.append(step)
             return {
                 key: torch.stack([step[key] for step in steps], dim=1)
@@ -667,13 +766,22 @@ class RSSM(nn.Module):
         sem=None,
         graph_token=None,
         slot_meta=None,
+        slot_alive=None,
         slot_obs=None,
     ):
         """Single posterior step."""
         # (B, S, K), (B, D), (B, A), (B, E), (B,)
         if self.graph_slots:
             return self._obs_step_slots(
-                stoch, deter, prev_action, embed, reset, sem, slot_meta, slot_obs
+                stoch,
+                deter,
+                prev_action,
+                embed,
+                reset,
+                sem,
+                slot_meta,
+                slot_alive,
+                slot_obs,
             )
         if not self.graph_only:
             stoch = torch.where(
@@ -723,18 +831,30 @@ class RSSM(nn.Module):
         return stoch, deter, logit
 
     def _obs_step_slots(
-        self, stoch, deter, prev_action, embed, reset, sem, slot_meta, slot_obs
+        self,
+        stoch,
+        deter,
+        prev_action,
+        embed,
+        reset,
+        sem,
+        slot_meta,
+        slot_alive,
+        slot_obs,
     ):
-        """Posterior step with six slots in place of the semantic vector.
+        """Posterior step with a slot table in place of the semantic vector.
 
-        Order matters. The deterministic transition runs first and reads only
-        carried state, so h is identical in observation and imagination; the
-        slot prior runs next, on the *predicted* z rather than the posterior
-        one, so it stays a genuine prediction; only then does the observation
-        arrive and replace the slots it can account for.
+        Order matters, and it is what makes the leakage rule hold: the
+        deterministic transition reads only carried state, so h is identical in
+        observation and imagination; the slot prior runs next on the *predicted*
+        z, so it is a genuine prediction and cannot see this frame's graph; only
+        then does the observation arrive, correct presence, and replace the slots
+        it can account for.
         """
-        if sem is None or slot_meta is None or slot_obs is None:
-            raise ValueError("slot obs_step requires sem, slot_meta and slot_obs")
+        if sem is None or slot_meta is None or slot_alive is None or slot_obs is None:
+            raise ValueError(
+                "slot obs_step requires sem, slot_meta, slot_alive and slot_obs"
+            )
 
         def blank(value):
             return torch.where(
@@ -745,26 +865,28 @@ class RSSM(nn.Module):
 
         stoch, deter = blank(stoch), blank(deter)
         prev_action = blank(prev_action)
-        # An episode boundary drops every slot value and every identity: a UID
-        # is episode-scoped, so carrying one across a reset would alias two
+        # An episode boundary drops every slot value, identity and presence: a
+        # UID is episode-scoped, so carrying one across a reset would alias two
         # unrelated objects.
         sem, slot_meta = blank(sem), blank(slot_meta)
+        slot_alive = blank(slot_alive)
+        was_reset = reset.reshape(-1).bool()
 
         deter = self._deter_net(
             stoch,
             deter,
             prev_action,
-            self.slot_transition_input(sem, self.slot_mask(slot_meta)),
+            self.slot_transition_input(sem, slot_alive),
         )
         logit = self._obs_net(torch.cat([deter, embed], -1))
         stoch = self.get_dist(logit).rsample()
         prior_logit = self._img_net(deter)
-        prior_slot = self.slot_prior(
+        prior_slot, prior_alive_logit = self.slot_prior(
             sem,
             deter,
             self.get_dist(prior_logit).rsample(),
             prev_action,
-            slot_meta,
+            slot_alive,
         )
 
         align = self._aligner(
@@ -772,12 +894,16 @@ class RSSM(nn.Module):
             slot_meta[..., SLOT_META_UID],
             slot_meta[..., SLOT_META_ENT],
             slot_meta[..., SLOT_META_TARGET],
+            slot_alive,
+            prior_slot=prior_slot,
+            births=self.slot_births,
         )
-        keep = align.mask[..., None].to(prior_slot.dtype)
-        # Observed slots replace, carried-but-unobserved slots fall back to the
-        # prior, and padding is exactly zero. No learned fusion: in a privileged
-        # relation-only graph a registered node is observed, so a gate would
-        # have almost nothing to learn from.
+        alive = align.alive
+        keep = alive[..., None].to(prior_slot.dtype)
+        # Observed slots replace, live-but-unobserved slots fall back to the
+        # prior, and an inactive slot is exactly zero. No learned fusion: in a
+        # privileged relation-only graph a registered node is observed, so a gate
+        # would have almost nothing to learn from.
         sem = (
             torch.where(
                 align.present[..., None],
@@ -794,33 +920,47 @@ class RSSM(nn.Module):
             "prior_logit": prior_logit,
             "sem": sem,
             "slot_meta": slot_meta,
+            "slot_alive": alive,
             "prior_slot": prior_slot,
+            "prior_alive_logit": prior_alive_logit,
             "present": align.present,
             "matched": align.matched,
+            "born": align.born,
+            "replaced": align.replaced,
             "dest": align.dest,
             "overflow": align.overflow,
+            # A reset transition has no previous state to have predicted from,
+            # so no presence or dynamics loss may be charged against it.
+            "reset": was_reset,
         }
 
-    def img_step(self, stoch, deter, prev_action, sem=None, slot_meta=None):
+    def img_step(
+        self, stoch, deter, prev_action, sem=None, slot_meta=None, slot_alive=None
+    ):
         """Single prior step (no observation)."""
         if self.graph_slots:
-            if sem is None or slot_meta is None:
-                raise ValueError("slot img_step requires sem and slot_meta")
+            if sem is None or slot_alive is None:
+                raise ValueError("slot img_step requires sem and slot_alive")
             deter = self._deter_net(
                 stoch,
                 deter,
                 prev_action,
-                self.slot_transition_input(sem, self.slot_mask(slot_meta)),
+                self.slot_transition_input(sem, slot_alive),
             )
             stoch, logit = self.prior(deter)
-            # Identity, entity type and the target flag are latched: an imagined
-            # rollout may move slots, never rename them.
-            sem = self.slot_prior(sem, deter, stoch, prev_action, slot_meta)
+            sem, alive_logit = self.slot_prior(
+                sem, deter, stoch, prev_action, slot_alive
+            )
+            # UID, entity type and the target flag are observer-side bookkeeping
+            # and stay latched: an imagined rollout may move and create slots,
+            # but it cannot know a future observation's identity codes.
             return {
                 "stoch": stoch,
                 "deter": deter,
                 "sem": sem,
                 "slot_meta": slot_meta,
+                "slot_alive": self.slot_presence(alive_logit, slot_alive),
+                "alive_logit": alive_logit,
                 "logit": logit,
             }
 
@@ -854,16 +994,21 @@ class RSSM(nn.Module):
         stoch = self.get_dist(logit).rsample()
         return stoch, logit
 
-    def imagine_with_action(self, stoch, deter, actions, sem=None, slot_meta=None):
+    def imagine_with_action(
+        self, stoch, deter, actions, sem=None, slot_meta=None, slot_alive=None
+    ):
         """Roll out prior dynamics given a sequence of actions."""
         # (B, S, K), (B, D), (B, T, A)
         L = actions.shape[1]
         if self.graph_slots:
             steps = []
             for i in range(L):
-                step = self.img_step(stoch, deter, actions[:, i], sem, slot_meta)
+                step = self.img_step(
+                    stoch, deter, actions[:, i], sem, slot_meta, slot_alive
+                )
                 stoch, deter = step["stoch"], step["deter"]
                 sem, slot_meta = step["sem"], step["slot_meta"]
+                slot_alive = step["slot_alive"]
                 steps.append(step)
             return {
                 key: torch.stack([step[key] for step in steps], dim=1)
@@ -892,7 +1037,7 @@ class RSSM(nn.Module):
             return stochs, deters, torch.stack(sems, dim=1)
         return stochs, deters
 
-    def get_feat(self, stoch, deter, sem=None, slot_meta=None):
+    def get_feat(self, stoch, deter, sem=None, slot_alive=None):
         """Flatten stoch and concatenate with deter."""
         # (B, S, K), (B, D)
         # (B, S*K)
@@ -901,10 +1046,10 @@ class RSSM(nn.Module):
             stoch = stoch.reshape(*stoch.shape[:-2], self._stoch * self._discrete)
             parts.append(stoch)
         if self.graph_slots:
-            if sem is None or slot_meta is None:
-                raise ValueError("slot features require sem and slot_meta")
+            if sem is None or slot_alive is None:
+                raise ValueError("slot features require sem and slot_alive")
             # The heads see a pooled readout; the dynamics never do.
-            parts.append(self.semantic_feature(sem, slot_meta))
+            parts.append(self.semantic_feature(sem, slot_alive))
         elif self.semantic:
             if sem is None:
                 raise ValueError("semantic features require sem")

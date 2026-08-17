@@ -62,20 +62,80 @@ class ProgressStage:
     weight: float
 
 
-# Pick. Every rung is a fact the graph already carries, ordered the way the
-# subtask is actually solved: get near, get level, be a plausible grasp, touch,
-# hold. Grasping implies all of the lower rungs, so it scores one.
+# Pick. Each relation has cumulative rungs: the worst label scores zero and
+# every improvement satisfies one more rung. The increments within a relation
+# sum to its original budget (planar .15, height .10, contact compatibility
+# .10, grasp compatibility .15, contact .20, grasp .30), so the best joint
+# state still scores exactly one. Cumulative label sets are important here: an
+# exact-label table would make mutually exclusive labels compete in the global
+# weight normalisation and the maximum potential would fall below one.
 PICK_STAGES: tuple[ProgressStage, ...] = (
-    ProgressStage("planar", REL_PLANAR_DISTANCE, (ABS_VERY_NEAR, ABS_NEAR), 0.15),
-    ProgressStage("height", REL_HEIGHT_OFFSET, (ABS_LEVEL,), 0.10),
+    # Planar: very-far 0, far .25, medium .50, near .75, very-near 1.00
+    # within the .15 planar budget.
     ProgressStage(
-        "contact_compat",
-        REL_CONTACT_COMPAT,
-        (ABS_MATCH, ABS_PARTIAL_MATCH),
-        0.10,
+        "planar_far_or_better",
+        REL_PLANAR_DISTANCE,
+        (ABS_FAR, ABS_MEDIUM, ABS_NEAR, ABS_VERY_NEAR),
+        0.0375,
     ),
     ProgressStage(
-        "grasp_compat", REL_GRASP_COMPAT, (ABS_MATCH, ABS_PARTIAL_MATCH), 0.15
+        "planar_medium_or_better",
+        REL_PLANAR_DISTANCE,
+        (ABS_MEDIUM, ABS_NEAR, ABS_VERY_NEAR),
+        0.0375,
+    ),
+    ProgressStage(
+        "planar_near_or_better",
+        REL_PLANAR_DISTANCE,
+        (ABS_NEAR, ABS_VERY_NEAR),
+        0.0375,
+    ),
+    ProgressStage(
+        "planar_very_near",
+        REL_PLANAR_DISTANCE,
+        (ABS_VERY_NEAR,),
+        0.0375,
+    ),
+    # Height is symmetric around level: the two extreme bins score zero,
+    # below/above score half credit, and level receives the full .10 budget.
+    ProgressStage(
+        "height_non_extreme",
+        REL_HEIGHT_OFFSET,
+        (ABS_BELOW, ABS_LEVEL, ABS_ABOVE),
+        0.05,
+    ),
+    ProgressStage("height_level", REL_HEIGHT_OFFSET, (ABS_LEVEL,), 0.05),
+    # Compatibility: unobserved 0, poor .25, partial .60, match 1.00 within
+    # each relation's budget.
+    ProgressStage(
+        "contact_compat_poor_or_better",
+        REL_CONTACT_COMPAT,
+        (ABS_POOR_MATCH, ABS_PARTIAL_MATCH, ABS_MATCH),
+        0.025,
+    ),
+    ProgressStage(
+        "contact_compat_partial_or_better",
+        REL_CONTACT_COMPAT,
+        (ABS_PARTIAL_MATCH, ABS_MATCH),
+        0.035,
+    ),
+    ProgressStage(
+        "contact_compat_match", REL_CONTACT_COMPAT, (ABS_MATCH,), 0.04
+    ),
+    ProgressStage(
+        "grasp_compat_poor_or_better",
+        REL_GRASP_COMPAT,
+        (ABS_POOR_MATCH, ABS_PARTIAL_MATCH, ABS_MATCH),
+        0.0375,
+    ),
+    ProgressStage(
+        "grasp_compat_partial_or_better",
+        REL_GRASP_COMPAT,
+        (ABS_PARTIAL_MATCH, ABS_MATCH),
+        0.0525,
+    ),
+    ProgressStage(
+        "grasp_compat_match", REL_GRASP_COMPAT, (ABS_MATCH,), 0.06
     ),
     ProgressStage("contact", REL_CONTACT, (ABS_HOLDS,), 0.20),
     ProgressStage("grasp", REL_GRASP, (ABS_HOLDS,), 0.30),
@@ -158,26 +218,20 @@ class ProgressScorer(torch.nn.Module):
         return self.potential(probs, hard)
 
 
-def target_slot_index(slot_target: torch.Tensor, slot_mask: torch.Tensor) -> torch.Tensor:
-    """Which slot the subtask is acting on, or slot zero when none is flagged.
+def target_distribution(target_logits, slot_alive, null_logit: float = 0.0):
+    """Predicted target identity over object slots plus one null class.
 
-    Slot zero is the end effector, so pointing there is the honest "no target"
-    encoding: the EE-to-EE pair is degenerate and ``has_target`` gates it out.
+    Slot zero is the end effector and is never a candidate. Without the null
+    class a softmax has to name an object even when the scene has no target, and
+    progress would then score a relation to an arbitrary slot.
     """
-    flag = slot_target.bool() & slot_mask.bool()
-    return flag.long().argmax(-1)
-
-
-def slot_pair(
-    slots: torch.Tensor, slot_meta_target: torch.Tensor, slot_mask: torch.Tensor
-):
-    """Gather the (end effector, target) slot pair and a validity flag."""
-    index = target_slot_index(slot_meta_target, slot_mask)
-    has_target = (slot_meta_target.bool() & slot_mask.bool()).any(-1)
-    source = slots[..., 0, :]
-    gather = index[..., None, None].expand(*index.shape, 1, slots.shape[-1])
-    target = slots.gather(-2, gather).squeeze(-2)
-    return source, target, has_target & slot_mask[..., 0].bool()
+    objects = target_logits[..., 1:].float()
+    objects = objects.masked_fill(
+        ~(slot_alive[..., 1:] > 0.5), torch.finfo(torch.float32).min
+    )
+    null = objects.new_full((*objects.shape[:-1], 1), float(null_logit))
+    probs = torch.softmax(torch.cat([objects, null], -1), -1)
+    return probs[..., :-1], probs[..., -1]
 
 
 class ProgressReward(torch.nn.Module):
@@ -185,6 +239,13 @@ class ProgressReward(torch.nn.Module):
 
     Holds the scorer and the discount; the relation decoder is passed in so the
     frozen copy is used inside imagination and the live one inside tests.
+
+    The target is *predicted*, never latched: a born object may be the target,
+    and an imagined rollout has no observation to read a flag from. Each
+    candidate object slot is decoded separately and the resulting relation
+    distributions are mixed by the target weights -- the relation decoder is
+    nonlinear, so decoding one averaged slot embedding would ask it about an
+    object that does not exist.
     """
 
     def __init__(self, scorer: ProgressScorer, discount: float, soft: bool = True):
@@ -193,15 +254,29 @@ class ProgressReward(torch.nn.Module):
         self.discount = float(discount)
         self.soft = bool(soft)
 
-    def relation_probs(self, decoder, slots, slot_meta_target, slot_mask):
-        source, target, valid = slot_pair(slots, slot_meta_target, slot_mask)
-        probs = decoder.relation_probs(source, target, self.scorer.relations)
-        return probs, valid
+    def relation_probs(self, decoder, slots, target_logits, slot_alive, hard_target=False):
+        weights, null = target_distribution(target_logits, slot_alive)
+        if hard_target:
+            choice = weights.argmax(-1, keepdim=True)
+            weights = torch.zeros_like(weights).scatter(-1, choice, 1.0)
+            weights = weights * (1.0 - null)[..., None]
+        objects = slots[..., 1:, :]
+        source = slots[..., :1, :].expand_as(objects)
+        # (..., n_obj, R, n_abs): one decode per candidate, mixed afterwards.
+        per_slot = decoder.relation_probs(source, objects, self.scorer.relations)
+        probs = (weights[..., None, None] * per_slot).sum(-3)
+        # Renormalise over the object mass so the result is a distribution
+        # conditioned on "a target exists"; the null mass gates the potential.
+        mass = weights.sum(-1).clamp_min(1e-6)
+        return probs / mass[..., None, None], 1.0 - null
 
-    def forward(self, decoder, slots, slot_meta_target, slot_mask, hard=None):
-        probs, valid = self.relation_probs(decoder, slots, slot_meta_target, slot_mask)
+    def forward(self, decoder, slots, target_logits, slot_alive, hard=None):
         hard = (not self.soft) if hard is None else bool(hard)
-        potential = self.scorer.potential(probs, hard=hard) * valid.float()
+        probs, has_target = self.relation_probs(
+            decoder, slots, target_logits, slot_alive, hard_target=hard
+        )
+        alive_ee = (slot_alive[..., 0] > 0.5).float()
+        potential = self.scorer.potential(probs, hard=hard) * has_target * alive_ee
         # (1 - discount) keeps the discounted return of a permanently solved
         # episode at one, so beta means the same thing at any horizon.
         return (1.0 - self.discount) * potential, potential, probs

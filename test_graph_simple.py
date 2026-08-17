@@ -404,13 +404,27 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         self.assertEqual(model_config.graph.e_max, 168)
         self.assertIs(model_config.graph_simple, False)
         self.assertIs(model_config.progress.enabled, False)
+        self.assertIs(model_config.graph.slot_births, False)
         self.assertEqual(model_config.loss_scales.reltemp, 1.0)
 
-    def test_the_slot_preset_pins_the_six_node_contract(self):
+    def test_the_slot_preset_pins_the_node_contract(self):
         slot_config = OmegaConf.load("configs/model/size100M_graph_slots.yaml")
         self.assertEqual(slot_config.graph.state_mode, "slots")
-        self.assertEqual(slot_config.graph.n_max, 6)
-        self.assertEqual(slot_config.graph.e_max, 64)
+        # End effector plus seven objects, matching the pooled arm, so a sixth
+        # object cannot be dropped upstream by the vertex registry.
+        self.assertEqual(slot_config.graph.n_max, 8)
+        # 3 * n_max * (n_max - 1): truncation-free, and the packer drops
+        # spatial relations first, so truncation is not a neutral loss.
+        self.assertEqual(slot_config.graph.e_max, 168)
+        self.assertEqual(slot_config.loss_scales.reltemp, 1.0)
+        self.assertEqual(slot_config.loss_scales.slotalive, 1.0)
+        self.assertEqual(slot_config.loss_scales.prior_nodetgt, 1.0)
+        self.assertEqual(slot_config.loss_scales.prior_progress_relabs, 1.0)
+        self.assertIs(slot_config.graph.slot_births, True)
+        # The all-edge prior relation losses are replaced by the teacher-forced
+        # end-effector-to-target one.
+        self.assertNotIn("prior_relabs", slot_config.loss_scales)
+        self.assertNotIn("prior_reltemp", slot_config.loss_scales)
         self.assertEqual(slot_config.graph.slot_dim, 256)
         self.assertEqual(slot_config.graph.slot_heads, 4)
         self.assertEqual(slot_config.graph.slot_mixer_layers, 1)
