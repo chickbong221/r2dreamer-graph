@@ -416,6 +416,21 @@ class SlotRSSMTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(summary).all())
         self.assertEqual(float(summary.abs().max()), 0.0)
 
+    def test_the_summary_stays_float32_under_autocast(self):
+        # Casting the summary's input is not enough: its projections are Linear
+        # layers, so autocast makes their output half precision and the masked
+        # maximum's sentinel no longer fits. This is the shape of bug that only
+        # appears in a real AMP training step.
+        model = self._rssm().eval()
+        alive = torch.zeros(2, N_MAX)
+        alive[:, :3] = 1.0
+        with torch.no_grad(), torch.autocast("cpu", dtype=torch.float16):
+            summary = model.slot_transition_input(
+                torch.randn(2, N_MAX, SLOT_DIM), alive
+            )
+        self.assertEqual(summary.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(summary).all())
+
     def test_negative_features_do_not_lose_the_masked_max_to_zeros(self):
         model = self._rssm().eval()
         sem = torch.full((1, N_MAX, SLOT_DIM), -5.0)

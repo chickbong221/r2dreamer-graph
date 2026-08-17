@@ -89,17 +89,22 @@ class SetSummary(nn.Module):
 
     def forward(self, slots: torch.Tensor, alive: torch.Tensor) -> torch.Tensor:
         # (B, n, D), (B, n)
-        slots = self.norm(slots.float())
+        normed = self.norm(slots.float())
         alive = alive.float()
+        # Casting the *input* is not enough: these are Linear layers, so under
+        # autocast their output is half precision however the input arrived, and
+        # the masked maximum below needs a sentinel no half can hold. Force the
+        # projections to float32 and take the sentinel from the tensor itself, so
+        # the two can never drift apart again.
         # Mask the end effector too: an MLP with biases turns a zeroed reset
         # slot into a nonzero summary otherwise.
-        ee = self.ee(slots[:, 0]) * alive[:, :1]
-        objects = self.objects(slots[:, 1:])
+        ee = self.ee(normed[:, 0]).float() * alive[:, :1]
+        objects = self.objects(normed[:, 1:]).float()
         weight = alive[:, 1:]
         live = weight > 0
         total = weight.sum(-1, keepdim=True)
         mean = (objects * weight[..., None]).sum(-2) / total.clamp_min(1.0)
-        sentinel = torch.finfo(torch.float32).min
+        sentinel = torch.finfo(objects.dtype).min
         maximum = objects.masked_fill(~live[..., None], sentinel).max(-2).values
         maximum = torch.where(
             live.any(-1, keepdim=True), maximum, torch.zeros_like(maximum)
