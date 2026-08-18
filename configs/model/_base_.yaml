@@ -4,9 +4,14 @@ imag_horizon: 15
 horizon: 333
 lamb: 0.95
 compile: True
-amp_dtype: float16
-# GradScaler's initial loss scale. Lower it to skip the warm-up back-off; it
-# does not change the objective.
+# bfloat16 keeps float32's exponent range and spends the difference out of the
+# mantissa, so gradients cannot leave the representable range and no loss
+# scaling is needed. Tensor cores accumulate in float32 either way and run both
+# dtypes at the same throughput, so the coarser mantissa costs nothing
+# measurable here while the scaler's skipped steps and collapse floor go away.
+amp_dtype: bfloat16
+# float16 only. GradScaler's initial loss scale; lower it to skip the warm-up
+# back-off. Ignored under bfloat16, which builds no scaler at all.
 grad_scale_init: 65536
 log_grads: False
 device: ${device}
