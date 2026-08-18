@@ -30,6 +30,7 @@ from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
 from scenegraph.adapters.graph_obs import _DTYPES as _PACKED_DTYPES
+from scenegraph.adapters.graph_obs import GraphObsBuilder
 from scenegraph.adapters.graph_pack import (
     graph_keys as pack_keys,
     graph_schema as pack_schema,
@@ -341,6 +342,91 @@ class PackerSchemaTest(unittest.TestCase):
     def test_unknown_schema_raises(self):
         with self.assertRaises(ValueError):
             self._pack("simple")
+
+
+class AdapterConstructionTest(unittest.TestCase):
+    """The observation adapter is built for real, for every schema.
+
+    Nothing else in the suite constructs it -- the training path needs
+    ManiSkill -- so a name used in ``__init__`` but never imported used to
+    surface only when a run started. This covers the constructor itself.
+    """
+
+    CFG = {
+        "temporal": {"K": 2},
+        "selection": {"n_max": N_MAX, "k_persist": -1},
+        "whitelist_dir": "",
+    }
+
+    @staticmethod
+    def _vocab():
+        relation = build_relation_vocab()
+        return GraphVocab(
+            entity=EntityVocab(token_to_id={"<pad>": 0, "<ee>": 1}),
+            relation=relation, absolute=build_absolute_vocab(),
+            temporal=build_temporal_vocab(),
+            abs_valid=np.zeros((len(relation), 1), bool),
+            temp_valid=np.zeros(len(relation), bool),
+        )
+
+    def _build(self, simple, state_mode):
+        return GraphObsBuilder(
+            object(), num_envs=2, teemo_cfg=dict(self.CFG), vocab=self._vocab(),
+            n_max=N_MAX, e_max=168, cameras=["cam_a", "cam_b"],
+            simple=simple, state_mode=state_mode,
+        )
+
+    def test_pooled_emits_boxes_and_builds_no_dino(self):
+        adapter = self._build(True, "pooled")
+        self.assertEqual(adapter.schema, SCHEMA_SIMPLE_POOLED)
+        self.assertTrue(adapter.bbox_enabled)
+        self.assertFalse(adapter.appearance_enabled)
+        self.assertFalse(adapter.uids_enabled)
+        self.assertIsNone(adapter.dino)
+        self.assertEqual(adapter.patch_grid, 0)
+        self.assertEqual(set(adapter.obs_spec_shapes), set(SIMPLE_POOLED_GRAPH_KEYS))
+        self.assertEqual(
+            adapter.obs_spec_shapes["graph_node_bbox"], (N_MAX, 2, 4)
+        )
+
+    def test_slot_emits_uid_and_no_boxes(self):
+        adapter = self._build(True, "slots")
+        self.assertEqual(adapter.schema, SCHEMA_SIMPLE_SLOT)
+        self.assertFalse(adapter.bbox_enabled)
+        self.assertTrue(adapter.uids_enabled)
+        self.assertIsNone(adapter.dino)
+        self.assertEqual(set(adapter.obs_spec_shapes), set(SIMPLE_SLOT_GRAPH_KEYS))
+
+    def test_full_keeps_appearance(self):
+        adapter = self._build(False, "pooled")
+        self.assertEqual(adapter.schema, SCHEMA_FULL)
+        self.assertTrue(adapter.bbox_enabled)
+        self.assertTrue(adapter.appearance_enabled)
+        self.assertFalse(adapter.uids_enabled)
+        self.assertEqual(set(adapter.obs_spec_shapes), set(FULL_GRAPH_KEYS))
+
+    def test_every_switch_reaches_the_per_env_builders(self):
+        # The adapter decides; the builders are what actually skip the work.
+        for simple, mode in ((True, "pooled"), (True, "slots"), (False, "pooled")):
+            with self.subTest(simple=simple, state_mode=mode):
+                adapter = self._build(simple, mode)
+                for builder in adapter.builders:
+                    self.assertEqual(builder.bbox_enabled, adapter.bbox_enabled)
+                    self.assertEqual(
+                        builder.appearance_enabled, adapter.appearance_enabled
+                    )
+                    self.assertEqual(builder.uids_enabled, adapter.uids_enabled)
+
+    def test_the_zero_pack_matches_the_declared_contract(self):
+        # Emitted on terminal frames before any real graph exists, so a shape
+        # or key mismatch here corrupts replay rather than raising.
+        for simple, mode in ((True, "pooled"), (True, "slots"), (False, "pooled")):
+            with self.subTest(simple=simple, state_mode=mode):
+                adapter = self._build(simple, mode)
+                packed = adapter._zero_pack()
+                self.assertEqual(set(packed), set(adapter.obs_spec_shapes))
+                for key, shape in adapter.obs_spec_shapes.items():
+                    self.assertEqual(packed[key].shape, shape, key)
 
 
 class BboxExtractionTest(unittest.TestCase):

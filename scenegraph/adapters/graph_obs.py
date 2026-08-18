@@ -31,6 +31,7 @@ from .privileged_state import (
 from .graph_pack import (
     SCHEMA_FULL,
     SCHEMA_SIMPLE_POOLED,
+    SCHEMA_SIMPLE_SLOT,
     graph_keys,
     graph_schema,
     pack_graph,
