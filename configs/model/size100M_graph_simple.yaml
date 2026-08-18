@@ -36,7 +36,13 @@ graph:
 # untouched.
 progress:
   enabled: True
-  beta: 0.15
+  # Held at 0 for the first 200k environment steps, ramped over the next 100k
+  # and constant after: the progress critic is already fitted by the time it
+  # can move the actor. The control arm for this is `beta: 0.0` with the same
+  # losses on, which trains the identical heads and never exposes the actor.
+  beta: 0.2
+  beta_warmup_start: 200000
+  beta_warmup_end: 300000
   soft: True
 
 loss_scales:

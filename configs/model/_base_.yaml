@@ -26,7 +26,17 @@ graph_simple: False
 # comparison needs the two measured apart.
 progress:
   enabled: False
+  # Weight on the progress advantage inside the actor, after the warm-up.
   beta: 0.05
+  # Warm-up window in environment steps: beta is 0 below `beta_warmup_start`,
+  # ramps linearly to `beta` across the window, and holds `beta` after
+  # `beta_warmup_end`. Only beta is scheduled. `prior_progress_relabs` and
+  # `progress_value` stay on from step 0, both read detached inputs and so
+  # push no gradient into the world model, the graph decoder or the actor;
+  # the window is there to let the relation head and the progress critic fit
+  # before either can steer behaviour. `start == end` disables the warm-up.
+  beta_warmup_start: 200000
+  beta_warmup_end: 300000
   # Empty uses the built-in Pick stages. A path loads a compiled JSON stage
   # table instead; there are no runtime LLM calls either way.
   stages: ''

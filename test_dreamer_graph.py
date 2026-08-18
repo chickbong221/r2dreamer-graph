@@ -654,6 +654,50 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
             with_progress["loss/policy"], without_progress["loss/policy"]
         )
 
+    def test_beta_warms_up_on_environment_steps(self):
+        model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
+        # The window comes from the preset, not from this test.
+        self.assertEqual(model.progress_beta_start, 200000.0)
+        self.assertEqual(model.progress_beta_end, 300000.0)
+        beta_at = model._progress_beta_at
+        self.assertEqual(beta_at(0), 0.0)
+        self.assertEqual(beta_at(199999), 0.0)
+        self.assertEqual(beta_at(200000), 0.0)
+        self.assertAlmostEqual(beta_at(250000), 0.1)
+        self.assertAlmostEqual(beta_at(300000), 0.2)
+        self.assertAlmostEqual(beta_at(10**7), 0.2)
+        # No step count means no schedule: beta applies in full.
+        self.assertAlmostEqual(beta_at(None), 0.2)
+
+    def test_the_warm_up_trains_the_progress_critic_without_steering_the_actor(self):
+        model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
+        raw = model.preprocess(slot_sequence())
+        initial = model.rssm.initial(2)
+        ema = model.return_ema.ema_vals.clone()
+
+        model._env_step = 0.0  # inside the warm-up, where beta is zero
+        torch.manual_seed(1234)
+        _, warming = model._cal_grad(raw, initial)
+        model._optimizer.zero_grad(set_to_none=True)
+        model.return_ema.ema_vals.copy_(ema)
+
+        model.progress_enabled = False
+        torch.manual_seed(1234)
+        _, without_progress = model._cal_grad(raw, initial)
+        model.progress_enabled = True
+        model._optimizer.zero_grad(set_to_none=True)
+
+        # The actor sees nothing during the warm-up ...
+        self.assertEqual(float(warming["progress_beta"]), 0.0)
+        self.assertEqual(float(warming["progress_influence"]), 0.0)
+        torch.testing.assert_close(
+            warming["loss/policy"], without_progress["loss/policy"]
+        )
+        # ... while its critic keeps training against a live target.
+        self.assertIn("loss/progress_value", warming)
+        self.assertTrue(torch.isfinite(warming["loss/progress_value"]))
+        self.assertNotEqual(float(warming["progress_adv_abs"]), 0.0)
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_one_cuda_batch_completes_without_nan(self):
         config = make_slot_config()

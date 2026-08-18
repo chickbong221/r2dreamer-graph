@@ -166,6 +166,23 @@ boxes, no observed labels. It is trained and normalised separately and enters
 the actor as `A = A_env + beta * A_progress`; the reported task return, the
 reward head, the continuation head and the environment critic are untouched.
 
+`beta` is the only scheduled quantity. It is zero until
+`progress.beta_warmup_start` environment steps, linear to `progress.beta` by
+`progress.beta_warmup_end`, and constant after; `prior_progress_relabs` and
+`progress_value` run from step 0 throughout. That split is possible because the
+progress critic reads a detached input, so training it early moves neither the
+world model, the graph decoder nor the actor -- it only fits the baseline for
+the stationary relations of a robot that has not learned to move yet. Turning
+beta on together with a cold critic would instead let an unfitted critic steer,
+and an immature world model can hallucinate relation changes under imagined
+actions long after the real arm is still. `train/progress_beta` logs the current
+value and `train/progress_influence` logs
+`beta * E|A_progress| / E|A_env|`, which is the ratio worth watching during the
+ramp: roughly 5-20% at the plateau, under 1% means beta is too small to matter,
+well over 25% means progress is doing the steering. The clean paper comparison
+holds every loss fixed and varies only this schedule: `beta: 0.0` throughout for
+the control, the warm-up for the treatment.
+
 `r_progress = (1 - gamma) * Phi` is a bounded progress-*potential* return, not
 classical potential-difference shaping: it rewards reaching and holding high
 progress states rather than improving between them.

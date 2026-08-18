@@ -247,6 +247,33 @@ class Dreamer(nn.Module):
         self.progress_beta = (
             float(progress_config.beta) if progress_config is not None else 0.0
         )
+        # Warm-up on the actor's exposure to progress, in environment steps.
+        # Beta is the only thing scheduled: `prior_progress_relabs` and
+        # `progress_value` train from step 0, and both read detached inputs, so
+        # a warm-up spent training them costs the world model, the graph
+        # decoder and the actor nothing. Beta is the single place progress
+        # reaches behaviour, so ramping it -- rather than the losses -- is what
+        # keeps a cold critic from steering, and an immature world model can
+        # hallucinate relation changes under imagined actions long after the
+        # real robot has stopped moving.
+        self.progress_beta_start = (
+            float(getattr(progress_config, "beta_warmup_start", 0.0))
+            if progress_config is not None
+            else 0.0
+        )
+        self.progress_beta_end = (
+            float(getattr(progress_config, "beta_warmup_end", 0.0))
+            if progress_config is not None
+            else 0.0
+        )
+        if self.progress_beta_end < self.progress_beta_start:
+            raise ValueError(
+                "progress.beta_warmup_end must not precede "
+                "progress.beta_warmup_start"
+            )
+        # Written by `update`. None means the caller keeps no environment-step
+        # count, and the schedule reads as already finished.
+        self._env_step = None
         self.progress_enabled = bool(
             progress_config is not None and progress_config.enabled
         )
@@ -875,8 +902,13 @@ class Dreamer(nn.Module):
             flush=True,
         )
 
-    def update(self, replay_buffer):
-        """Sample a batch from replay and perform one optimization step."""
+    def update(self, replay_buffer, step=None):
+        """Sample a batch from replay and perform one optimization step.
+
+        `step` is the environment-step count and feeds the progress-beta
+        warm-up only; None leaves that schedule at its final value.
+        """
+        self._env_step = None if step is None else float(step)
         trace_this_update = not self._replay_input_checked
         if trace_this_update:
             self._trace_update = True
@@ -1356,7 +1388,9 @@ class Dreamer(nn.Module):
             )
             _, progress_scale = self.progress_return_ema(progress_ret)
             progress_adv = (progress_ret - progress_value[:, :-1]) / progress_scale
-            adv = adv + self.progress_beta * progress_adv
+            progress_beta = self._progress_beta_at(self._env_step)
+            env_adv_abs = torch.mean(adv.abs())
+            adv = adv + progress_beta * progress_adv
             progress_dist = self.progress_value(progress_feat)
             progress_padded = torch.cat([progress_ret, 0 * progress_ret[:, -1:]], 1)
             losses["progress_value"] = torch.mean(
@@ -1381,7 +1415,18 @@ class Dreamer(nn.Module):
             metrics["progress_potential_horizon_std"] = torch.mean(
                 torch.std(potential, dim=1)
             )
-            metrics["progress_adv_abs"] = torch.mean(progress_adv.abs())
+            progress_adv_abs = torch.mean(progress_adv.abs())
+            metrics["progress_adv_abs"] = progress_adv_abs
+            metrics["env_adv_abs"] = env_adv_abs
+            metrics["progress_beta"] = progress_beta
+            # How much of the actor's advantage the shaping term accounts for:
+            # beta * E|A_progress| / E|A_env|. This, not beta alone, is what
+            # says whether the ramp landed: roughly 5-20% at the plateau, under
+            # 1% means beta is doing nothing, and much over 25% means progress
+            # is doing the steering.
+            metrics["progress_influence"] = progress_beta * progress_adv_abs / (
+                env_adv_abs + 1e-8
+            )
 
         policy = self.actor(imag_feat)
         # (B*T, T_imag-1, 1)
@@ -1474,6 +1519,20 @@ class Dreamer(nn.Module):
         if self.graph_slots:
             posterior = posterior + (post_meta, post_alive)
         return posterior, metrics
+
+    def _progress_beta_at(self, step):
+        """Actor weight on the progress advantage at environment step `step`.
+
+        Zero before the window, linear across it, constant after. `None` means
+        the caller tracks no environment steps, which reads the same as an
+        empty window (`start == end`): beta applies in full from the start.
+        """
+        start, end = self.progress_beta_start, self.progress_beta_end
+        if step is None or end <= start or step >= end:
+            return self.progress_beta
+        if step <= start:
+            return 0.0
+        return self.progress_beta * (step - start) / (end - start)
 
     def _progress_step(self, stoch, deter, sem, slot_alive):
         """Shaping reward and progress-critic input for one imagined state.

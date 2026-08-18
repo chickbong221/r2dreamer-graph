@@ -261,7 +261,9 @@ class OnlineTrainer:
                 else:
                     update_num = self._updates_needed(step)
                 for _ in range(update_num):
-                    _metrics = agent.update(self.replay_buffer)
+                    # `step` is environment steps; the agent uses it for
+                    # the progress-beta warm-up only.
+                    _metrics = agent.update(self.replay_buffer, step)
                     train_metrics = _metrics
                     train_fps.step(self._batch_steps)
                 update_count += update_num
