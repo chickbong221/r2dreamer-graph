@@ -526,9 +526,9 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         self.assertIsNone(model.graph_encoder.query)
         self.assertEqual(model.rssm.n_slots, SLOT_NODES)
         self.assertEqual(model.rssm.flat_sem, 8)  # the readout, not the slots
-        self.assertEqual(
-            model.rssm._deter_net._dyn_in3[0].in_features, SLOT_NODES * 8 + SLOT_NODES
-        )
+        # h reads a permutation-invariant summary of the slot set, never the
+        # ordered flatten: three pooled 8-wide statistics plus occupancy.
+        self.assertEqual(model.rssm._deter_net._dyn_in3[0].in_features, 3 * 8 + 1)
         self.assertEqual(model._loss_scales["image"], 1.0)
 
         raw = slot_sequence()
@@ -574,10 +574,16 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
                 stoch, deter, sem[:, order], alive[:, order]
             )
             torch.testing.assert_close(feat, other, atol=1e-5, rtol=1e-5)
-            for head in (model.reward, model.cont, model.value):
+            for head in (model.reward, model.value):
                 torch.testing.assert_close(
                     head(feat).mode(), head(other).mode(), atol=1e-5, rtol=1e-5
                 )
+            # The continuation head is a binary distribution, whose ``mode`` is
+            # a property rather than a method; ``mean`` is what dreamer reads.
+            torch.testing.assert_close(
+                model.cont(feat).mean, model.cont(other).mean,
+                atol=1e-5, rtol=1e-5,
+            )
             torch.testing.assert_close(
                 model.actor(feat).mode, model.actor(other).mode,
                 atol=1e-5, rtol=1e-5,

@@ -362,7 +362,15 @@ class SlotRSSMTest(unittest.TestCase):
             graph_config=graph_config(births=births),
         )
 
-    def _step(self, model, batch=1, reset=False, obs=None, state=None):
+    def _step(self, model, batch=1, reset=False, obs=None, state=None, seed=0):
+        """One posterior step from a fixed random stream.
+
+        The prior slot is drawn through ``rsample``, so two calls that differ
+        only in the field under test would still differ by sampling noise. The
+        seed pins the stream, which is what makes "changing X leaves the prior
+        untouched" an assertion about information flow rather than about luck.
+        """
+        torch.manual_seed(seed)
         stoch, deter, sem, meta, alive = state or model.initial(batch)
         return model.obs_step(
             stoch,

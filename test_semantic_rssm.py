@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from rssm import RSSM
+from rssm import RSSM, SLOT_META_UID
 
 
 def config():
@@ -141,21 +141,29 @@ class SemanticRSSMTest(unittest.TestCase):
         # relation-only contract), but only one of them may be active.
         self.assertTrue(model.graph_slots)
         self.assertFalse(model.graph_simple)
-        self.assertEqual(model.state_keys, ("stoch", "deter", "sem", "slot_meta"))
+        self.assertEqual(
+            model.state_keys,
+            ("stoch", "deter", "sem", "slot_meta", "slot_alive"),
+        )
         self.assertIsNone(model._sem_obs)
         self.assertIsNone(model._sem_img)
         # z stays stock DreamerV3 and reads neither the slots nor a readout.
         self.assertEqual(model._stoch, 2)
         self.assertEqual(model._obs_net[0].in_features, 16 + 5)
         self.assertEqual(model._img_net[0].in_features, 16)
-        # The transition takes the whole masked slot matrix plus its mask.
-        self.assertEqual(model._deter_net._dyn_in3[0].in_features, 4 * 8 + 4)
+        # The transition takes a permutation-invariant summary of the slot
+        # set, not the ordered flatten: three pooled 8-wide statistics plus the
+        # occupancy scalar.
+        self.assertEqual(model._deter_net._dyn_in3[0].in_features, 3 * 8 + 1)
         # The heads take the pooled readout, and only the heads.
         self.assertEqual(model.flat_sem, 8)
         self.assertEqual(model.feat_size, 2 * 4 + 8 + 16)
-        stoch, deter, sem, meta = model.initial(self.batch)
+        stoch, deter, sem, meta, alive = model.initial(self.batch)
         self.assertEqual(tuple(sem.shape), (self.batch, 4, 8))
         self.assertEqual(tuple(meta.shape), (self.batch, 4, 3))
+        # Every slot starts inactive; the first observation initialises them.
+        self.assertEqual(tuple(alive.shape), (self.batch, 4))
+        self.assertEqual(float(alive.sum()), 0.0)
 
     def test_slot_mode_imagination_returns_slots_and_keeps_metadata(self):
         model = RSSM(
@@ -167,13 +175,18 @@ class SemanticRSSMTest(unittest.TestCase):
             graph_slots=True,
             graph_config=slot_graph_config(),
         )
-        stoch, deter, sem, meta = model.initial(self.batch)
-        meta[..., 0] = 1  # every slot occupied
-        step = model.img_step(stoch, deter, self.action[:, 0], sem, meta)
+        stoch, deter, sem, meta, alive = model.initial(self.batch)
+        alive = torch.ones_like(alive)  # every slot occupied
+        meta[..., SLOT_META_UID] = 1
+        step = model.img_step(stoch, deter, self.action[:, 0], sem, meta, alive)
         self.assertEqual(
-            set(step), {"stoch", "deter", "sem", "slot_meta", "logit"}
+            set(step),
+            {"stoch", "deter", "sem", "slot_meta", "slot_alive", "alive_logit",
+             "logit"},
         )
         self.assertEqual(tuple(step["sem"].shape), (self.batch, 4, 8))
+        # UID, entity type and the target flag are observer-side bookkeeping:
+        # an imagined rollout cannot know a future observation's codes.
         self.assertTrue(torch.equal(step["slot_meta"], meta))
 
     def test_slot_mode_requires_its_graph_config(self):
