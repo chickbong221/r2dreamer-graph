@@ -69,21 +69,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-export CUBLAS_WORKSPACE_CONFIG=:4096:8
-
-# "b32" in the group and run names is historical. Every arm runs at
-# batch_size=28, the largest the full-graph arms fit on the H100; renaming
-# would orphan the runs already charted in this group.
-
 PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
-  deterministic_run=true \
   env=mshab \
-  model=size100M_graph \
-  model.graph.enabled=true \
-  model.graph_simple=true \
-  model.graph_only_latent=false \
+  model=size100M_graph_simple \
   model.graph.n_max=8 \
   model.graph.e_max=168 \
   model.amp_dtype=bfloat16 \
@@ -94,9 +85,14 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   env.train_ratio=64 \
   env.mshab_task=prepare_groceries \
   env.mshab_obj=all \
-  env.num_build_configs=63 \
+  env.num_build_configs=10 \
+  env.eval_episode_num=10 \
+  env.eval_split=train \
+  env.eval_num_build_configs=10 \
+  env.eval_time_limit=200 \
+  env.eval_reconfiguration_frequency=0 \
   buffer.storage_device=cpu \
-  buffer.max_size=500000 \
+  buffer.max_size=750000 \
   trainer.steps=10000000 \
   trainer.eval_every=50000 \
   trainer.video_pred_log=false \
@@ -106,9 +102,9 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   wandb.enabled=true \
   wandb.project=RelRL \
   wandb.entity=letuanhf-hanoi-university-of-science-and-technology \
-  wandb.group=mshab-prepare-groceries-size100m-b32-s0 \
-  wandb.name=graph-simple-size100m-b32-s0 \
-  logdir="$HOME/logdir/r2dreamer-graph/$TIMESTAMP/mshab-graph-simple-size100m-b32-s0" \
+  wandb.group=mshab-prepare-groceries-size100m-b28-s0 \
+  wandb.name=graph-simple-size100m-b28-s0 \
+  logdir="$HOME/logdir/r2dreamer-graph/$TIMESTAMP/mshab-graph-simple-size100m-b28-s0" \
   seed=0
 
 echo "Job finished"

@@ -66,7 +66,12 @@ class OnlineTrainer:
         once_done = torch.zeros(envs.env_num, dtype=torch.bool, device=agent.device)
         steps = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
-        log_metrics = {}
+        # Gauges have to be reduced the way the training loop reduces them
+        # (max over the episode, or a per-frame fraction) or the two are not
+        # comparable. Summing a per-frame gauge over a 200-step episode is what
+        # turns a 4-entity scene into "730 entities".
+        log_sums = {}
+        log_maxima = {}
         # cache is only used for video logging / open-loop prediction.
         cache = []
         video_frames = []
@@ -101,17 +106,27 @@ class OnlineTrainer:
             returns += trans["reward"][:, 0] * ~once_done
             for key, value in trans.items():
                 if key.startswith("log_"):
-                    if key not in log_metrics:
-                        log_metrics[key] = torch.zeros_like(returns)
-                    log_metrics[key] += value[:, 0] * ~once_done
+                    frame = value[:, 0] * ~once_done
+                    if key not in log_sums:
+                        log_sums[key] = torch.zeros_like(returns)
+                        log_maxima[key] = torch.zeros_like(returns)
+                    log_sums[key] += frame
+                    log_maxima[key] = torch.maximum(log_maxima[key], frame)
             once_done |= done
         # dict of (B, T, *)
         cache = torch.stack(cache, dim=1) if len(cache) else None
         self.logger.scalar("episode/eval_score", returns.mean())
         self.logger.scalar("episode/eval_length", steps.to(torch.float32).mean())
-        for key, value in log_metrics.items():
-            if key == "log_success":
-                value = torch.clip(value, max=1.0)  # make sure 1.0 for success episode
+        # Mirrors the training reduction in ``train()``: the target-missing
+        # flag becomes the fraction of frames it was set, every other gauge
+        # takes the episode max. A "once" flag is then 1.0 if it ever fired,
+        # which is what the old ``log_success`` clip was reaching for -- it
+        # never matched, because the emitted keys are log_success_once and
+        # log_success_at_end.
+        length = steps.to(torch.float32).clamp_min(1)
+        for key, value in log_maxima.items():
+            if key == "log_graph_target_missing":
+                value = log_sums[key] / length
             self.logger.scalar(f"episode/eval_{key[4:]}", value.mean())
         if video_frames:
             video = torch.stack(video_frames, dim=0)
