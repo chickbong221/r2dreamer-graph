@@ -81,7 +81,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   env.obs_mode=rgb+segmentation \
   batch_size=28 \
   batch_length=64 \
-  env.env_num=126 \
+  env.env_num=189 \
   env.train_ratio=64 \
   env.mshab_task=prepare_groceries \
   env.mshab_obj=all \
