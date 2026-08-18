@@ -1,0 +1,310 @@
+{
+  "_merged_from": [
+    "pick_002_master_chef_can.json",
+    "pick_003_cracker_box.json",
+    "pick_004_sugar_box.json",
+    "pick_005_tomato_soup_can.json",
+    "pick_007_tuna_fish_can.json",
+    "pick_008_pudding_box.json",
+    "pick_009_gelatin_box.json",
+    "pick_010_potted_meat_can.json",
+    "pick_024_bowl.json"
+  ],
+  "_n_successful_rollouts": 271,
+  "_schema_version": 4,
+  "bin_edges": {
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility-change": [
+      -0.013690072799683576,
+      -0.001901398999956052,
+      0.001901398999956052,
+      0.013690072799683576
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility-change": [
+      -0.02583809141538813,
+      -0.003588623807692796,
+      0.003588623807692796,
+      0.02583809141538813
+    ],
+    "height-offset": [
+      -0.701651786416769,
+      -0.23388392880558967,
+      0.23388392880558967,
+      0.701651786416769
+    ],
+    "height-offset-change": [
+      -0.10467686533927915,
+      -0.01453845351934433,
+      0.01453845351934433,
+      0.10467686533927915
+    ],
+    "planar-distance": [
+      0.2928310300433018,
+      0.5856620600866036,
+      0.8784930901299053,
+      1.1713241201732072
+    ],
+    "planar-distance-change": [
+      -0.07681232261135976,
+      -0.010668378140466632,
+      0.010668378140466632,
+      0.07681232261135976
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility-change": [
+      -0.014996646485608472,
+      -0.0020828675674456213,
+      0.0020828675674456213,
+      0.014996646485608472
+    ]
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 1.0,
+    "contact_compatibility_change": 0.022816787999472624,
+    "grasp_compatibility": 0.8701462532712029,
+    "grasp_compatibility_change": 0.04306348569231355,
+    "height_offset": 1.1694196440279483,
+    "height_offset_change": 0.17446144223213195,
+    "planar_distance": 1.4641551502165089,
+    "planar_distance_change": 0.1280205376855996,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.024994410809347455
+  },
+  "members": {
+    "actor:002_master_chef_can": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:003_cracker_box": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:004_sugar_box": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:005_tomato_soup_can": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:007_tuna_fish_can": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:008_pudding_box": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:009_gelatin_box": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:010_potted_meat_can": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:024_bowl": {
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:frl_apartment_chair_01": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:002_master_chef_can",
+        "actor:003_cracker_box",
+        "actor:004_sugar_box",
+        "actor:007_tuna_fish_can",
+        "actor:009_gelatin_box",
+        "actor:010_potted_meat_can",
+        "actor:024_bowl"
+      ]
+    },
+    "actor:frl_apartment_sofa": {
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "support"
+      ],
+      "supports": [
+        "actor:003_cracker_box",
+        "actor:005_tomato_soup_can",
+        "actor:010_potted_meat_can"
+      ]
+    },
+    "actor:frl_apartment_table_01": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:002_master_chef_can",
+        "actor:005_tomato_soup_can",
+        "actor:008_pudding_box",
+        "actor:010_potted_meat_can"
+      ]
+    },
+    "actor:frl_apartment_table_02": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:007_tuna_fish_can"
+      ]
+    },
+    "actor:frl_apartment_tvstand": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:002_master_chef_can",
+        "actor:007_tuna_fish_can",
+        "actor:009_gelatin_box",
+        "actor:024_bowl"
+      ]
+    },
+    "actor:scene_background": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:009_gelatin_box",
+        "actor:010_potted_meat_can"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "link",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "supports": [
+        "actor:002_master_chef_can",
+        "actor:003_cracker_box",
+        "actor:004_sugar_box",
+        "actor:005_tomato_soup_can",
+        "actor:008_pudding_box",
+        "actor:009_gelatin_box",
+        "actor:010_potted_meat_can",
+        "actor:024_bowl"
+      ]
+    }
+  },
+  "membership_policy": "target-supporters",
+  "subtask": "pick",
+  "target": "all",
+  "task_group": "tidy_house"
+}

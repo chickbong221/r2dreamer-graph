@@ -1,0 +1,149 @@
+{
+  "_schema_version": 4,
+  "subtask": "pick",
+  "task_group": "tidy_house",
+  "membership_policy": "full-evidence",
+  "target": "actor:005_tomato_soup_can",
+  "members": {
+    "actor:005_tomato_soup_can": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "obj_0",
+      "interaction_rollouts": 30
+    },
+    "actor:frl_apartment_sofa": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[6,7]_frl_apartment_sofa-7",
+      "support_rollouts": 5,
+      "supports": [
+        "actor:005_tomato_soup_can"
+      ]
+    },
+    "actor:frl_apartment_table_01": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[2,3]_frl_apartment_table_01-6",
+      "support_rollouts": 10,
+      "supports": [
+        "actor:005_tomato_soup_can"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "support_rollouts": 11,
+      "supports": [
+        "actor:005_tomato_soup_can"
+      ]
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.2071362215668875,
+      0.414272443133775,
+      0.6214086647006625,
+      0.82854488626755
+    ],
+    "height-offset": [
+      -0.6462797485291958,
+      -0.21542658284306526,
+      0.21542658284306526,
+      0.6462797485291958
+    ],
+    "planar-distance-change": [
+      -0.07681232261135976,
+      -0.010668378140466632,
+      0.010668378140466632,
+      0.07681232261135976
+    ],
+    "height-offset-change": [
+      -0.06715752840042115,
+      -0.009327434500058492,
+      0.009327434500058492,
+      0.06715752840042115
+    ],
+    "grasp-compatibility-change": [
+      -0.008251798875639888,
+      -0.0011460831771722068,
+      0.0011460831771722068,
+      0.008251798875639888
+    ],
+    "contact-compatibility-change": [
+      -0.009979015983295342,
+      -0.0013859744421243529,
+      0.0013859744421243529,
+      0.009979015983295342
+    ],
+    "support-compatibility-change": [
+      -0.002644391782238517,
+      -0.0003672766364220162,
+      0.0003672766364220162,
+      0.002644391782238517
+    ]
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 0.6513182274489651,
+    "contact_compatibility_change": 0.016631693305492235,
+    "grasp_compatibility": 0.6576536097718579,
+    "grasp_compatibility_change": 0.01375299812606648,
+    "height_offset": 1.0771329142153263,
+    "height_offset_change": 0.11192921400070191,
+    "planar_distance": 1.0356811078344375,
+    "planar_distance_change": 0.1280205376855996,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.004407319637064195
+  },
+  "bin_stats_observed": {
+    "contact_compatibility": 0.8428510323726689,
+    "contact_compatibility_change": 0.6695371641952368,
+    "grasp_compatibility": 0.7734144588288001,
+    "grasp_compatibility_change": 0.7096958761367018,
+    "height_offset": 1.311291191726923,
+    "height_offset_change": 0.30312973260879517,
+    "planar_distance": 1.8792107165034602,
+    "planar_distance_change": 0.36822101699721,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.27802150167652745
+  },
+  "_n_successful_rollouts": 30
+}

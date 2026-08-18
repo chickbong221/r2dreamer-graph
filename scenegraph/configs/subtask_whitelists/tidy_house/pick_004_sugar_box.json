@@ -1,0 +1,139 @@
+{
+  "_n_successful_rollouts": 30,
+  "_pruned_from": {
+    "members": 3,
+    "membership_policy": "full-evidence"
+  },
+  "_schema_version": 4,
+  "bin_edges": {
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility-change": [
+      -0.0009901457899040263,
+      -0.00013752024859778144,
+      0.00013752024859778144,
+      0.0009901457899040263
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility-change": [
+      -0.0015168265117539755,
+      -0.00021067034885471884,
+      0.00021067034885471884,
+      0.0015168265117539755
+    ],
+    "height-offset": [
+      -0.6744648014008998,
+      -0.22482160046696661,
+      0.22482160046696661,
+      0.6744648014008998
+    ],
+    "height-offset-change": [
+      -0.04800521850585937,
+      -0.006667391459147135,
+      0.006667391459147135,
+      0.04800521850585937
+    ],
+    "planar-distance": [
+      0.14260781943252282,
+      0.28521563886504564,
+      0.4278234582975684,
+      0.5704312777300913
+    ],
+    "planar-distance-change": [
+      -0.052534789115778545,
+      -0.0072964984883025765,
+      0.0072964984883025765,
+      0.052534789115778545
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility-change": [
+      -0.006881628514538609,
+      -0.0009557817381303622,
+      0.0009557817381303622,
+      0.006881628514538609
+    ]
+  },
+  "bin_stats_observed": {
+    "contact_compatibility": 0.9417185423762322,
+    "contact_compatibility_change": 0.6039749801124145,
+    "grasp_compatibility": 0.9582085376243273,
+    "grasp_compatibility_change": 0.6861953097968517,
+    "height_offset": 1.3209469057619572,
+    "height_offset_change": 0.2862604856491089,
+    "planar_distance": 1.4955515506279335,
+    "planar_distance_change": 0.35495969419062695,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.5431772674156552
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 0.6264055819496963,
+    "contact_compatibility_change": 0.0016502429831733772,
+    "grasp_compatibility": 0.6974652893586218,
+    "grasp_compatibility_change": 0.002528044186256626,
+    "height_offset": 1.124108002334833,
+    "height_offset_change": 0.08000869750976562,
+    "planar_distance": 0.713039097162614,
+    "planar_distance_change": 0.08755798185963092,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.011469380857564347
+  },
+  "members": {
+    "actor:004_sugar_box": {
+      "interaction_rollouts": 30,
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "obj_0",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:frl_apartment_chair_01": {
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[2,3]_frl_apartment_chair_01-15",
+      "roles": [
+        "support"
+      ],
+      "support_rollouts": 7,
+      "supports": [
+        "actor:004_sugar_box"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "roles": [
+        "support"
+      ],
+      "support_rollouts": 8,
+      "supports": [
+        "actor:004_sugar_box"
+      ]
+    }
+  },
+  "membership_policy": "target-supporters",
+  "subtask": "pick",
+  "target": "actor:004_sugar_box",
+  "task_group": "tidy_house"
+}

@@ -1,0 +1,162 @@
+{
+  "_n_successful_rollouts": 30,
+  "_pruned_from": {
+    "members": 8,
+    "membership_policy": "full-evidence"
+  },
+  "_schema_version": 4,
+  "bin_edges": {
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility-change": [
+      -0.011943167311156697,
+      -0.0016587732376606523,
+      0.0016587732376606523,
+      0.011943167311156697
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "grasp-compatibility-change": [
+      -0.02583809141538813,
+      -0.003588623807692796,
+      0.003588623807692796,
+      0.02583809141538813
+    ],
+    "height-offset": [
+      -0.5443508863449097,
+      -0.1814502954483032,
+      0.1814502954483032,
+      0.5443508863449097
+    ],
+    "height-offset-change": [
+      -0.0773479700088501,
+      -0.010742773612340292,
+      0.010742773612340292,
+      0.0773479700088501
+    ],
+    "planar-distance": [
+      0.16344989734387066,
+      0.32689979468774133,
+      0.49034969203161205,
+      0.6537995893754827
+    ],
+    "planar-distance-change": [
+      -0.034212034266900025,
+      -0.004751671425958337,
+      0.004751671425958337,
+      0.034212034266900025
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility-change": [
+      -2.2365786649380932e-07,
+      -3.106359256858463e-08,
+      3.106359256858463e-08,
+      2.2365786649380932e-07
+    ]
+  },
+  "bin_stats_observed": {
+    "contact_compatibility": 1.0,
+    "contact_compatibility_change": 0.5645522680970613,
+    "grasp_compatibility": 0.9772169626850246,
+    "grasp_compatibility_change": 0.6674634200574678,
+    "height_offset": 1.2915589809417725,
+    "height_offset_change": 0.32495832443237305,
+    "planar_distance": 1.6118026452445666,
+    "planar_distance_change": 0.42996103270153907,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.5417942830054592
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 0.9669049849625635,
+    "contact_compatibility_change": 0.01990527885192783,
+    "grasp_compatibility": 0.8701462532712029,
+    "grasp_compatibility_change": 0.04306348569231355,
+    "height_offset": 0.9072514772415161,
+    "height_offset_change": 0.1289132833480835,
+    "planar_distance": 0.8172494867193534,
+    "planar_distance_change": 0.057020057111500044,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 3.7276311082301556e-07
+  },
+  "members": {
+    "actor:024_bowl": {
+      "interaction_rollouts": 30,
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "obj_0",
+      "roles": [
+        "interacted"
+      ]
+    },
+    "actor:frl_apartment_chair_01": {
+      "interaction_rollouts": 3,
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[2,3]_frl_apartment_chair_01-15",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "support_rollouts": 16,
+      "supports": [
+        "actor:024_bowl"
+      ]
+    },
+    "actor:frl_apartment_tvstand": {
+      "interaction_rollouts": 4,
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[6,7]_frl_apartment_tvstand-2",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "support_rollouts": 14,
+      "supports": [
+        "actor:024_bowl"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "interaction_rollouts": 8,
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "support_rollouts": 10,
+      "supports": [
+        "actor:024_bowl"
+      ]
+    }
+  },
+  "membership_policy": "target-supporters",
+  "subtask": "pick",
+  "target": "actor:024_bowl",
+  "task_group": "tidy_house"
+}

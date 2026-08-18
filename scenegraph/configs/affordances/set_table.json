@@ -1,0 +1,1297 @@
+{
+  "_README": "Per canonical object key, up to six per-relation component lists (all coordinates in OBJECT frame, metres / unit-vector). grasp_components: ee--object grasp anchors. contact_components: obj-obj contact anchors + outward normals. support_components: supporter surface anchors + normal + footprint radius. bottom_components: supported bottom anchors. contain_components / key_components: PegInsertionSide-style container entry + containee key descriptors (empty for MS-HAB).",
+  "_schema_version": 3,
+  "objects": {
+    "actor:013_apple": {
+      "raw_obj_id": "actor:013_apple",
+      "n_samples": 30,
+      "grasp_components": [
+        {
+          "anchor": [
+            -0.015204,
+            0.002998,
+            0.001194
+          ],
+          "approach_dir": [
+            0.685931,
+            -0.599502,
+            0.412427
+          ],
+          "width": 0.075676,
+          "sample_index": 0
+        },
+        {
+          "anchor": [
+            0.026817,
+            0.006143,
+            -0.001155
+          ],
+          "approach_dir": [
+            -0.813364,
+            0.21747,
+            0.539579
+          ],
+          "width": 0.072877,
+          "sample_index": 1
+        },
+        {
+          "anchor": [
+            -0.010564,
+            -0.01819,
+            0.003402
+          ],
+          "approach_dir": [
+            0.332359,
+            0.917382,
+            0.218972
+          ],
+          "width": 0.073465,
+          "sample_index": 2
+        },
+        {
+          "anchor": [
+            0.007255,
+            0.010252,
+            -0.013418
+          ],
+          "approach_dir": [
+            0.790683,
+            0.438728,
+            0.42701
+          ],
+          "width": 0.082099,
+          "sample_index": 3
+        },
+        {
+          "anchor": [
+            -0.008205,
+            0.012551,
+            0.011117
+          ],
+          "approach_dir": [
+            -0.066871,
+            -0.371467,
+            0.926035
+          ],
+          "width": 0.076501,
+          "sample_index": 4
+        },
+        {
+          "anchor": [
+            0.021038,
+            -0.012897,
+            -0.004169
+          ],
+          "approach_dir": [
+            -0.772036,
+            0.152652,
+            0.616975
+          ],
+          "width": 0.072614,
+          "sample_index": 5
+        },
+        {
+          "anchor": [
+            -0.023562,
+            -0.017494,
+            0.001303
+          ],
+          "approach_dir": [
+            0.628007,
+            0.298427,
+            0.718713
+          ],
+          "width": 0.071447,
+          "sample_index": 6
+        },
+        {
+          "anchor": [
+            0.002923,
+            0.009994,
+            0.00584
+          ],
+          "approach_dir": [
+            -0.557842,
+            -0.626046,
+            0.544865
+          ],
+          "width": 0.075748,
+          "sample_index": 7
+        },
+        {
+          "anchor": [
+            -0.01831,
+            -0.014604,
+            0.018021
+          ],
+          "approach_dir": [
+            0.051371,
+            0.891118,
+            0.450854
+          ],
+          "width": 0.080053,
+          "sample_index": 8
+        },
+        {
+          "anchor": [
+            0.031277,
+            0.005973,
+            0.025992
+          ],
+          "approach_dir": [
+            -0.245338,
+            0.020828,
+            0.969214
+          ],
+          "width": 0.072296,
+          "sample_index": 9
+        },
+        {
+          "anchor": [
+            0.015838,
+            0.008924,
+            0.005505
+          ],
+          "approach_dir": [
+            -0.763549,
+            -0.567813,
+            0.307541
+          ],
+          "width": 0.074112,
+          "sample_index": 10
+        },
+        {
+          "anchor": [
+            -0.007394,
+            0.004964,
+            -0.001889
+          ],
+          "approach_dir": [
+            -0.444699,
+            0.864766,
+            0.233285
+          ],
+          "width": 0.080412,
+          "sample_index": 11
+        },
+        {
+          "anchor": [
+            -0.014524,
+            -0.005187,
+            0.003899
+          ],
+          "approach_dir": [
+            0.814154,
+            0.409239,
+            0.411919
+          ],
+          "width": 0.075363,
+          "sample_index": 12
+        },
+        {
+          "anchor": [
+            0.002339,
+            0.016777,
+            0.017827
+          ],
+          "approach_dir": [
+            -0.228258,
+            -0.94802,
+            0.221712
+          ],
+          "width": 0.077108,
+          "sample_index": 13
+        },
+        {
+          "anchor": [
+            0.01439,
+            -0.016355,
+            0.013338
+          ],
+          "approach_dir": [
+            -0.738476,
+            -0.096539,
+            0.667334
+          ],
+          "width": 0.080574,
+          "sample_index": 14
+        },
+        {
+          "anchor": [
+            0.008705,
+            -0.012817,
+            0.003067
+          ],
+          "approach_dir": [
+            -0.691721,
+            -0.208049,
+            0.691548
+          ],
+          "width": 0.082629,
+          "sample_index": 15
+        },
+        {
+          "anchor": [
+            0.011775,
+            -0.021587,
+            0.011183
+          ],
+          "approach_dir": [
+            -0.333748,
+            0.939338,
+            0.079094
+          ],
+          "width": 0.07067,
+          "sample_index": 16
+        },
+        {
+          "anchor": [
+            0.019254,
+            -0.003896,
+            -0.000324
+          ],
+          "approach_dir": [
+            -0.822127,
+            -0.04624,
+            0.567423
+          ],
+          "width": 0.073953,
+          "sample_index": 17
+        },
+        {
+          "anchor": [
+            0.027729,
+            0.01143,
+            0.022292
+          ],
+          "approach_dir": [
+            -0.324837,
+            -0.021498,
+            0.945526
+          ],
+          "width": 0.072418,
+          "sample_index": 18
+        },
+        {
+          "anchor": [
+            0.025379,
+            0.010734,
+            0.004199
+          ],
+          "approach_dir": [
+            -0.658373,
+            -0.673135,
+            0.3368
+          ],
+          "width": 0.069921,
+          "sample_index": 19
+        },
+        {
+          "anchor": [
+            0.000289,
+            0.026653,
+            0.002028
+          ],
+          "approach_dir": [
+            -0.295659,
+            -0.84058,
+            0.453884
+          ],
+          "width": 0.07193,
+          "sample_index": 20
+        },
+        {
+          "anchor": [
+            0.012772,
+            0.010535,
+            0.004145
+          ],
+          "approach_dir": [
+            -0.284335,
+            -0.592051,
+            0.754075
+          ],
+          "width": 0.078288,
+          "sample_index": 21
+        },
+        {
+          "anchor": [
+            -0.011709,
+            0.000383,
+            0.012246
+          ],
+          "approach_dir": [
+            0.476627,
+            0.506329,
+            0.71865
+          ],
+          "width": 0.076835,
+          "sample_index": 22
+        },
+        {
+          "anchor": [
+            -0.007554,
+            -0.016661,
+            0.001701
+          ],
+          "approach_dir": [
+            0.284515,
+            0.958519,
+            0.017077
+          ],
+          "width": 0.073976,
+          "sample_index": 23
+        },
+        {
+          "anchor": [
+            -0.007832,
+            -0.024633,
+            0.027203
+          ],
+          "approach_dir": [
+            -0.923395,
+            0.349852,
+            -0.15794
+          ],
+          "width": 0.077746,
+          "sample_index": 24
+        },
+        {
+          "anchor": [
+            0.026061,
+            0.008997,
+            0.005238
+          ],
+          "approach_dir": [
+            0.857585,
+            -0.413658,
+            0.305672
+          ],
+          "width": 0.072792,
+          "sample_index": 25
+        },
+        {
+          "anchor": [
+            0.022565,
+            0.02481,
+            0.001286
+          ],
+          "approach_dir": [
+            -0.558258,
+            -0.568506,
+            0.604275
+          ],
+          "width": 0.068662,
+          "sample_index": 26
+        },
+        {
+          "anchor": [
+            0.0252,
+            -0.017502,
+            0.012716
+          ],
+          "approach_dir": [
+            -0.683669,
+            0.263192,
+            0.680682
+          ],
+          "width": 0.074361,
+          "sample_index": 27
+        },
+        {
+          "anchor": [
+            0.012628,
+            0.020609,
+            0.011253
+          ],
+          "approach_dir": [
+            -0.104225,
+            -0.702673,
+            0.703838
+          ],
+          "width": 0.080532,
+          "sample_index": 28
+        },
+        {
+          "anchor": [
+            -0.004065,
+            -0.025456,
+            0.016383
+          ],
+          "approach_dir": [
+            -0.705663,
+            0.51237,
+            0.489405
+          ],
+          "width": 0.081443,
+          "sample_index": 29
+        }
+      ],
+      "contact_components": [
+        {
+          "anchor": [
+            0.046926,
+            -0.014826,
+            -0.081708
+          ],
+          "outward_normal": [
+            -0.381434,
+            -0.156606,
+            -0.911034
+          ],
+          "n_samples": 3
+        }
+      ],
+      "support_components": [
+        {
+          "surface_anchor": [
+            -0.230658,
+            -0.273175,
+            0.008861
+          ],
+          "surface_normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "footprint_radius": 0.01,
+          "n_samples": 1
+        }
+      ],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            0.006987,
+            0.002627,
+            -0.247956
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 30
+        }
+      ]
+    },
+    "actor:024_bowl": {
+      "raw_obj_id": "actor:024_bowl",
+      "n_samples": 30,
+      "grasp_components": [
+        {
+          "anchor": [
+            -0.071817,
+            0.003695,
+            0.023484
+          ],
+          "approach_dir": [
+            -0.059097,
+            0.993998,
+            -0.092064
+          ],
+          "width": 0.012295,
+          "sample_index": 0
+        },
+        {
+          "anchor": [
+            -0.042964,
+            0.071605,
+            0.030425
+          ],
+          "approach_dir": [
+            0.839167,
+            0.484011,
+            -0.248057
+          ],
+          "width": 0.010432,
+          "sample_index": 1
+        },
+        {
+          "anchor": [
+            -0.015606,
+            -0.065796,
+            0.00889
+          ],
+          "approach_dir": [
+            -0.972808,
+            0.228513,
+            0.037765
+          ],
+          "width": 0.010855,
+          "sample_index": 2
+        },
+        {
+          "anchor": [
+            -0.009946,
+            0.07178,
+            0.013226
+          ],
+          "approach_dir": [
+            0.968851,
+            0.204805,
+            0.13922
+          ],
+          "width": 0.00964,
+          "sample_index": 3
+        },
+        {
+          "anchor": [
+            -0.067567,
+            0.019769,
+            0.01374
+          ],
+          "approach_dir": [
+            0.195298,
+            0.969434,
+            0.148514
+          ],
+          "width": 0.009977,
+          "sample_index": 4
+        },
+        {
+          "anchor": [
+            0.052534,
+            0.042041,
+            0.019272
+          ],
+          "approach_dir": [
+            -0.393979,
+            0.876276,
+            0.277345
+          ],
+          "width": 0.015098,
+          "sample_index": 5
+        },
+        {
+          "anchor": [
+            -0.058004,
+            0.035236,
+            0.008258
+          ],
+          "approach_dir": [
+            0.350675,
+            0.903562,
+            0.246175
+          ],
+          "width": 0.009859,
+          "sample_index": 6
+        },
+        {
+          "anchor": [
+            -0.060106,
+            -0.027046,
+            0.013637
+          ],
+          "approach_dir": [
+            0.287031,
+            -0.808064,
+            0.514437
+          ],
+          "width": 0.019305,
+          "sample_index": 7
+        },
+        {
+          "anchor": [
+            0.020686,
+            0.070817,
+            0.020659
+          ],
+          "approach_dir": [
+            0.829719,
+            -0.380473,
+            -0.40842
+          ],
+          "width": 0.011465,
+          "sample_index": 8
+        },
+        {
+          "anchor": [
+            -0.018406,
+            0.072866,
+            0.018562
+          ],
+          "approach_dir": [
+            0.963257,
+            0.128524,
+            -0.235832
+          ],
+          "width": 0.009713,
+          "sample_index": 9
+        },
+        {
+          "anchor": [
+            0.069195,
+            -0.036295,
+            0.031483
+          ],
+          "approach_dir": [
+            -0.651016,
+            -0.75084,
+            -0.111436
+          ],
+          "width": 0.015647,
+          "sample_index": 10
+        },
+        {
+          "anchor": [
+            0.062792,
+            -0.033818,
+            0.024856
+          ],
+          "approach_dir": [
+            -0.679162,
+            -0.703916,
+            -0.207942
+          ],
+          "width": 0.016295,
+          "sample_index": 11
+        },
+        {
+          "anchor": [
+            0.010814,
+            0.06754,
+            0.011588
+          ],
+          "approach_dir": [
+            0.962722,
+            -0.20172,
+            -0.18021
+          ],
+          "width": 0.010389,
+          "sample_index": 12
+        },
+        {
+          "anchor": [
+            0.082431,
+            0.009106,
+            0.035926
+          ],
+          "approach_dir": [
+            0.192343,
+            -0.922961,
+            -0.333389
+          ],
+          "width": 0.014623,
+          "sample_index": 13
+        },
+        {
+          "anchor": [
+            0.077634,
+            0.001081,
+            0.025126
+          ],
+          "approach_dir": [
+            -0.21738,
+            0.901358,
+            -0.374566
+          ],
+          "width": 0.012542,
+          "sample_index": 14
+        },
+        {
+          "anchor": [
+            -0.017974,
+            -0.073817,
+            0.026135
+          ],
+          "approach_dir": [
+            -0.948897,
+            0.303344,
+            -0.087048
+          ],
+          "width": 0.011006,
+          "sample_index": 15
+        },
+        {
+          "anchor": [
+            0.006308,
+            0.078286,
+            0.028629
+          ],
+          "approach_dir": [
+            0.981438,
+            -0.095587,
+            -0.166263
+          ],
+          "width": 0.009763,
+          "sample_index": 16
+        },
+        {
+          "anchor": [
+            -0.033836,
+            -0.072525,
+            0.035035
+          ],
+          "approach_dir": [
+            -0.799003,
+            0.601117,
+            0.015918
+          ],
+          "width": 0.015201,
+          "sample_index": 17
+        },
+        {
+          "anchor": [
+            0.014115,
+            0.07819,
+            0.029106
+          ],
+          "approach_dir": [
+            0.984492,
+            -0.169143,
+            0.046539
+          ],
+          "width": 0.008884,
+          "sample_index": 18
+        },
+        {
+          "anchor": [
+            0.017308,
+            0.082915,
+            0.035947
+          ],
+          "approach_dir": [
+            0.971718,
+            -0.225391,
+            -0.070442
+          ],
+          "width": 0.009473,
+          "sample_index": 19
+        },
+        {
+          "anchor": [
+            0.060097,
+            0.032692,
+            0.016477
+          ],
+          "approach_dir": [
+            -0.542345,
+            0.779318,
+            -0.313888
+          ],
+          "width": 0.014543,
+          "sample_index": 20
+        },
+        {
+          "anchor": [
+            0.001075,
+            -0.077116,
+            0.033873
+          ],
+          "approach_dir": [
+            -0.947602,
+            -0.211018,
+            0.239837
+          ],
+          "width": 0.012334,
+          "sample_index": 21
+        },
+        {
+          "anchor": [
+            -0.03659,
+            -0.065196,
+            0.028043
+          ],
+          "approach_dir": [
+            -0.648439,
+            0.653816,
+            -0.389938
+          ],
+          "width": 0.017069,
+          "sample_index": 22
+        },
+        {
+          "anchor": [
+            -0.065004,
+            0.028138,
+            0.012622
+          ],
+          "approach_dir": [
+            0.463622,
+            0.87239,
+            -0.15489
+          ],
+          "width": 0.00981,
+          "sample_index": 23
+        },
+        {
+          "anchor": [
+            0.001464,
+            0.075673,
+            0.02172
+          ],
+          "approach_dir": [
+            0.997311,
+            0.0004,
+            -0.073286
+          ],
+          "width": 0.009904,
+          "sample_index": 24
+        },
+        {
+          "anchor": [
+            0.027591,
+            0.076698,
+            0.027766
+          ],
+          "approach_dir": [
+            0.803585,
+            -0.455071,
+            -0.383616
+          ],
+          "width": 0.010167,
+          "sample_index": 25
+        },
+        {
+          "anchor": [
+            -0.06823,
+            -0.035167,
+            0.033897
+          ],
+          "approach_dir": [
+            -0.439695,
+            0.871648,
+            -0.216561
+          ],
+          "width": 0.019345,
+          "sample_index": 26
+        },
+        {
+          "anchor": [
+            -0.031632,
+            0.07215,
+            0.029503
+          ],
+          "approach_dir": [
+            0.912013,
+            0.388224,
+            -0.132341
+          ],
+          "width": 0.010547,
+          "sample_index": 27
+        },
+        {
+          "anchor": [
+            0.087276,
+            0.014359,
+            0.043099
+          ],
+          "approach_dir": [
+            0.125838,
+            -0.955573,
+            -0.266542
+          ],
+          "width": 0.01442,
+          "sample_index": 28
+        },
+        {
+          "anchor": [
+            -0.046233,
+            -0.046775,
+            0.01344
+          ],
+          "approach_dir": [
+            -0.640787,
+            0.753395,
+            0.147607
+          ],
+          "width": 0.019301,
+          "sample_index": 29
+        }
+      ],
+      "contact_components": [
+        {
+          "anchor": [
+            -0.024824,
+            -0.561152,
+            -0.264181
+          ],
+          "outward_normal": [
+            0.101972,
+            0.068696,
+            0.992412
+          ],
+          "n_samples": 1
+        }
+      ],
+      "support_components": [
+        {
+          "surface_anchor": [
+            -0.049648,
+            -1.122303,
+            -0.528363
+          ],
+          "surface_normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "footprint_radius": 0.01,
+          "n_samples": 1
+        }
+      ],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            0.063731,
+            0.061652,
+            0.031974
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 30
+        }
+      ]
+    },
+    "link:fridge-0/body": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.038513,
+            -0.05494,
+            0.003735
+          ],
+          "outward_normal": [
+            0.001089,
+            -0.006604,
+            -0.999978
+          ],
+          "n_samples": 18
+        }
+      ],
+      "support_components": [
+        {
+          "surface_anchor": [
+            0.021187,
+            0.013905,
+            -0.158583
+          ],
+          "surface_normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "footprint_radius": 0.343266,
+          "n_samples": 46
+        }
+      ],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            0.300785,
+            -0.009584,
+            -0.193243
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "actor:003_cracker_box": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.024974,
+            -0.023277,
+            -0.1604
+          ],
+          "outward_normal": [
+            -0.127485,
+            -0.038548,
+            -0.991091
+          ],
+          "n_samples": 12
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            -0.149231,
+            -0.07281,
+            -0.261912
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 11
+        }
+      ]
+    },
+    "actor:008_pudding_box": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.091952,
+            0.087328,
+            0.148094
+          ],
+          "outward_normal": [
+            0.015358,
+            0.004594,
+            -0.999871
+          ],
+          "n_samples": 8
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            -0.183904,
+            0.17466,
+            0.296191
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 8
+        }
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.022565,
+            0.368852,
+            0.050659
+          ],
+          "outward_normal": [
+            0.005146,
+            0.999982,
+            0.003198
+          ],
+          "n_samples": 11
+        }
+      ],
+      "support_components": [
+        {
+          "surface_anchor": [
+            -0.074369,
+            0.750823,
+            0.216911
+          ],
+          "surface_normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "footprint_radius": 0.238883,
+          "n_samples": 10
+        }
+      ],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            0.247248,
+            0.606515,
+            -1.054611
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "actor:007_tuna_fish_can": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.129957,
+            0.168135,
+            -0.345346
+          ],
+          "outward_normal": [
+            0.001435,
+            0.000819,
+            -0.999999
+          ],
+          "n_samples": 3
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            -0.260074,
+            0.336166,
+            -0.690682
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 3
+        }
+      ]
+    },
+    "actor:004_sugar_box": {
+      "contact_components": [
+        {
+          "anchor": [
+            0.575473,
+            0.120256,
+            -0.487562
+          ],
+          "outward_normal": [
+            -0.049099,
+            -0.000251,
+            -0.998794
+          ],
+          "n_samples": 1
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            1.150987,
+            0.240531,
+            -0.975066
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "actor:009_gelatin_box": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.237554,
+            -0.075109,
+            -0.343211
+          ],
+          "outward_normal": [
+            -0.007424,
+            0.006343,
+            -0.999952
+          ],
+          "n_samples": 1
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            -0.474899,
+            -0.150397,
+            -0.686527
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "actor:005_tomato_soup_can": {
+      "contact_components": [
+        {
+          "anchor": [
+            -0.115438,
+            -0.078724,
+            -0.440434
+          ],
+          "outward_normal": [
+            -0.019007,
+            0.001636,
+            -0.999818
+          ],
+          "n_samples": 1
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            -0.230862,
+            -0.157439,
+            -0.880874
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "actor:010_potted_meat_can": {
+      "contact_components": [
+        {
+          "anchor": [
+            0.299962,
+            0.153684,
+            -0.436714
+          ],
+          "outward_normal": [
+            -0.00403,
+            0.002724,
+            -0.999988
+          ],
+          "n_samples": 1
+        }
+      ],
+      "support_components": [],
+      "bottom_components": [
+        {
+          "bottom_anchor": [
+            0.59992,
+            0.307376,
+            -0.873428
+          ],
+          "bottom_normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "n_samples": 1
+        }
+      ]
+    },
+    "link:kitchen_counter-0/drawer3": {
+      "contact_components": [],
+      "support_components": [
+        {
+          "surface_anchor": [
+            0.015448,
+            -0.031561,
+            -0.056679
+          ],
+          "surface_normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "footprint_radius": 0.189475,
+          "n_samples": 30
+        }
+      ],
+      "bottom_components": []
+    }
+  }
+}

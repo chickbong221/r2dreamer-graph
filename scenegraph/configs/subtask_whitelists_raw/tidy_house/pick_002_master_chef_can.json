@@ -1,0 +1,163 @@
+{
+  "_schema_version": 4,
+  "subtask": "pick",
+  "task_group": "tidy_house",
+  "membership_policy": "full-evidence",
+  "target": "actor:002_master_chef_can",
+  "members": {
+    "actor:002_master_chef_can": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "obj_0",
+      "interaction_rollouts": 30
+    },
+    "actor:frl_apartment_chair_01": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[2,3]_frl_apartment_chair_01-15",
+      "support_rollouts": 9,
+      "supports": [
+        "actor:002_master_chef_can"
+      ]
+    },
+    "actor:frl_apartment_table_01": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[4,5]_frl_apartment_table_01-6",
+      "support_rollouts": 1,
+      "supports": [
+        "actor:002_master_chef_can"
+      ]
+    },
+    "actor:frl_apartment_tvstand": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[6,7]_frl_apartment_tvstand-2",
+      "support_rollouts": 6,
+      "supports": [
+        "actor:002_master_chef_can"
+      ]
+    },
+    "link:kitchen_counter-0/body": {
+      "roles": [
+        "support"
+      ],
+      "interaction_types": [
+        "support"
+      ],
+      "kind": "link",
+      "name": "body",
+      "support_rollouts": 11,
+      "supports": [
+        "actor:002_master_chef_can"
+      ]
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.15707080068074303,
+      0.31414160136148606,
+      0.4712124020422291,
+      0.6282832027229721
+    ],
+    "height-offset": [
+      -0.6032469521462918,
+      -0.20108231738209725,
+      0.20108231738209725,
+      0.6032469521462918
+    ],
+    "planar-distance-change": [
+      -0.06779934702548461,
+      -0.00941657597576175,
+      0.00941657597576175,
+      0.06779934702548461
+    ],
+    "height-offset-change": [
+      -0.0808746099472046,
+      -0.011232584714889528,
+      0.011232584714889528,
+      0.0808746099472046
+    ],
+    "grasp-compatibility-change": [
+      -0.01145443736124679,
+      -0.0015908940779509433,
+      0.0015908940779509433,
+      0.01145443736124679
+    ],
+    "contact-compatibility-change": [
+      -0.00686287757820279,
+      -0.0009531774414170542,
+      0.0009531774414170542,
+      0.00686287757820279
+    ],
+    "support-compatibility-change": [
+      -0.014996646485608472,
+      -0.0020828675674456213,
+      0.0020828675674456213,
+      0.014996646485608472
+    ]
+  },
+  "bin_stats_robust": {
+    "contact_compatibility": 0.615269226545723,
+    "contact_compatibility_change": 0.01143812929700465,
+    "grasp_compatibility": 0.5868354605154833,
+    "grasp_compatibility_change": 0.01909072893541132,
+    "height_offset": 1.0054115869104863,
+    "height_offset_change": 0.13479101657867434,
+    "planar_distance": 0.7853540034037152,
+    "planar_distance_change": 0.11299891170914102,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.024994410809347455
+  },
+  "bin_stats_observed": {
+    "contact_compatibility": 0.9429667169288243,
+    "contact_compatibility_change": 0.7127328905483592,
+    "grasp_compatibility": 0.7096911465218206,
+    "grasp_compatibility_change": 0.5778133028930831,
+    "height_offset": 1.2711965776979923,
+    "height_offset_change": 0.3332065939903259,
+    "planar_distance": 1.4759174489271443,
+    "planar_distance_change": 0.8490542683452053,
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.38861174424474343
+  },
+  "_n_successful_rollouts": 30
+}
