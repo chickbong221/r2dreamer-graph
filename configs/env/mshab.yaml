@@ -12,7 +12,7 @@ time_limit: 100
 seed: ${seed}
 device: ${device}
 
-mshab_task: prepare_groceries
+mshab_task: SetTable
 mshab_obj: all
 split: train
 eval_split: train

@@ -83,7 +83,7 @@ PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   batch_length=64 \
   env.env_num=189 \
   env.train_ratio=64 \
-  env.mshab_task=prepare_groceries \
+  env.mshab_task=SetTable \
   env.mshab_obj=all \
   env.num_build_configs=10 \
   env.eval_episode_num=10 \
