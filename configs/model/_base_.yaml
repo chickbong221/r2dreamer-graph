@@ -144,11 +144,19 @@ graph:
   bbox_beta: 0.1
   reverse_edges: True
   act: ${model.act}
-  # Simple mode. Node input is 2*embed + uid_embed = 192 wide, so the stock
-  # 768-unit GNN is oversized; 512 also sizes the pooled token, and
-  # semantic_dim matches it so the head predicts the token with no projection.
+  # Simple modes. simple_units is the GNN width and also the pooled token
+  # width; the posterior Q([h, c]) projects that token to semantic_dim, so the
+  # two are already independent and simple_units can be lowered on its own.
   simple_units: 512
   semantic_dim: 512
+  # Pooled graph-simple auxiliary decoder. Narrower than the GNN on purpose:
+  # it runs over every node and every real edge, which is where the auxiliary
+  # path spends most of its arithmetic.
+  decoder_units: 256
+  # Width of the per-node box signature that addresses g. A deliberate
+  # continuous bottleneck on how much geometry can reach the box head without
+  # passing through the global vector.
+  bbox_query_dim: 4
   # Episode-scoped object identity. Codes are permuted per episode so a UID
   # means "same object as before" and nothing more. Size this above the peak
   # episode/graph_episode_entities; overflow raises rather than aliasing.

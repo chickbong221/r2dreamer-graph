@@ -36,6 +36,9 @@ graph:
   # True: relation-only contract. No appearance or bbox keys are produced,
   # stored or sampled, and DINO is never constructed.
   simple: ${model.graph_simple}
+  # Which simple contract. pooled emits graph_node_bbox and no UID; slots emit
+  # graph_node_uid and no boxes. The adapter cannot derive this from `simple`.
+  state_mode: ${model.graph.state_mode}
   uid_vocab: ${model.graph.uid_vocab}
   profile: room_scale
   thresholds_path: ''

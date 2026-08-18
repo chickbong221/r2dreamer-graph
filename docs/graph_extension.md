@@ -33,27 +33,56 @@ unambiguous.
 - Graph semantic method: use `model=size50M_graph`.
 - Matched graph-free DreamerV3: use `model=size50M_graph model.graph.enabled=false`.
 - Graph-only latent: add `model.graph_only_latent=true` to the graph method.
-- Simple graph: add `model.graph_simple=true` to the graph method.
+- Pooled graph-simple: use `model=size50M_graph_simple`, or add
+  `model.graph_simple=true` to the graph method.
+- Slot graph-simple: use `model=size50M_graph_slots`.
 
-## Simple graph mode
+## Simple graph modes
 
 `model.graph_simple=true` swaps the whole graph path for a relation-only one.
 It is mutually exclusive with `graph_only_latent` and needs `graph.enabled`.
 
-The replay contract loses appearance and boxes and gains an identity column:
+`graph_simple` alone does not name a contract. `model.graph.state_mode` picks
+between two, and the environment is told which through `env.graph.state_mode`:
+
+| Schema | Selected by | Node fields |
+|---|---|---|
+| `full` | `graph_simple=false` | appearance, bbox, target |
+| `simple_pooled_bbox` | `graph_simple=true`, `state_mode=pooled` | bbox, target |
+| `simple_slot_uid` | `graph_simple=true`, `state_mode=slots` | uid, target |
+
+Pooled graph-simple addresses a node by the box it currently occupies; slot
+graph-simple aligns nodes across frames by UID. Emitting both columns to both
+would put a key in replay that one of them must never read, so the packer emits
+exactly one. `graph_node_uid` nevertheless stays in the model's reserved graph
+key set, so a stale wrapper that still exposes it cannot feed it to the ordinary
+MLP encoder and quietly train an identity-conditioned model; a pooled run that
+is handed the key raises instead.
+
+Neither simple schema constructs DINO or reads RGB in the graph builder.
+`graph_node_app` is absent from the observation space, the transition, replay
+and the sampled batch -- not zeroed -- which removes about 12.3 KB per
+environment step. The pooled schema keeps boxes, at 8 x 2 x 4 float16 = 128
+bytes per frame, and extracts them without any appearance machinery: one lookup
+table from segmentation id to node row and two boolean projections per camera,
+instead of one `np.isin` sweep and one patch-grid reduction per node. Patch
+coverage is never computed.
+
+### Pooled graph-simple
+
+The replay contract:
 
 | Key | Shape | Storage dtype |
 |---|---:|---|
 | `graph_node_ent` | `[8]` | `uint8` |
-| `graph_node_uid` | `[8]` | `uint8` |
+| `graph_node_bbox` | `[8,2,4]` | `float16` |
 | `graph_node_target` | `[8]` | `uint8` |
 | `graph_edge_*` | `[168]` | `uint8` |
 
-`graph_node_app` and `graph_node_bbox` are absent from the observation space,
-the transition, replay and the sampled batch -- not zeroed. DINO is never
-constructed, RGB is never read by the graph builder, and per-node boxes and
-patch coverage are never computed. That removes about 12.4 KB per environment
-step, less 16 bytes for the UID column.
+Boxes arrive already normalised to `[0,1]` as `[xmin, xmax, ymin, ymax]` with
+exclusive maxima, so nothing normalises them a second time. Per-camera validity
+is derived on device as `xmax > xmin and ymax > ymin` and never stored. It masks
+the box terms; it is not a predicted visibility objective.
 
 The latent model changes in four ways:
 
@@ -75,12 +104,82 @@ The latent model changes in four ways:
   task losses do -- so watch `graph_align_cos` against
   `graph_sem_post_var`.
 
-The graph decoder no longer reads the encoder's node vectors. It reconstructs
-each node by querying `g` with that node's UID, which makes `nodetgt`,
-`relabs` and `reltemp` a measure of what `g` retained. This is conditional
-graph-attribute reconstruction: nodes, edge endpoints and relation families
-are supplied, and only the target flag and the absolute/temporal labels are
-recovered. `node`, appearance, bbox and visibility losses are gone.
+The pooled token `c_t` is a masked mean over admitted nodes concatenated with
+the normalised node count, then one projection: every admitted node gets the
+same `1/n` coefficient, and the count keeps two sets with the same mean and
+different cardinality apart. Attention pooling exists only in `full` mode. Note
+what this does and does not claim: the aggregation is permutation invariant with
+uniform coefficients, but a 512-d bottleneck is still lossy, and it is the node
+and relation reconstruction objectives -- not the pooling -- that push `g` to
+retain the whole bounded graph.
+
+The decoder reads `g`, never the encoder's node vectors. Each node is recovered
+by querying `g` with a narrow signature of that node's current box, which makes
+`node`, `nodetgt`, `relabs` and `reltemp` a measure of what `g` retained. A box
+is a cheap content address: it works the frame a node first appears and keeps
+episode-random identity codes out of the global dynamics. It is a *content*
+key, not an identity one, so two nodes with identical boxes are not separable --
+under `staleness_enabled: false` only currently segmented objects are emitted,
+so the end effector is the one node that can have an empty box, and it is the
+only node of its type. Turning staleness on would break that argument.
+
+`loss/node` here averages entity cross entropy and box SmoothL1, reported
+separately as `node_ent_loss` and `node_bbox_loss`. It is **not** comparable
+with full mode's `loss/node`, which averages appearance, boxes and visibility.
+Box error is averaged over the four coordinates rather than summed, and every
+term is reduced per valid node and then per frame, so loss magnitude does not
+track graph size. Box IoU is an evaluation metric, not an update-loop one.
+
+### Progress in pooled graph-simple
+
+`progress.enabled=true` works in both simple modes. Pooled reads one fused head
+`H(g_hat) -> [R, n_abs]` covering exactly the relations the scorer names -- six
+for the built-in Pick table -- rather than decoding a distribution per stage or
+per candidate target. The head lives inside `SimpleGraphDecoder`, so the
+optimizer, the checkpoint and `clone_and_freeze` pick it up automatically and
+imagination reads the parameters training wrote. Relation ids are mapped to
+output rows through the scorer's own relation order; the id is never the row.
+
+`prior_progress_relabs` supervises that head on the observed EE-to-target facts.
+The teacher mask is `not is_first and not is_last and target flagged and the
+edge exists`: `g_hat` has no preceding episode to predict the reset frame from,
+and a target admitted on any later frame is supervised immediately. Nothing
+about `target_resolved` reaches replay -- when the target is unresolved,
+unadmitted or occluded, the flag is dark and the edges are gone, so the frame
+drops out on its own.
+
+That last point is recurrent, not one-off. With `staleness_enabled: false` the
+target vertex is only emitted while a camera sees it; the registry holds its
+*index* through occlusion but the flag itself goes dark every time it is
+occluded. The design assumes one fixed target per episode and relies on `h` to
+carry that role through absence. There is no target-null class and no
+target-presence head, so a task where the target can change or be absent within
+an episode would need one.
+
+Progress never runs inside a loop. During imagination `g` is already a
+contiguous slice of the stacked `imag_feat` (`[z, g, h]`), so after the rollout
+one linear, one softmax and one contraction cover all `B x H` states at once.
+The potential itself is a single precomputed `[R, n_abs]` matrix contraction,
+exactly equal to the cumulative-stage sum for `soft: true`. The progress critic
+input is `[imag_feat, vec(p)]` and nothing else -- no masks, no counts, no
+boxes, no observed labels. It is trained and normalised separately and enters
+the actor as `A = A_env + beta * A_progress`; the reported task return, the
+reward head, the continuation head and the environment critic are untouched.
+
+`r_progress = (1 - gamma) * Phi` is a bounded progress-*potential* return, not
+classical potential-difference shaping: it rewards reaching and holding high
+progress states rather than improving between them.
+
+### Slot graph-simple
+
+The replay contract keeps `graph_node_uid` and has no boxes:
+
+| Key | Shape | Storage dtype |
+|---|---:|---|
+| `graph_node_ent` | `[8]` | `uint8` |
+| `graph_node_uid` | `[8]` | `uint8` |
+| `graph_node_target` | `[8]` | `uint8` |
+| `graph_edge_*` | `[168]` | `uint8` |
 
 UIDs are episode-scoped, allocated on first sight, kept when an object leaves
 the view, and never handed to a second object before reset. Codes are permuted
@@ -89,7 +188,11 @@ Overflow raises; size `model.graph.uid_vocab` above the peak
 `episode/graph_episode_entities` rather than letting two objects alias. The
 ceiling is 256: UIDs are packed as `uint8`, and the replay buffer's
 `index_put` has no `uint16` kernel. Going wider means moving to `int32`, not
-`uint16`.
+`uint16`. Nothing assigns or packs a UID under the pooled schema.
+
+`SlotAligner`, slot occupancy, births and deaths, candidate target decoding and
+per-candidate mixing belong to this mode alone and never execute under
+`state_mode: pooled`.
 
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation
@@ -106,7 +209,7 @@ arm retains the base repository's existing compile behavior.
 Run correctness tests:
 
 ```bash
-python -m unittest test_graph test_semantic_rssm test_dreamer_graph test_mshab_contract
+python -m unittest test_graph test_graph_simple test_semantic_rssm \n  test_slot_dynamics test_dreamer_graph test_entity_registry \n  test_mshab_contract
 ```
 
 Check that padding width no longer controls graph compute:

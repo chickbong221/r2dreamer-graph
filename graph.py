@@ -43,44 +43,93 @@ def graph_state_mode(config) -> str:
     return mode
 
 
+# Three observation schemas. ``simple`` alone no longer selects one: pooled
+# graph-simple addresses a node by the box it currently occupies and never sees
+# an identity code, while slot graph-simple aligns by UID across frames and
+# carries no boxes at all. Emitting both fields to both modes would put a key in
+# replay that one of them must never read.
+SCHEMA_FULL = "full"
+SCHEMA_SIMPLE_POOLED = "simple_pooled_bbox"
+SCHEMA_SIMPLE_SLOT = "simple_slot_uid"
+GRAPH_SCHEMAS = (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED, SCHEMA_SIMPLE_SLOT)
+
+_EDGE_KEYS = (
+    "graph_edge_src",
+    "graph_edge_dst",
+    "graph_edge_rel",
+    "graph_edge_abs",
+    "graph_edge_temp",
+)
+
 FULL_GRAPH_KEYS = (
     "graph_node_ent",
     "graph_node_app",
     "graph_node_bbox",
     "graph_node_target",
-    "graph_edge_src",
-    "graph_edge_dst",
-    "graph_edge_rel",
-    "graph_edge_abs",
-    "graph_edge_temp",
+    *_EDGE_KEYS,
 )
 
-# Relation-only contract. Appearance and boxes are absent rather than zeroed,
-# and ``graph_node_uid`` names a node across frames so the decoder can address
-# one without the compact slot, which the vertex registry reuses.
-SIMPLE_GRAPH_KEYS = (
+# Pooled graph-simple. No appearance and no UID: the per-camera box is both the
+# node's distinguishing content and the decoder's address.
+SIMPLE_POOLED_GRAPH_KEYS = (
+    "graph_node_ent",
+    "graph_node_bbox",
+    "graph_node_target",
+    *_EDGE_KEYS,
+)
+
+# Slot graph-simple. Relation-only; ``graph_node_uid`` names a node across
+# frames, which is the only thing :class:`SlotAligner` may match on.
+SIMPLE_SLOT_GRAPH_KEYS = (
     "graph_node_ent",
     "graph_node_uid",
     "graph_node_target",
-    "graph_edge_src",
-    "graph_edge_dst",
-    "graph_edge_rel",
-    "graph_edge_abs",
-    "graph_edge_temp",
+    *_EDGE_KEYS,
 )
 
+SCHEMA_KEYS = {
+    SCHEMA_FULL: FULL_GRAPH_KEYS,
+    SCHEMA_SIMPLE_POOLED: SIMPLE_POOLED_GRAPH_KEYS,
+    SCHEMA_SIMPLE_SLOT: SIMPLE_SLOT_GRAPH_KEYS,
+}
+
+# Every key any schema has ever emitted, whether or not the active one reads it.
+# The pixel/state encoder excludes this whole set, so a key the active schema
+# dropped -- ``graph_node_uid`` under the pooled schema -- cannot reach the MLP
+# encoder from a stale wrapper and quietly train an identity-conditioned model.
+RESERVED_GRAPH_KEYS = frozenset(
+    key for keys in SCHEMA_KEYS.values() for key in keys
+) | {"graph_node_uid", "graph_node_app", "graph_node_bbox"}
+
 GRAPH_KEYS = FULL_GRAPH_KEYS
+# Retained for callers that still speak of "the simple contract"; slot mode is
+# the one that kept the relation-only key set unchanged.
+SIMPLE_GRAPH_KEYS = SIMPLE_SLOT_GRAPH_KEYS
 
 
-def graph_keys(simple: bool) -> tuple[str, ...]:
-    return SIMPLE_GRAPH_KEYS if simple else FULL_GRAPH_KEYS
+def graph_schema(simple: bool, state_mode: str = "pooled") -> str:
+    """Pick the observation schema from the two existing config switches."""
+    if not simple:
+        return SCHEMA_FULL
+    if str(state_mode) == "slots":
+        return SCHEMA_SIMPLE_SLOT
+    return SCHEMA_SIMPLE_POOLED
+
+
+def graph_keys(schema: str) -> tuple[str, ...]:
+    try:
+        return SCHEMA_KEYS[schema]
+    except KeyError:
+        raise ValueError(
+            f"unknown graph schema {schema!r}; expected one of {GRAPH_SCHEMAS}"
+        ) from None
 
 
 def graph_from(
-    data: Mapping[str, torch.Tensor], simple: bool = False
+    data: Mapping[str, torch.Tensor], schema: str = SCHEMA_FULL
 ) -> dict[str, torch.Tensor]:
-    """Return and validate the graph observation subset for the active mode."""
-    keys = graph_keys(simple)
+    """Return and validate the graph observation subset for the active schema."""
+    keys = graph_keys(schema)
     missing = [key for key in keys if key not in data]
     if missing:
         raise KeyError(f"graph.enabled requires observation keys: {missing}")
@@ -96,9 +145,10 @@ class CompactGraph:
     node_ent: torch.Tensor
     node_target: torch.Tensor
     node_valid: torch.Tensor
-    # Simple mode carries ``node_uid`` and no appearance; full mode the
-    # reverse. The unused side stays None so a mode mix-up raises rather than
-    # silently reading zeros.
+    # Only the fields the active schema emits are populated. The rest stay None
+    # so a schema mix-up raises rather than silently reading zeros: the slot
+    # schema has a UID and no boxes, the pooled schema the reverse, and only the
+    # full schema has appearance.
     node_uid: torch.Tensor | None
     node_app: torch.Tensor | None
     node_bbox: torch.Tensor | None
@@ -106,6 +156,10 @@ class CompactGraph:
     camera_visible: torch.Tensor | None
     edge_src: torch.Tensor
     edge_dst: torch.Tensor
+    # Endpoints before the per-graph offset is added. The progress teacher has
+    # to ask "is this edge's source row zero", which the offset destroys.
+    edge_src_local: torch.Tensor
+    edge_dst_local: torch.Tensor
     edge_rel: torch.Tensor
     edge_abs: torch.Tensor
     edge_temp: torch.Tensor
@@ -118,6 +172,22 @@ class CompactGraph:
     @property
     def edge_count(self) -> int:
         return int(self.edge_rel.numel())
+
+    def bbox_feature(self, dtype: torch.dtype) -> torch.Tensor:
+        """(G, N, 5C): every camera's box, zeroed where invalid, then its bit.
+
+        One flat block so the encoder input and the decoder query are each a
+        single GEMM. The full schema's per-camera ``ModuleList`` is deliberately
+        not reused here -- it pays one small matmul per camera for nothing.
+
+        Boxes arrive already normalised to [0, 1] by the node builder, so there
+        is no second normalisation. Validity is derived, never stored.
+        """
+        if self.node_bbox is None:
+            raise RuntimeError("this graph schema carries no boxes")
+        seen = self.camera_visible.to(dtype)
+        box = self.node_bbox.to(dtype) * seen[..., None]
+        return torch.cat([box.flatten(-2), seen], -1)
 
 
 @dataclass
@@ -177,10 +247,10 @@ class GraphEncoding:
 
 
 def compact_graph(
-    graph: Mapping[str, torch.Tensor], simple: bool = False
+    graph: Mapping[str, torch.Tensor], schema: str = SCHEMA_FULL
 ) -> CompactGraph:
     """Strip padded edge rows on device without creating Python graph objects."""
-    graph = graph_from(graph, simple)
+    graph = graph_from(graph, schema)
     ent = graph["graph_node_ent"]
     if ent.ndim < 2:
         raise ValueError(f"graph_node_ent must have batch and node axes, got {ent.shape}")
@@ -191,18 +261,23 @@ def compact_graph(
     node_ent = ent.reshape(graph_count, num_nodes).long()
     node_uid = node_app = node_bbox = None
     appearance_known = camera_visible = None
-    if simple:
+    if schema == SCHEMA_SIMPLE_SLOT:
         node_uid = graph["graph_node_uid"].reshape(graph_count, num_nodes).long()
     else:
-        app_tail = graph["graph_node_app"].shape[-2:]
         bbox_tail = graph["graph_node_bbox"].shape[-2:]
-        node_app = graph["graph_node_app"].reshape(graph_count, num_nodes, *app_tail)
         node_bbox = graph["graph_node_bbox"].reshape(graph_count, num_nodes, *bbox_tail)
-        appearance_known = node_app.float().abs().sum(-1).ne(0)
+        # A camera that never saw the node leaves its row zero, so an empty box
+        # is exactly "not visible here". Derived rather than stored.
         camera_visible = (
             (node_bbox[..., 1] > node_bbox[..., 0])
             & (node_bbox[..., 3] > node_bbox[..., 2])
         )
+        if schema == SCHEMA_FULL:
+            app_tail = graph["graph_node_app"].shape[-2:]
+            node_app = graph["graph_node_app"].reshape(
+                graph_count, num_nodes, *app_tail
+            )
+            appearance_known = node_app.float().abs().sum(-1).ne(0)
     node_target = graph["graph_node_target"].reshape(graph_count, num_nodes).long()
     node_valid = node_ent.ne(0)
 
@@ -231,6 +306,8 @@ def compact_graph(
         camera_visible=camera_visible,
         edge_src=local_src + offset,
         edge_dst=local_dst + offset,
+        edge_src_local=local_src,
+        edge_dst_local=local_dst,
         edge_rel=rel[edge_valid],
         edge_abs=select("graph_edge_abs"),
         edge_temp=select("graph_edge_temp"),
@@ -252,13 +329,21 @@ class GraphMLP(nn.Module):
 
 
 class GraphEncoder(nn.Module):
-    """Edge-feature GNN with real-edge mean aggregation and attention pooling."""
+    """Edge-feature GNN with real-edge mean aggregation and a pooled readout.
+
+    The readout depends on the schema. Full mode keeps the shipped attention
+    pooling. Pooled graph-simple replaces it with a masked mean plus the
+    normalised node count: uniform coefficients, one reduction and one
+    projection over the flattened batch instead of two per-node 512-wide
+    projections and a softmax. Slot mode pools nowhere.
+    """
 
     def __init__(self, config):
         super().__init__()
         self.simple = bool(getattr(config, "simple", False))
         self.state_mode = graph_state_mode(config)
         self.slot_mode = self.state_mode == "slots"
+        self.schema = graph_schema(self.simple, self.state_mode)
         if self.slot_mode and not self.simple:
             raise ValueError(
                 "graph.state_mode=slots is a relation-only mode; set "
@@ -285,12 +370,15 @@ class GraphEncoder(nn.Module):
             self.bbox_proj = None
             node_in = 2 * self.embed_dim
         elif self.simple:
-            # Same-type siblings are otherwise identical once appearance and
-            # boxes are gone; the UID is the only thing separating them.
-            self.uid = nn.Embedding(int(config.uid_vocab), int(config.uid_embed))
+            # No UID anywhere in the pooled path. The per-camera box separates
+            # same-type siblings and is what the decoder later addresses a node
+            # with, so it is fed raw into the node MLP: one flat (4 + 1) * C
+            # block folded into the projection that was already there, rather
+            # than a per-camera projection per node.
+            self.uid = None
             self.app_proj = None
             self.bbox_proj = None
-            node_in = 2 * self.embed_dim + int(config.uid_embed)
+            node_in = 2 * self.embed_dim + 5 * self.n_cams
         else:
             self.uid = None
             self.app_proj = nn.ModuleList(
@@ -317,13 +405,19 @@ class GraphEncoder(nn.Module):
             GraphMLP(2 * self.units, self.units, str(config.act))
             for _ in range(self.layers)
         )
+        self.query = self.key = self.value = self.out = None
+        self.pool = None
         if self.slot_mode:
             # Attention pooling exists only as a head readout in slot mode, and
             # it lives next to the heads. Building it here would leave unused
             # parameters in the optimizer and invite pooling back into the
             # dynamics path by accident.
-            self.query = None
-            self.key = self.value = self.out = None
+            pass
+        elif self.simple:
+            # [masked mean, count / n_max] -> one token of the same width, so
+            # the RSSM's graph-token input is unchanged. The count is what keeps
+            # two sets with the same mean and different cardinality apart.
+            self.pool = nn.Linear(self.units + 1, self.units)
         else:
             self.query = nn.Parameter(torch.empty(self.units))
             self.key = nn.Linear(self.units, self.units)
@@ -334,10 +428,10 @@ class GraphEncoder(nn.Module):
             nn.init.normal_(self.query, std=0.02)
 
     def forward(self, graph: Mapping[str, torch.Tensor]) -> GraphEncoding:
-        compact = compact_graph(graph, self.simple)
+        compact = compact_graph(graph, self.schema)
         valid = compact.node_valid
         parts = []
-        if not self.simple:
+        if self.schema == SCHEMA_FULL:
             # Replay stores these arrays as float16. Normalize the storage
             # boundary to float32; the shared acting/training autocast policy
             # selects compute dtype for the learned projections.
@@ -349,6 +443,8 @@ class GraphEncoder(nn.Module):
                 box = self.bbox_proj[camera](node_bbox[..., camera, :])
                 parts.append(box * compact.camera_visible[..., camera, None])
         parts.extend((self.entity(compact.node_ent), self.target(compact.node_target)))
+        if self.schema == SCHEMA_SIMPLE_POOLED:
+            parts.append(compact.bbox_feature(parts[0].dtype))
         if self.uid is not None:
             parts.append(self.uid(compact.node_uid))
         nodes = self.node(torch.cat(parts, -1)) * valid[..., None]
@@ -393,14 +489,22 @@ class GraphEncoder(nn.Module):
             )
             return GraphEncoding(slots.slots, None, compact, slots)
 
-        score = (self.key(nodes) * self.query).sum(-1) / math.sqrt(self.units)
-        # Apply masks in float32: -1e9 is outside float16's finite range and
-        # mixed-precision autocast can otherwise fail before softmax.
-        score = score.float().masked_fill(~valid, -1e9)
-        attention = torch.softmax(score, -1).to(nodes.dtype) * valid
-        attention = attention / attention.sum(-1, keepdim=True).clamp_min(1e-6)
-        token = self.out((attention[..., None] * self.value(nodes)).sum(1))
-        token = token * valid.any(-1, keepdim=True)
+        if self.pool is not None:
+            # Nodes are already zeroed where invalid, so the sum needs no second
+            # mask. Every admitted node gets the same 1/n coefficient.
+            count = valid.sum(-1, keepdim=True).to(nodes.dtype)
+            mean = nodes.sum(1) / count.clamp_min(1)
+            ratio = count / float(compact.num_nodes)
+            token = self.pool(torch.cat([mean, ratio], -1)) * count.gt(0)
+        else:
+            score = (self.key(nodes) * self.query).sum(-1) / math.sqrt(self.units)
+            # Apply masks in float32: -1e9 is outside float16's finite range and
+            # mixed-precision autocast can otherwise fail before softmax.
+            score = score.float().masked_fill(~valid, -1e9)
+            attention = torch.softmax(score, -1).to(nodes.dtype) * valid
+            attention = attention / attention.sum(-1, keepdim=True).clamp_min(1e-6)
+            token = self.out((attention[..., None] * self.value(nodes)).sum(1))
+            token = token * valid.any(-1, keepdim=True)
         nodes = nodes.reshape(*compact.batch_shape, compact.num_nodes, self.units)
         token = token.reshape(*compact.batch_shape, self.units)
         return GraphEncoding(nodes, token, compact)
@@ -505,43 +609,105 @@ def slot_target_label(target_flag, alive):
 
 
 class SimpleGraphDecoder(nn.Module):
-    """Conditional graph-attribute reconstruction from the semantic state.
+    """Conditional graph reconstruction from the pooled semantic state.
 
-    Every node is read back out of the single posterior vector ``g`` by
-    querying it with that node's UID, so the losses measure what ``g`` retained
-    rather than what the encoder's own node vectors still hold. Supplied nodes,
-    edge endpoints and relation families are inputs; only their target flag and
-    their absolute/temporal labels are reconstructed.
+    Every node is read back out of the single posterior vector ``g`` by querying
+    it with that node's current box, so the losses measure what ``g`` retained
+    rather than what the encoder's own node vectors still hold. A box is a cheap
+    current-frame content address: it works the frame a node first appears and
+    it keeps episode-random identity codes out of the global dynamics.
+
+    The fused EE->target progress head lives here too. Keeping it inside the
+    decoder is what makes the optimizer, the checkpoint and ``clone_and_freeze``
+    pick it up automatically, so imagination reads exactly the parameters
+    training wrote instead of a second copy that has to be kept in step.
+
+    Everything is one flattened call over ``B * T`` frames, ``B * T * N`` nodes
+    or every real edge in the batch. No loop over nodes, edges or relations.
     """
 
-    def __init__(self, config, semantic_dim: int):
+    def __init__(self, config, semantic_dim: int, progress_relations):
         super().__init__()
-        self.units = int(config.simple_units)
+        self.units = int(getattr(config, "decoder_units", config.simple_units))
+        self.n_cams = int(config.n_cams)
         self.n_abs = int(config.n_abs)
         self.n_temp = int(config.n_temp)
+        self.entity_vocab = int(config.entity_vocab)
+        self.bbox_beta = float(config.bbox_beta)
         act = str(config.act)
 
-        self.uid = nn.Embedding(int(config.uid_vocab), int(config.uid_embed))
-        self.query = GraphMLP(
-            int(semantic_dim) + int(config.uid_embed), self.units, act
+        # Box signature. One Linear, no norm and no activation: this addresses a
+        # node, it does not represent one. The narrow output is a deliberate
+        # continuous bottleneck on how much geometry reaches the box head
+        # directly rather than through g.
+        self.query = nn.Linear(5 * self.n_cams, int(config.bbox_query_dim))
+        # W_g runs once per frame and broadcasts over the node axis. Projecting
+        # the full semantic vector separately for all eight nodes would be the
+        # same arithmetic done N times.
+        self.global_proj = nn.Linear(int(semantic_dim), self.units)
+        self.query_proj = nn.Linear(int(config.bbox_query_dim), self.units)
+        self.node_proj = nn.Linear(self.units, self.units)
+        self.act = getattr(nn, act)()
+        # Entity logits, the target logit and every camera's box come out of one
+        # projection and are split afterwards: one GEMM over the node rows
+        # instead of three.
+        self.node_head = nn.Linear(
+            self.units, self.entity_vocab + 1 + 4 * self.n_cams
         )
-        self.target = nn.Linear(self.units, 1)
+
         self.reltype = nn.Embedding(int(config.n_rel), int(config.embed))
-        self.pair = GraphMLP(
-            2 * self.units + int(config.embed), self.units, act
+        self.pair = GraphMLP(2 * self.units + int(config.embed), self.units, act)
+        # Absolute and temporal labels likewise share one projection over the
+        # edge rows; their legal masks and losses stay separate.
+        self.edge_head = nn.Linear(self.units, self.n_abs + self.n_temp)
+
+        relations = torch.as_tensor(progress_relations, dtype=torch.long).reshape(-1)
+        self.n_progress = int(relations.numel())
+        # One linear from g_hat to every scorer relation at once. The cumulative
+        # stages reuse these distributions; they never decode one apiece.
+        self.progress_head = nn.Linear(
+            int(semantic_dim), self.n_progress * self.n_abs
         )
-        self.abs_head = nn.Linear(self.units, self.n_abs)
-        self.temp_head = nn.Linear(self.units, self.n_temp)
+        self.register_buffer("progress_relations", relations, persistent=False)
         self.register_buffer(
             "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
         )
+        # Relation id -> row of the fused progress output, -1 for relations the
+        # scorer does not read. Built from the scorer's own relation order,
+        # because the relation id is not the row.
+        row = torch.full((int(config.n_rel),), -1, dtype=torch.long)
+        row[relations] = torch.arange(self.n_progress, dtype=torch.long)
+        self.register_buffer("progress_row", row, persistent=False)
+        self.register_buffer(
+            "progress_valid", self.abs_valid.index_select(0, relations), persistent=False
+        )
         self.apply(weight_init_)
+
+    def node_features(self, sem: torch.Tensor, compact: CompactGraph) -> torch.Tensor:
+        """(G, N, U) per-node representation conditioned on ``sem`` and the box."""
+        box = compact.bbox_feature(self.query.weight.dtype)
+        query = self.query_proj(self.query(box))
+        frame = self.global_proj(sem.reshape(compact.graph_count, -1).to(query.dtype))
+        return self.node_proj(self.act(frame[:, None, :] + query))
+
+    def progress_logits(self, sem: torch.Tensor) -> torch.Tensor:
+        """(..., R, n_abs) EE->target logits for the scorer's relations."""
+        return self.progress_head(sem).reshape(
+            *sem.shape[:-1], self.n_progress, self.n_abs
+        )
+
+    def progress_probs(self, sem: torch.Tensor) -> torch.Tensor:
+        """Legal-masked distributions in float32, one call for the whole batch."""
+        logits = self.progress_logits(sem).float()
+        return torch.softmax(logits.masked_fill(~self.progress_valid, -1e9), -1)
 
     def forward(
         self,
         sem: torch.Tensor,
         compact: CompactGraph,
         step_valid: torch.Tensor,
+        prior_sem: torch.Tensor | None = None,
+        prior_valid: torch.Tensor | None = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         graph_count = compact.graph_count
         num_nodes = compact.num_nodes
@@ -550,14 +716,46 @@ class SimpleGraphDecoder(nn.Module):
         losses: dict[str, torch.Tensor] = {}
         metrics: dict[str, torch.Tensor] = {}
 
-        # One shared head, so the node count may vary frame to frame.
-        query = sem.reshape(graph_count, 1, -1).expand(-1, num_nodes, -1)
-        uid = self.uid(compact.node_uid)
-        nodes = self.query(torch.cat([query.to(uid.dtype), uid], -1))
-        nodes = nodes * valid[..., None]
+        nodes = self.node_features(sem, compact) * valid[..., None]
+        entity_logit, target_logit, bbox_pred = self.node_head(nodes).split(
+            [self.entity_vocab, 1, 4 * self.n_cams], dim=-1
+        )
+
+        # --- node attributes -------------------------------------------------
+        entity_logit = entity_logit.float()
+        entity_error = F.cross_entropy(
+            entity_logit.reshape(-1, self.entity_vocab),
+            compact.node_ent.reshape(-1),
+            reduction="none",
+        ).reshape(graph_count, num_nodes)
+        node_ent = _frame_mean(entity_error, valid).mean()
+        metrics["node_ent_acc"] = _masked(
+            entity_logit.argmax(-1).eq(compact.node_ent), valid
+        )
+
+        # Averaged over the four coordinates, not summed, so the term does not
+        # inherit a factor of four from the box layout. Masked per camera: a
+        # camera that never saw the node has nothing to regress to.
+        bbox_pred = bbox_pred.reshape(graph_count, num_nodes, self.n_cams, 4).float()
+        bbox_mask = valid[..., None] & compact.camera_visible
+        bbox_error = F.smooth_l1_loss(
+            bbox_pred,
+            compact.node_bbox.float(),
+            reduction="none",
+            beta=self.bbox_beta,
+        ).mean(-1)
+        node_bbox = _frame_mean(bbox_error, bbox_mask).mean()
+
+        # One configured scale covers both halves; the components are logged as
+        # metrics rather than emitted as losses, which would each need their own
+        # scale key. Note this is not comparable with full mode's ``node``,
+        # which averages appearance, boxes and visibility instead.
+        losses["node"] = 0.5 * (node_ent + node_bbox)
+        metrics["node_ent_loss"] = node_ent.detach()
+        metrics["node_bbox_loss"] = node_bbox.detach()
 
         # Slot zero is the end effector and never carries the target flag.
-        target_logit = self.target(nodes).squeeze(-1).float()
+        target_logit = target_logit.squeeze(-1).float()
         target_mask = valid.clone()
         target_mask[:, 0] = False
         target_flag = compact.node_target.bool()
@@ -582,6 +780,7 @@ class SimpleGraphDecoder(nn.Module):
         metrics["node_target_acc"] = _masked(selected.eq(target_index), has_positive)
         metrics["node_target_frac"] = has_positive.float().mean()
 
+        # --- posterior relations ---------------------------------------------
         edge_step = step.index_select(0, compact.edge_graph)
         flat_nodes = nodes.reshape(-1, self.units)
         pair = self.pair(
@@ -594,8 +793,11 @@ class SimpleGraphDecoder(nn.Module):
                 -1,
             )
         )
+        abs_logits, temp_logits = self.edge_head(pair).split(
+            [self.n_abs, self.n_temp], dim=-1
+        )
         losses["relabs"], metrics["relabs_acc"] = _edge_categorical(
-            self.abs_head(pair),
+            abs_logits,
             compact.edge_abs,
             compact.edge_graph,
             edge_step,
@@ -603,7 +805,6 @@ class SimpleGraphDecoder(nn.Module):
             graph_count,
         )
         temp_mask = edge_step & compact.edge_temp.ne(0)
-        temp_logits = self.temp_head(pair)
         temp_classes = torch.ones_like(temp_logits, dtype=torch.bool)
         temp_classes[:, 0] = False
         losses["reltemp"], metrics["reltemp_acc"] = _edge_categorical(
@@ -615,6 +816,13 @@ class SimpleGraphDecoder(nn.Module):
             graph_count,
         )
 
+        # --- causal EE->target prior -----------------------------------------
+        if prior_sem is not None:
+            losses["prior_progress_relabs"], progress_metrics = self.prior_progress(
+                prior_sem, compact, has_positive, target_index, prior_valid
+            )
+            metrics.update(progress_metrics)
+
         metrics["graph_real_edges"] = torch.as_tensor(
             compact.edge_count / max(graph_count, 1),
             device=nodes.device,
@@ -622,6 +830,58 @@ class SimpleGraphDecoder(nn.Module):
         )
         metrics["graph_nodes_per_frame"] = valid.float().sum(-1).mean()
         return losses, metrics
+
+    def prior_progress(
+        self,
+        prior_sem: torch.Tensor,
+        compact: CompactGraph,
+        has_target: torch.Tensor,
+        target_index: torch.Tensor,
+        prior_valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Cross entropy on the EE->target facts the progress scorer reads.
+
+        The observed target flag only selects *which* edge supplies the label.
+        Neither it, nor the boxes, nor any observed relation reaches the head,
+        whose sole input is the predicted ``g_hat``.
+
+        The mask is causal in its own right: ``step_valid`` alone still admits
+        the reset frame, which ``g_hat`` has no preceding episode to predict
+        from. A target admitted on any later frame is supervised immediately --
+        being newly admitted is not a reason to mask it. When the target is
+        occluded the flag and its edges vanish together and the frame drops out
+        on its own, which is why no ``target_resolved`` key has to reach replay.
+        """
+        graph_count = compact.graph_count
+        frame = compact.edge_graph
+        row = self.progress_row.index_select(0, compact.edge_rel)
+        teacher = (
+            prior_valid.reshape(graph_count).bool().index_select(0, frame)
+            & has_target.index_select(0, frame)
+            & compact.edge_src_local.eq(0)
+            & compact.edge_dst_local.eq(target_index.index_select(0, frame))
+            & row.ge(0)
+        )
+        # Dense over every frame, then gathered: one GEMM plus one gather beats
+        # a dynamically shaped select, and B * T * 102 costs nothing.
+        logits = self.progress_logits(prior_sem).reshape(
+            graph_count, self.n_progress, self.n_abs
+        )
+        gathered = logits[frame, row.clamp_min(0)]
+        loss, accuracy = _edge_categorical(
+            gathered,
+            compact.edge_abs,
+            frame,
+            teacher,
+            self.abs_valid.index_select(0, compact.edge_rel),
+            graph_count,
+            only_present=True,
+        )
+        metrics = {
+            "prior_progress_acc": accuracy,
+            "prior_progress_facts": teacher.float().sum() / max(graph_count, 1),
+        }
+        return loss, metrics
 
 
 @dataclass

@@ -32,7 +32,12 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from graph import GraphEncoder, SlotGraphDecoder, compact_graph  # noqa: E402
+from graph import (  # noqa: E402
+    SCHEMA_SIMPLE_SLOT,
+    GraphEncoder,
+    SlotGraphDecoder,
+    compact_graph,
+)
 from progress import PICK_STAGES, ProgressScorer  # noqa: E402
 from rssm import RSSM, SLOT_META_TARGET  # noqa: E402
 
@@ -165,7 +170,7 @@ def main():
         graph_losses, metrics = decoder(
             observed["sem"],
             observed["prior_slot"],
-            compact_graph(graph, simple=True),
+            compact_graph(graph, SCHEMA_SIMPLE_SLOT),
             observed["dest"],
             alive,
             observed["slot_meta"][..., SLOT_META_TARGET],

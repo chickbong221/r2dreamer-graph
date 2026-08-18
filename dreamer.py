@@ -14,6 +14,7 @@ import networks
 import rssm
 import tools
 from graph import (
+    RESERVED_GRAPH_KEYS,
     GraphDecoder,
     GraphEncoder,
     SimpleGraphDecoder,
@@ -21,6 +22,7 @@ from graph import (
     compact_graph,
     graph_from,
     graph_keys,
+    graph_schema,
     graph_state_mode,
 )
 from networks import Projector
@@ -97,12 +99,17 @@ def _masked_mean(values, mask):
     return (values.float() * mask).sum() / mask.sum().clamp_min(1)
 
 
+def _frame_flag(value):
+    """(B, T) view of a per-frame flag stored as either (B, T) or (B, T, 1)."""
+    flag = value.bool()
+    if flag.ndim == 3 and flag.shape[-1] == 1:
+        flag = flag[..., 0]
+    return flag
+
+
 def _step_valid(is_last):
     """(B, T) mask of frames that are a real observation."""
-    valid = ~is_last.bool()
-    if valid.ndim == 3 and valid.shape[-1] == 1:
-        valid = valid[..., 0]
-    return valid
+    return ~_frame_flag(is_last)
 
 
 class Dreamer(nn.Module):
@@ -123,6 +130,9 @@ class Dreamer(nn.Module):
         self.graph_slots = (
             self.graph_enabled and graph_state_mode(config.graph) == "slots"
         )
+        # One pooled g, no slot table. This is the arm the progress head, the
+        # box-addressed decoder and the masked-mean readout all belong to.
+        self.graph_pooled_simple = self.graph_simple and not self.graph_slots
         if self.graph_only and not self.graph_enabled:
             raise ValueError("graph_only_latent=true requires graph.enabled=true")
         if self.graph_simple and not self.graph_enabled:
@@ -139,7 +149,10 @@ class Dreamer(nn.Module):
                 "graph_simple and graph_only_latent are mutually exclusive: one "
                 "keeps a stock z branch, the other removes z entirely"
             )
-        self.graph_keys = graph_keys(self.graph_simple)
+        self.graph_schema = graph_schema(
+            self.graph_simple, graph_state_mode(config.graph)
+        )
+        self.graph_keys = graph_keys(self.graph_schema)
         amp_name = str(config.amp_dtype)
         amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
         if amp_name not in amp_dtypes:
@@ -158,12 +171,21 @@ class Dreamer(nn.Module):
                 raise ValueError(
                     f"graph.enabled observation space is missing: {missing}"
                 )
-        # Every graph key of either contract is excluded from the pixel/state
-        # encoder, so a stale key left in the space never reaches the CNN.
-        all_graph_keys = set(graph_keys(True)) | set(graph_keys(False))
+        # Every key any schema has ever emitted is excluded from the pixel/state
+        # encoder, not just the active schema's. A wrapper still exposing
+        # graph_node_uid under the pooled schema would otherwise train an
+        # identity-conditioned model without anything failing.
         model_shapes = {
-            key: value for key, value in shapes.items() if key not in all_graph_keys
+            key: value
+            for key, value in shapes.items()
+            if key not in RESERVED_GRAPH_KEYS
         }
+        if self.graph_enabled and self.graph_schema == "simple_pooled_bbox":
+            if "graph_node_uid" in shapes:
+                raise ValueError(
+                    "pooled graph-simple must not be handed graph_node_uid; the "
+                    "environment is emitting the slot contract"
+                )
         encoder_shapes = (
             {key: value for key, value in model_shapes.items() if len(value) != 3}
             if self.graph_only
@@ -228,10 +250,13 @@ class Dreamer(nn.Module):
         self.progress_enabled = bool(
             progress_config is not None and progress_config.enabled
         )
-        if self.progress_enabled and not self.graph_slots:
+        if self.progress_enabled and not (
+            self.graph_slots or self.graph_pooled_simple
+        ):
             raise ValueError(
-                "progress.enabled requires graph.state_mode=slots: the scorer "
-                "reads predicted per-slot relations"
+                "progress.enabled requires a graph-simple mode: slots read "
+                "predicted per-slot relations, pooled reads the fused "
+                "EE->target head on g_hat"
             )
         self.progress = None
         self.progress_value = None
@@ -243,7 +268,7 @@ class Dreamer(nn.Module):
                 load_stages(str(progress_config.stages) if progress_config else ""),
                 int(config.graph.n_abs),
             )
-            if self.graph_slots
+            if (self.graph_slots or self.graph_pooled_simple)
             else None
         )
         if self.progress_enabled:
@@ -251,13 +276,23 @@ class Dreamer(nn.Module):
             self.progress = ProgressReward(
                 scorer, 1 - 1 / self.horizon, soft=bool(progress_config.soft)
             )
-            self.progress_feat_size = (
-                self.rssm.flat_stoch
-                + self.rssm._deter
-                + 2 * self.rssm.slot_dim
-                + int(scorer.relations.numel()) * int(config.graph.n_abs)
-                + 1  # probability that a target exists at all
-            )
+            relation_width = int(scorer.relations.numel()) * int(config.graph.n_abs)
+            if self.graph_pooled_simple:
+                # imag_feat is already [z, g, h], so the progress critic reads
+                # the exact latent the policy and the ordinary critic read, plus
+                # the predicted relation block. Nothing else is concatenated: no
+                # masks, no counts, no boxes, no observed labels. There is also
+                # no target-presence scalar, because the pooled head has no null
+                # class to produce one.
+                self.progress_feat_size = self.rssm.feat_size + relation_width
+            else:
+                self.progress_feat_size = (
+                    self.rssm.flat_stoch
+                    + self.rssm._deter
+                    + 2 * self.rssm.slot_dim
+                    + relation_width
+                    + 1  # probability that a target exists at all
+                )
             self.progress_value = networks.MLPHead(
                 config.critic, self.progress_feat_size
             )
@@ -265,7 +300,7 @@ class Dreamer(nn.Module):
             for param in self._slow_progress.parameters():
                 param.requires_grad = False
             self.progress_return_ema = networks.ReturnEMA(device=self.device)
-        if self.graph_slots:
+        if self.progress_scorer is not None:
             self.register_buffer(
                 "progress_relations",
                 self.progress_scorer.relations.clone(),
@@ -273,6 +308,19 @@ class Dreamer(nn.Module):
             )
 
         self._loss_scales = dict(config.loss_scales)
+        # Resolved once. A zero scale means the branch is not computed at all
+        # rather than computed and multiplied by zero, which is the only kind of
+        # switch this repository needs: losses are keyed by scale, not by an
+        # enable flag per head.
+        self._prior_progress = self.graph_pooled_simple and (
+            float(self._loss_scales.get("prior_progress_relabs", 0.0)) != 0.0
+        )
+        if self.progress_enabled and self.graph_pooled_simple and not self._prior_progress:
+            raise ValueError(
+                "progress.enabled with loss_scales.prior_progress_relabs=0 "
+                "leaves the fused progress head untrained; imagination would "
+                "shape the actor with an unsupervised readout"
+            )
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
         self._finite_diagnostic_updates = 4
@@ -293,7 +341,9 @@ class Dreamer(nn.Module):
             if self.graph_slots:
                 self.graph_decoder = SlotGraphDecoder(config.graph)
             elif self.graph_simple:
-                self.graph_decoder = SimpleGraphDecoder(config.graph, self.graph_dim)
+                self.graph_decoder = SimpleGraphDecoder(
+                    config.graph, self.graph_dim, self.progress_scorer.relations
+                )
             else:
                 self.graph_decoder = GraphDecoder(config.graph)
             modules.update(
@@ -638,7 +688,7 @@ class Dreamer(nn.Module):
         # implementation. AMP is used only by the training update.
         embed = self._frozen_encoder(p_obs)
         encoded = (
-            self._frozen_graph_encoder(graph_from(p_obs, self.graph_simple))
+            self._frozen_graph_encoder(graph_from(p_obs, self.graph_schema))
             if self.graph_enabled
             else None
         )
@@ -729,7 +779,7 @@ class Dreamer(nn.Module):
         # (B, T, E)
         embed = self.encoder(data)
         encoded = (
-            self.graph_encoder(graph_from(data, self.graph_simple))
+            self.graph_encoder(graph_from(data, self.graph_schema))
             if self.graph_enabled
             else None
         )
@@ -984,7 +1034,7 @@ class Dreamer(nn.Module):
         if self.graph_enabled:
             self._trace_stage_start("graph encoder")
         graph_encoding = (
-            self.graph_encoder(graph_from(data, self.graph_simple))
+            self.graph_encoder(graph_from(data, self.graph_schema))
             if self.graph_enabled
             else None
         )
@@ -1132,8 +1182,18 @@ class Dreamer(nn.Module):
                     )
                     metrics["graph_sem_post_var"] = post_sem.float().var(-1).mean()
                     metrics["graph_sem_prior_var"] = prior_sem.float().var(-1).mean()
+                prior_valid = None
+                if self._prior_progress:
+                    # g_hat has no preceding episode to predict the reset frame
+                    # from, and step_valid only drops terminal frames. A target
+                    # admitted on any later frame is supervised straight away.
+                    prior_valid = step_valid & ~_frame_flag(data["is_first"])
                 graph_losses, graph_metrics = self.graph_decoder(
-                    post_sem, graph_encoding.compact, step_valid
+                    post_sem,
+                    graph_encoding.compact,
+                    step_valid,
+                    prior_sem if self._prior_progress else None,
+                    prior_valid,
                 )
             else:
                 sem_prior_logit = self.rssm.semantic_prior_logits(
@@ -1463,7 +1523,7 @@ class Dreamer(nn.Module):
             actions.append(action)
             if self.graph_slots:
                 alive_trace.append(slot_alive)
-            if self.progress_enabled:
+            if self.progress_enabled and self.graph_slots:
                 reward, potential, progress_feat = self._progress_step(
                     stoch, deter, sem, slot_alive
                 )
@@ -1487,7 +1547,30 @@ class Dreamer(nn.Module):
 
         if alive_trace:
             extra["imag_alive"] = torch.stack(alive_trace, dim=1)
-        if self.progress_enabled:
+        # Stack along sequence dim T_imag. (B, T_imag, F)
+        imag_feat = torch.stack(feats, dim=1)
+        if self.progress_enabled and self.graph_pooled_simple:
+            # Nothing progress-related ran inside the loop. g is already a
+            # contiguous slice of the stacked feature -- get_feat lays out
+            # [z, g, h] -- so no second list and no second stack are needed, and
+            # the whole path is one slice, one linear over B * T_imag, one
+            # softmax, one contraction and one concat.
+            start = self.rssm.flat_stoch
+            sem_seq = imag_feat[..., start : start + self.rssm.flat_sem]
+            probs = self._frozen_graph_decoder.progress_probs(sem_seq)
+            reward, potential = self.progress.pooled(probs)
+            extra.update(
+                {
+                    "progress_reward": reward.unsqueeze(-1),
+                    "progress_potential": potential.unsqueeze(-1),
+                    # Exactly the latent the policy and the ordinary critic see,
+                    # plus the predicted relation block. Nothing else.
+                    "progress_feat": torch.cat(
+                        [imag_feat, probs.flatten(-2).to(imag_feat.dtype)], -1
+                    ),
+                }
+            )
+        elif self.progress_enabled:
             extra.update(
                 {
                     "progress_reward": torch.stack(progress_rewards, dim=1),
@@ -1495,9 +1578,8 @@ class Dreamer(nn.Module):
                     "progress_feat": torch.stack(progress_feats, dim=1),
                 }
             )
-        # Stack along sequence dim T_imag.
         # (B, T_imag, F), (B, T_imag, A)
-        return torch.stack(feats, dim=1), torch.stack(actions, dim=1), extra
+        return imag_feat, torch.stack(actions, dim=1), extra
 
     @torch.no_grad()
     def _lambda_return(self, last, term, reward, value, boot, disc, lamb):

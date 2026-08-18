@@ -12,17 +12,38 @@ from omegaconf import OmegaConf
 
 from graph import (
     FULL_GRAPH_KEYS,
-    SIMPLE_GRAPH_KEYS,
+    RESERVED_GRAPH_KEYS,
+    SCHEMA_FULL,
+    SCHEMA_SIMPLE_POOLED,
+    SCHEMA_SIMPLE_SLOT,
+    SIMPLE_POOLED_GRAPH_KEYS,
+    SIMPLE_SLOT_GRAPH_KEYS,
     GraphEncoder,
     SimpleGraphDecoder,
     compact_graph,
     graph_from,
     graph_keys,
+    graph_schema,
 )
+from progress import PICK_STAGES, ProgressScorer
 from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
 from scenegraph.adapters.graph_obs import _DTYPES as _PACKED_DTYPES
+from scenegraph.adapters.graph_pack import (
+    graph_keys as pack_keys,
+    graph_schema as pack_schema,
+    pack_graph,
+)
+from scenegraph.adapters.graph_vocab import (
+    EntityVocab,
+    GraphVocab,
+    build_absolute_vocab,
+    build_relation_vocab,
+    build_temporal_vocab,
+)
+from scenegraph.core.node_builder import fill_appearance, fill_bboxes
+from scenegraph.core.schema import Graph, Node
 from scenegraph.core.graph_builder import (
     UID_EE,
     UID_PAD,
@@ -35,12 +56,16 @@ E_MAX = 16
 UID_VOCAB = 32
 
 
-def graph_config(simple=True, units=32):
+def graph_config(simple=True, units=32, state_mode="pooled"):
     return SimpleNamespace(
         simple=simple,
+        state_mode=state_mode,
         units=units,
         simple_units=units,
         semantic_dim=units,
+        decoder_units=16,
+        bbox_query_dim=4,
+        slot_dim=16,
         layers=1,
         n_cams=2,
         app_dim=8,
@@ -59,7 +84,8 @@ def graph_config(simple=True, units=32):
     )
 
 
-def simple_graph(batch=2, time=3, n_valid=3, n_edges=4, uids=None):
+def slot_graph(batch=2, time=3, n_valid=3, n_edges=4, uids=None):
+    """The slot contract: UID, no boxes."""
     shape = (batch, time)
     graph = {
         "graph_node_ent": torch.zeros(*shape, N_MAX, dtype=torch.uint8),
@@ -95,29 +121,278 @@ def simple_graph(batch=2, time=3, n_valid=3, n_edges=4, uids=None):
     return graph
 
 
+def pooled_graph(batch=2, time=3, n_valid=3, n_edges=4, boxes=None):
+    """The pooled contract: per-camera boxes, no UID.
+
+    Camera 0 sees every valid node, camera 1 only the end effector, so masked
+    per-camera validity is actually exercised rather than assumed.
+    """
+    graph = {
+        key: value
+        for key, value in slot_graph(batch, time, n_valid, n_edges).items()
+        if key != "graph_node_uid"
+    }
+    bbox = torch.zeros(batch, time, N_MAX, 2, 4, dtype=torch.float16)
+    if boxes is None:
+        boxes = torch.tensor([
+            [0.10, 0.40, 0.20, 0.50],
+            [0.50, 0.90, 0.10, 0.30],
+            [0.00, 0.20, 0.60, 0.80],
+            [0.30, 0.35, 0.30, 0.35],
+            [0.60, 0.95, 0.60, 0.95],
+            [0.05, 0.15, 0.05, 0.15],
+            [0.40, 0.80, 0.40, 0.80],
+        ])
+    bbox[..., :n_valid, 0, :] = boxes[:n_valid].to(torch.float16)
+    bbox[..., 0, 1, :] = torch.tensor([0.2, 0.6, 0.2, 0.6]).to(torch.float16)
+    graph["graph_node_bbox"] = bbox
+    return graph
+
+
 class ContractTest(unittest.TestCase):
-    def test_simple_contract_drops_appearance_and_adds_uid(self):
-        self.assertEqual(graph_keys(True), SIMPLE_GRAPH_KEYS)
-        self.assertEqual(graph_keys(False), FULL_GRAPH_KEYS)
-        for key in ("graph_node_app", "graph_node_bbox"):
-            self.assertIn(key, FULL_GRAPH_KEYS)
-            self.assertNotIn(key, SIMPLE_GRAPH_KEYS)
-        self.assertIn("graph_node_uid", SIMPLE_GRAPH_KEYS)
+    """``simple`` alone no longer names a contract.
+
+    Pooled graph-simple addresses a node by the box it currently occupies;
+    slot graph-simple aligns by UID across frames. Emitting both fields to both
+    would put a key in replay that one of them must never read.
+    """
+
+    def test_schema_follows_simple_and_state_mode(self):
+        self.assertEqual(graph_schema(False, "pooled"), SCHEMA_FULL)
+        self.assertEqual(graph_schema(False, "slots"), SCHEMA_FULL)
+        self.assertEqual(graph_schema(True, "pooled"), SCHEMA_SIMPLE_POOLED)
+        self.assertEqual(graph_schema(True, "slots"), SCHEMA_SIMPLE_SLOT)
+
+    def test_pooled_carries_boxes_and_no_identity(self):
+        keys = graph_keys(SCHEMA_SIMPLE_POOLED)
+        self.assertEqual(keys, SIMPLE_POOLED_GRAPH_KEYS)
+        self.assertIn("graph_node_bbox", keys)
+        self.assertNotIn("graph_node_uid", keys)
+        self.assertNotIn("graph_node_app", keys)
+
+    def test_slot_carries_identity_and_no_boxes(self):
+        keys = graph_keys(SCHEMA_SIMPLE_SLOT)
+        self.assertEqual(keys, SIMPLE_SLOT_GRAPH_KEYS)
+        self.assertIn("graph_node_uid", keys)
+        self.assertNotIn("graph_node_bbox", keys)
+        self.assertNotIn("graph_node_app", keys)
+
+    def test_full_keeps_appearance(self):
+        self.assertEqual(graph_keys(SCHEMA_FULL), FULL_GRAPH_KEYS)
+        self.assertIn("graph_node_app", FULL_GRAPH_KEYS)
         self.assertNotIn("graph_node_uid", FULL_GRAPH_KEYS)
 
-    def test_simple_validation_ignores_absent_appearance(self):
-        data = simple_graph()
-        self.assertEqual(set(graph_from(data, simple=True)), set(SIMPLE_GRAPH_KEYS))
+    def test_uid_stays_reserved_even_where_it_is_not_emitted(self):
+        # Nothing in the pooled schema names it, but a stale wrapper that still
+        # exposes it must not be able to feed it to the ordinary MLP encoder.
+        self.assertNotIn("graph_node_uid", SIMPLE_POOLED_GRAPH_KEYS)
+        self.assertIn("graph_node_uid", RESERVED_GRAPH_KEYS)
+        for keys in (FULL_GRAPH_KEYS, SIMPLE_POOLED_GRAPH_KEYS,
+                     SIMPLE_SLOT_GRAPH_KEYS):
+            self.assertTrue(set(keys) <= RESERVED_GRAPH_KEYS)
+
+    def test_unknown_schema_raises(self):
+        with self.assertRaises(ValueError):
+            graph_keys("simple")
+
+    def test_validation_is_per_schema(self):
+        pooled = pooled_graph()
+        self.assertEqual(
+            set(graph_from(pooled, SCHEMA_SIMPLE_POOLED)),
+            set(SIMPLE_POOLED_GRAPH_KEYS),
+        )
         with self.assertRaises(KeyError):
-            graph_from(data, simple=False)
+            graph_from(pooled, SCHEMA_SIMPLE_SLOT)
+        with self.assertRaises(KeyError):
+            graph_from(slot_graph(), SCHEMA_SIMPLE_POOLED)
 
     def test_compact_leaves_the_unused_side_none(self):
-        compact = compact_graph(simple_graph(), simple=True)
-        self.assertIsNotNone(compact.node_uid)
-        self.assertIsNone(compact.node_app)
-        self.assertIsNone(compact.node_bbox)
-        self.assertIsNone(compact.appearance_known)
-        self.assertIsNone(compact.camera_visible)
+        slot = compact_graph(slot_graph(), SCHEMA_SIMPLE_SLOT)
+        self.assertIsNotNone(slot.node_uid)
+        self.assertIsNone(slot.node_bbox)
+        self.assertIsNone(slot.camera_visible)
+        self.assertIsNone(slot.node_app)
+
+        pooled = compact_graph(pooled_graph(), SCHEMA_SIMPLE_POOLED)
+        self.assertIsNone(pooled.node_uid)
+        self.assertIsNotNone(pooled.node_bbox)
+        self.assertIsNotNone(pooled.camera_visible)
+        self.assertIsNone(pooled.node_app)
+        self.assertIsNone(pooled.appearance_known)
+
+    def test_camera_validity_is_derived_not_stored(self):
+        compact = compact_graph(pooled_graph(n_valid=3), SCHEMA_SIMPLE_POOLED)
+        visible = compact.camera_visible
+        self.assertTrue(bool(visible[:, :3, 0].all()))   # camera 0 saw them
+        self.assertTrue(bool(visible[:, 0, 1].all()))    # camera 1 saw only ee
+        self.assertFalse(bool(visible[:, 1:, 1].any()))
+        self.assertFalse(bool(visible[:, 3:, :].any()))  # padded rows
+
+    def test_bbox_feature_zeroes_invalid_cameras(self):
+        compact = compact_graph(pooled_graph(), SCHEMA_SIMPLE_POOLED)
+        feature = compact.bbox_feature(torch.float32)
+        n_cams = compact.node_bbox.shape[-2]
+        self.assertEqual(feature.shape[-1], 5 * n_cams)
+        # The trailing block is exactly the validity bits.
+        self.assertTrue(torch.equal(
+            feature[..., 4 * n_cams:], compact.camera_visible.float()
+        ))
+        # Camera 1 saw nothing but the end effector, so its box block is zero.
+        self.assertEqual(float(feature[:, 1:, 4:8].abs().max()), 0.0)
+
+    def test_local_endpoints_survive_the_graph_offset(self):
+        compact = compact_graph(pooled_graph(), SCHEMA_SIMPLE_POOLED)
+        offset = compact.edge_graph * compact.num_nodes
+        self.assertTrue(torch.equal(compact.edge_src, compact.edge_src_local + offset))
+        self.assertTrue(torch.equal(compact.edge_dst, compact.edge_dst_local + offset))
+
+
+class PackerSchemaTest(unittest.TestCase):
+    """The simulator side emits exactly one contract, and it is the right one."""
+
+    def _graph(self, with_box=True):
+        node = Node(node_id="ee", node_type="ee", name="ee", visible=True,
+                    source="segmentation")
+        node.index = 0
+        obj = Node(node_id="obj-1", node_type="object", name="apple",
+                   visible=True, source="segmentation",
+                   attributes={"whitelist_key": "apple"})
+        obj.index = 1
+        if with_box:
+            node.bbox = np.array([[0.1, 0.4, 0.2, 0.5], [0.0, 0.0, 0.0, 0.0]],
+                                 np.float32)
+            obj.bbox = np.array([[0.5, 0.9, 0.1, 0.3], [0.2, 0.6, 0.2, 0.6]],
+                                np.float32)
+        node.appearance = np.zeros((2, 4), np.float32)
+        obj.appearance = np.ones((2, 4), np.float32)
+        return Graph(
+            frame=0, env_id="env0", camera="cam",
+            nodes=[node, obj], edges=[],
+            meta=dict(active_target_node_id="obj-1",
+                      node_uids={"ee": UID_EE, "obj-1": 7}),
+        )
+
+    @staticmethod
+    def _vocab():
+        """A two-entry entity vocabulary, so this needs no mined whitelist."""
+        entity = EntityVocab(token_to_id={"<pad>": 0, "<ee>": 1, "apple": 2})
+        relation = build_relation_vocab()
+        return GraphVocab(
+            entity=entity, relation=relation,
+            absolute=build_absolute_vocab(), temporal=build_temporal_vocab(),
+            abs_valid=np.zeros((len(relation), 1), bool),
+            temp_valid=np.zeros(len(relation), bool),
+        )
+
+    def _pack(self, schema, **kwargs):
+        return pack_graph(
+            self._graph(**kwargs), self._vocab(),
+            n_max=N_MAX, e_max=E_MAX, n_cams=2, app_dim=4, schema=schema,
+            uid_vocab=UID_VOCAB,
+        )
+
+    def test_schema_constants_mirror_the_model_package(self):
+        # Duplicated so the simulator side never imports the model package;
+        # they have to agree or replay and the encoder disagree silently.
+        self.assertEqual(pack_schema(False, "pooled"), SCHEMA_FULL)
+        self.assertEqual(pack_schema(True, "pooled"), SCHEMA_SIMPLE_POOLED)
+        self.assertEqual(pack_schema(True, "slots"), SCHEMA_SIMPLE_SLOT)
+        for schema in (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED, SCHEMA_SIMPLE_SLOT):
+            self.assertEqual(tuple(pack_keys(schema)), tuple(graph_keys(schema)))
+
+    def test_pooled_packs_boxes_and_no_identity(self):
+        packed = self._pack(SCHEMA_SIMPLE_POOLED)
+        self.assertEqual(set(packed), set(SIMPLE_POOLED_GRAPH_KEYS))
+        self.assertNotIn("graph_node_uid", packed)
+        self.assertNotIn("graph_node_app", packed)
+        self.assertEqual(packed["graph_node_bbox"].dtype, np.float16)
+        # Row 1 is the object; camera 0 saw it, and its box round-trips.
+        np.testing.assert_allclose(
+            packed["graph_node_bbox"][1, 0], [0.5, 0.9, 0.1, 0.3], atol=1e-3
+        )
+        # The end effector is invisible to camera 1, which stays an empty box.
+        self.assertEqual(float(np.abs(packed["graph_node_bbox"][0, 1]).max()), 0.0)
+        self.assertEqual(int(packed["graph_node_target"][1]), 1)
+
+    def test_slot_packs_identity_and_no_boxes(self):
+        packed = self._pack(SCHEMA_SIMPLE_SLOT)
+        self.assertEqual(set(packed), set(SIMPLE_SLOT_GRAPH_KEYS))
+        self.assertNotIn("graph_node_bbox", packed)
+        self.assertEqual(int(packed["graph_node_uid"][1]), 7)
+
+    def test_full_packs_both(self):
+        packed = self._pack(SCHEMA_FULL)
+        self.assertEqual(set(packed), set(FULL_GRAPH_KEYS))
+        self.assertIn("graph_node_app", packed)
+        self.assertIn("graph_node_bbox", packed)
+
+    def test_pooled_does_not_need_uids_at_all(self):
+        # EpisodeUIDs is not run under the pooled schema, so the packer must
+        # not demand a code the builder never assigned.
+        graph = self._graph()
+        graph.meta["node_uids"] = {}
+        packed = pack_graph(
+            graph, self._vocab(), n_max=N_MAX, e_max=E_MAX,
+            n_cams=2, app_dim=4, schema=SCHEMA_SIMPLE_POOLED,
+            uid_vocab=UID_VOCAB,
+        )
+        self.assertNotIn("graph_node_uid", packed)
+
+    def test_unknown_schema_raises(self):
+        with self.assertRaises(ValueError):
+            self._pack("simple")
+
+
+class BboxExtractionTest(unittest.TestCase):
+    """Boxes without appearance: same numbers, none of the patch machinery."""
+
+    def _nodes(self, groups):
+        nodes = {}
+        for name, ids in groups.items():
+            node = Node(node_id=name, node_type="object", name=name,
+                        visible=True, source="segmentation")
+            node.segmentation_ids = list(ids)
+            nodes[name] = node
+        return nodes
+
+    def test_matches_the_appearance_path_exactly(self):
+        rng = np.random.default_rng(0)
+        for trial in range(50):
+            segs = [rng.integers(0, 6, size=(16, 16)) for _ in range(2)]
+            groups = {"ee": [1, 5], "a": [2], "b": [3, 4], "gone": [9]}
+            reference = self._nodes(groups)
+            fast = self._nodes(groups)
+            fill_appearance(reference, segs, grid=8)
+            fill_bboxes(fast, segs)
+            for name in groups:
+                np.testing.assert_array_equal(
+                    reference[name].bbox, fast[name].bbox, err_msg=f"{trial} {name}"
+                )
+
+    def test_no_patch_coverage_is_produced(self):
+        nodes = self._nodes({"a": [1]})
+        fill_bboxes(nodes, [np.array([[0, 1], [1, 0]])])
+        self.assertIsNone(nodes["a"].patch_weights)
+
+    def test_out_of_range_and_unowned_ids_stay_out_of_every_box(self):
+        # Background, negative ids, ids above the table, and ids no node
+        # claims all land on the sentinel row and are dropped.
+        seg = np.array([[-3, 0, 1], [5, 99, 2]])
+        nodes = self._nodes({"a": [1], "b": [2]})
+        fill_bboxes(nodes, [seg])
+        np.testing.assert_allclose(nodes["a"].bbox[0], [2 / 3, 1.0, 0.0, 0.5])
+        np.testing.assert_allclose(nodes["b"].bbox[0], [2 / 3, 1.0, 0.5, 1.0])
+
+    def test_a_node_rendered_nowhere_reads_back_as_invisible(self):
+        nodes = self._nodes({"ghost": [7]})
+        fill_bboxes(nodes, [np.array([[0, 1], [1, 0]])])
+        np.testing.assert_array_equal(nodes["ghost"].bbox, np.zeros((1, 4)))
+
+    def test_cameras_of_different_sizes_are_handled(self):
+        nodes = self._nodes({"a": [1]})
+        fill_bboxes(nodes, [np.array([[1, 0]]), np.array([[0], [1]])])
+        np.testing.assert_allclose(nodes["a"].bbox[0], [0.0, 0.5, 0.0, 1.0])
+        np.testing.assert_allclose(nodes["a"].bbox[1], [0.0, 1.0, 0.5, 1.0])
 
 
 class ReplayDtypeTest(unittest.TestCase):
@@ -198,91 +473,340 @@ class EpisodeUIDTest(unittest.TestCase):
         self.assertGreater(len(set(runs)), 1)
 
 
-class SimpleEncoderTest(unittest.TestCase):
-    def test_siblings_differ_only_through_uid(self):
+class PooledEncoderTest(unittest.TestCase):
+    """Boxes in, one masked-mean token out. No UID anywhere."""
+
+    def _encoder(self, units=32):
         torch.manual_seed(0)
-        encoder = GraphEncoder(graph_config(simple=True))
-        # Same entity id, same target flag, different identity.
-        left = simple_graph(batch=1, time=1, n_valid=3, uids=[UID_EE, 2, 3])
-        right = simple_graph(batch=1, time=1, n_valid=3, uids=[UID_EE, 4, 5])
+        return GraphEncoder(graph_config(simple=True, units=units))
+
+    def test_no_identity_embedding_exists(self):
+        encoder = self._encoder()
+        self.assertEqual(encoder.schema, SCHEMA_SIMPLE_POOLED)
+        self.assertIsNone(encoder.uid)
+        # One flat projection over all cameras, not a per-camera ModuleList.
+        self.assertIsNone(encoder.bbox_proj)
+        self.assertIsNone(encoder.app_proj)
+
+    def test_attention_pooling_is_gone(self):
+        encoder = self._encoder()
+        self.assertIsNotNone(encoder.pool)
+        for name in ("query", "key", "value", "out"):
+            self.assertIsNone(getattr(encoder, name), name)
+
+    def test_siblings_differ_through_their_boxes(self):
+        # Same entity id and same target flag: with UID gone, geometry is the
+        # only thing left to separate two instances of one type.
+        encoder = self._encoder()
+        left = pooled_graph(batch=1, time=1, n_valid=3)
+        right = pooled_graph(
+            batch=1, time=1, n_valid=3,
+            boxes=torch.tensor([
+                [0.10, 0.40, 0.20, 0.50],
+                [0.05, 0.25, 0.70, 0.95],
+                [0.00, 0.20, 0.60, 0.80],
+            ]),
+        )
         with torch.no_grad():
-            a = encoder(left).nodes
-            b = encoder(right).nodes
-        self.assertFalse(torch.allclose(a, b))
+            self.assertFalse(torch.allclose(encoder(left).nodes, encoder(right).nodes))
 
     def test_padded_slots_are_zeroed(self):
-        torch.manual_seed(0)
-        encoder = GraphEncoder(graph_config(simple=True))
+        encoder = self._encoder()
         with torch.no_grad():
-            nodes = encoder(simple_graph(n_valid=3)).nodes
+            nodes = encoder(pooled_graph(n_valid=3)).nodes
         self.assertTrue(torch.equal(nodes[..., 3:, :], torch.zeros_like(nodes[..., 3:, :])))
 
+    def test_token_is_the_masked_mean_plus_the_count(self):
+        encoder = self._encoder()
+        data = pooled_graph(n_valid=3)
+        with torch.no_grad():
+            encoded = encoder(data)
+            compact = compact_graph(data, SCHEMA_SIMPLE_POOLED)
+            nodes = encoded.nodes.reshape(compact.graph_count, N_MAX, 32)
+            valid = compact.node_valid
+            count = valid.sum(-1, keepdim=True).float()
+            mean = (nodes * valid[..., None]).sum(1) / count
+            want = encoder.pool(torch.cat([mean, count / N_MAX], -1))
+        self.assertTrue(torch.allclose(
+            encoded.token.reshape(compact.graph_count, 32), want, atol=1e-5
+        ))
+
+    def test_pooling_coefficients_are_uniform(self):
+        # Every admitted node contributes exactly 1/n. Scaling one node's
+        # contribution must move the mean by exactly that node's share.
+        encoder = self._encoder()
+        data = pooled_graph(n_valid=3)
+        with torch.no_grad():
+            nodes = encoder(data).nodes.reshape(-1, N_MAX, 32)
+        share = nodes[:, :3].sum(1) / 3.0
+        self.assertTrue(torch.allclose(share, nodes[:, :3].mean(1), atol=1e-6))
+
+    def test_token_is_permutation_invariant(self):
+        encoder = self._encoder()
+        data = pooled_graph(n_valid=3)
+        order = [1, 0, 2] + list(range(3, N_MAX))
+        swapped = {key: value.clone() for key, value in data.items()}
+        for key in ("graph_node_ent", "graph_node_target"):
+            swapped[key] = swapped[key][..., order]
+        swapped["graph_node_bbox"] = swapped["graph_node_bbox"][..., order, :, :]
+        inverse = torch.tensor(
+            [order.index(i) for i in range(N_MAX)], dtype=torch.uint8
+        )
+        real = swapped["graph_edge_rel"] != 0
+        for key in ("graph_edge_src", "graph_edge_dst"):
+            swapped[key] = torch.where(real, inverse[swapped[key].long()], swapped[key])
+        with torch.no_grad():
+            self.assertTrue(torch.allclose(
+                encoder(swapped).token, encoder(data).token, atol=1e-5
+            ))
+
     def test_token_width_follows_simple_units(self):
-        encoder = GraphEncoder(graph_config(simple=True, units=32))
+        encoder = self._encoder(units=32)
         self.assertEqual(encoder.units, 32)
         with torch.no_grad():
-            token = encoder(simple_graph()).token
+            token = encoder(pooled_graph()).token
         self.assertEqual(tuple(token.shape), (2, 3, 32))
+
+    def test_slot_mode_still_reads_uid_and_pools_nowhere(self):
+        encoder = GraphEncoder(graph_config(simple=True, state_mode="slots"))
+        self.assertEqual(encoder.schema, SCHEMA_SIMPLE_SLOT)
+        self.assertIsNone(encoder.pool)
+        with torch.no_grad():
+            encoded = encoder(slot_graph())
+        self.assertIsNone(encoded.token)
+        self.assertIsNotNone(encoded.slots)
 
     def test_full_mode_is_unchanged(self):
         encoder = GraphEncoder(graph_config(simple=False))
-        self.assertFalse(encoder.simple)
+        self.assertEqual(encoder.schema, SCHEMA_FULL)
         self.assertIsNotNone(encoder.app_proj)
         self.assertIsNone(encoder.uid)
+        self.assertIsNone(encoder.pool)
+        self.assertIsNotNone(encoder.query)
 
 
-class SimpleDecoderTest(unittest.TestCase):
-    def _run(self, sem=None, graph=None):
+class PooledDecoderTest(unittest.TestCase):
+    """Node and relation reconstruction from g, addressed by the box."""
+
+    LOSSES = {"node", "nodetgt", "relabs", "reltemp"}
+
+    def _decoder(self):
         torch.manual_seed(0)
-        config = graph_config(simple=True)
-        decoder = SimpleGraphDecoder(config, semantic_dim=32)
-        graph = simple_graph() if graph is None else graph
-        compact = compact_graph(graph, simple=True)
+        scorer = ProgressScorer(PICK_STAGES, 17)
+        decoder = SimpleGraphDecoder(
+            graph_config(simple=True), semantic_dim=32,
+            progress_relations=scorer.relations,
+        )
+        return decoder, scorer
+
+    def _run(self, sem=None, graph=None, prior=None, prior_valid=None):
+        decoder, _ = self._decoder()
+        compact = compact_graph(
+            pooled_graph() if graph is None else graph, SCHEMA_SIMPLE_POOLED
+        )
         if sem is None:
             sem = torch.randn(2, 3, 32, requires_grad=True)
         step_valid = torch.ones(2, 3, dtype=torch.bool)
-        return decoder, sem, decoder(sem, compact, step_valid)
+        out = decoder(sem, compact, step_valid, prior, prior_valid)
+        return decoder, sem, out
 
     def test_losses_are_finite_and_named(self):
         _, _, (losses, metrics) = self._run()
-        self.assertEqual(set(losses), {"nodetgt", "relabs", "reltemp"})
+        self.assertEqual(set(losses), self.LOSSES)
         for name, value in losses.items():
             self.assertTrue(torch.isfinite(value), name)
-        self.assertIn("node_target_acc", metrics)
+        for name in ("node_ent_acc", "node_ent_loss", "node_bbox_loss",
+                     "node_target_acc", "relabs_acc", "reltemp_acc"):
+            self.assertIn(name, metrics)
+
+    def test_bbox_iou_is_not_computed_during_training(self):
+        # IoU needs its own min/max kernels and optimises nothing; it belongs
+        # in evaluation, not in every update.
+        _, _, (_, metrics) = self._run()
+        self.assertNotIn("node_bbox_iou", metrics)
 
     def test_every_loss_reaches_the_semantic_state(self):
         # The decoder reads g, not the encoder's node vectors: that is what
         # makes these losses a test of what g retained.
-        for name in ("nodetgt", "relabs", "reltemp"):
+        for name in sorted(self.LOSSES):
             with self.subTest(loss=name):
                 _, sem, (losses, _) = self._run()
                 losses[name].backward()
                 self.assertIsNotNone(sem.grad)
                 self.assertGreater(float(sem.grad.abs().sum()), 0.0)
 
-    def test_target_flag_is_not_readable_from_the_query(self):
-        # Only g and the UID enter the query, so moving the flag cannot change
-        # the decoded node vectors -- it only changes the label.
-        torch.manual_seed(0)
-        decoder = SimpleGraphDecoder(graph_config(simple=True), semantic_dim=32)
-        sem = torch.randn(1, 1, 32)
-        moved = simple_graph(batch=1, time=1)
+    def test_node_loss_averages_its_two_halves(self):
+        _, _, (losses, metrics) = self._run()
+        self.assertAlmostEqual(
+            float(losses["node"]),
+            0.5 * (float(metrics["node_ent_loss"]) + float(metrics["node_bbox_loss"])),
+            places=5,
+        )
+
+    def test_node_loss_does_not_scale_with_graph_size(self):
+        # Reduced per valid node and then per frame, so a seven-node frame does
+        # not outweigh a two-node one.
+        values = []
+        for n_valid in (2, 4, 7):
+            torch.manual_seed(0)
+            sem = torch.zeros(2, 3, 32)
+            _, _, (losses, _) = self._run(sem=sem, graph=pooled_graph(n_valid=n_valid))
+            values.append(float(losses["node"]))
+        self.assertLess(max(values) / min(values), 2.0, values)
+
+    def test_the_query_carries_geometry_not_the_target_flag(self):
+        # Moving the flag to a different node must not change any node's query,
+        # only the label it is scored against.
+        decoder, _ = self._decoder()
+        base = pooled_graph(batch=1, time=1)
+        moved = pooled_graph(batch=1, time=1)
         moved["graph_node_target"][..., 1] = 0
         moved["graph_node_target"][..., 2] = 1
-        base = compact_graph(simple_graph(batch=1, time=1), simple=True)
-        other = compact_graph(moved, simple=True)
+        sem = torch.randn(1, 1, 32)
         with torch.no_grad():
-            uid_a = decoder.uid(base.node_uid)
-            uid_b = decoder.uid(other.node_uid)
-        self.assertTrue(torch.equal(uid_a, uid_b))
+            a = decoder.node_features(
+                sem, compact_graph(base, SCHEMA_SIMPLE_POOLED))
+            b = decoder.node_features(
+                sem, compact_graph(moved, SCHEMA_SIMPLE_POOLED))
+        self.assertTrue(torch.equal(a, b))
 
     def test_node_count_may_vary_between_frames(self):
         for n_valid in (1, 3, 7):
             with self.subTest(nodes=n_valid):
-                _, _, (losses, metrics) = self._run(
-                    graph=simple_graph(n_valid=max(n_valid, 2))
-                )
+                _, _, (losses, _) = self._run(graph=pooled_graph(n_valid=max(n_valid, 2)))
                 self.assertTrue(torch.isfinite(losses["nodetgt"]))
+
+
+class PooledProgressHeadTest(unittest.TestCase):
+    """One fused head, one relation-row map, one teacher mask."""
+
+    def _decoder(self):
+        torch.manual_seed(0)
+        scorer = ProgressScorer(PICK_STAGES, 17)
+        decoder = SimpleGraphDecoder(
+            graph_config(simple=True), semantic_dim=32,
+            progress_relations=scorer.relations,
+        )
+        return decoder, scorer
+
+    def test_rows_come_from_the_scorer_not_the_relation_id(self):
+        decoder, scorer = self._decoder()
+        self.assertEqual(decoder.n_progress, int(scorer.relations.numel()))
+        for row, relation in enumerate(scorer.relations.tolist()):
+            self.assertEqual(int(decoder.progress_row[relation]), row)
+        # Every relation the scorer does not read is explicitly out of range,
+        # never silently row zero.
+        unused = set(range(11)) - set(scorer.relations.tolist())
+        for relation in unused:
+            self.assertEqual(int(decoder.progress_row[relation]), -1)
+
+    def test_head_emits_one_legal_simplex_per_relation(self):
+        decoder, scorer = self._decoder()
+        probs = decoder.progress_probs(torch.randn(2, 3, 32))
+        self.assertEqual(tuple(probs.shape), (2, 3, int(scorer.relations.numel()), 17))
+        self.assertTrue(torch.allclose(probs.sum(-1), torch.ones(2, 3, 6), atol=1e-5))
+        illegal = ~decoder.progress_valid.expand_as(probs)
+        self.assertLess(float(probs.masked_select(illegal).abs().max()), 1e-6)
+
+    def test_reset_frame_is_excluded_and_later_frames_are_not(self):
+        decoder, _ = self._decoder()
+        compact = compact_graph(pooled_graph(n_edges=4), SCHEMA_SIMPLE_POOLED)
+        step_valid = torch.ones(2, 3, dtype=torch.bool)
+        prior_valid = step_valid.clone()
+        prior_valid[:, 0] = False
+        _, metrics = decoder(
+            torch.randn(2, 3, 32), compact, step_valid,
+            torch.randn(2, 3, 32), prior_valid,
+        )
+        with_reset = float(metrics["prior_progress_facts"])
+        _, all_frames = decoder(
+            torch.randn(2, 3, 32), compact, step_valid,
+            torch.randn(2, 3, 32), step_valid,
+        )
+        # Two of six frames are reset frames, so dropping them removes a third
+        # of the supervised facts and nothing else.
+        self.assertAlmostEqual(
+            with_reset, float(all_frames["prior_progress_facts"]) * 2 / 3, places=5
+        )
+
+    def test_absent_target_masks_the_loss_to_zero(self):
+        # Occluded, unresolved or not yet admitted all look the same here: the
+        # flag is dark and the edge is gone, so no target_resolved key is needed.
+        decoder, _ = self._decoder()
+        graph = pooled_graph()
+        graph["graph_node_target"][:] = 0
+        compact = compact_graph(graph, SCHEMA_SIMPLE_POOLED)
+        step_valid = torch.ones(2, 3, dtype=torch.bool)
+        losses, metrics = decoder(
+            torch.randn(2, 3, 32), compact, step_valid,
+            torch.randn(2, 3, 32), step_valid,
+        )
+        self.assertEqual(float(metrics["prior_progress_facts"]), 0.0)
+        self.assertEqual(float(losses["prior_progress_relabs"]), 0.0)
+
+    def test_observed_labels_never_reach_the_head(self):
+        # The target flag selects which edge supplies the teacher label; no
+        # gradient may run from the prior objective back into the posterior g.
+        decoder, _ = self._decoder()
+        compact = compact_graph(pooled_graph(), SCHEMA_SIMPLE_POOLED)
+        sem = torch.randn(2, 3, 32, requires_grad=True)
+        prior = torch.randn(2, 3, 32, requires_grad=True)
+        step_valid = torch.ones(2, 3, dtype=torch.bool)
+        losses, _ = decoder(sem, compact, step_valid, prior, step_valid)
+        losses["prior_progress_relabs"].backward()
+        self.assertTrue(sem.grad is None or float(sem.grad.abs().sum()) == 0.0)
+        self.assertGreater(float(prior.grad.abs().sum()), 0.0)
+
+    def test_branch_is_skipped_when_no_prior_is_supplied(self):
+        decoder, _ = self._decoder()
+        losses, metrics = decoder(
+            torch.randn(2, 3, 32),
+            compact_graph(pooled_graph(), SCHEMA_SIMPLE_POOLED),
+            torch.ones(2, 3, dtype=torch.bool),
+        )
+        self.assertNotIn("prior_progress_relabs", losses)
+        self.assertNotIn("prior_progress_acc", metrics)
+
+
+class PotentialMatrixTest(unittest.TestCase):
+    """The soft potential is linear, so it is one contraction, not 14 stages."""
+
+    def setUp(self):
+        self.scorer = ProgressScorer(PICK_STAGES, 17)
+
+    def _stagewise(self, probs):
+        return (self.scorer.satisfaction(probs, False) * self.scorer.weights).sum(-1)
+
+    def test_matrix_matches_the_cumulative_stage_sum(self):
+        torch.manual_seed(0)
+        probs = torch.softmax(torch.randn(5, 6, 17), -1)
+        self.assertTrue(torch.allclose(
+            self.scorer.potential(probs), self._stagewise(probs), atol=1e-6
+        ))
+
+    def test_potential_stays_bounded(self):
+        torch.manual_seed(1)
+        probs = torch.softmax(torch.randn(64, 6, 17) * 4.0, -1)
+        phi = self.scorer.potential(probs)
+        self.assertGreaterEqual(float(phi.min()), 0.0)
+        self.assertLessEqual(float(phi.max()), 1.0)
+
+    def test_saturated_state_scores_exactly_one(self):
+        best = torch.zeros(1, 6, 17)
+        satisfying = {5: 3, 6: 10, 8: 13, 7: 13, 1: 2, 2: 2}
+        for row, relation in enumerate(self.scorer.relations.tolist()):
+            best[0, row, satisfying[relation]] = 1.0
+        self.assertAlmostEqual(float(self.scorer.potential(best)), 1.0, places=6)
+        self.assertAlmostEqual(
+            float(self.scorer.potential(best, hard=True)), 1.0, places=6
+        )
+
+    def test_worst_state_scores_zero(self):
+        worst = torch.zeros(1, 6, 17)
+        unsatisfying = {5: 7, 6: 8, 8: 16, 7: 16, 1: 1, 2: 1}
+        for row, relation in enumerate(self.scorer.relations.tolist()):
+            worst[0, row, unsatisfying[relation]] = 1.0
+        self.assertAlmostEqual(float(self.scorer.potential(worst)), 0.0, places=6)
 
 
 class SimpleRSSMTest(unittest.TestCase):
@@ -434,6 +958,24 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         for key in ("deter", "hidden", "discrete", "depth", "units", "rep_loss"):
             self.assertEqual(slot_config[key], pooled[key], key)
 
+    def test_the_pooled_simple_preset_pins_its_contract(self):
+        preset = OmegaConf.load("configs/model/size50M_graph_simple.yaml")
+        self.assertIs(preset.graph_simple, True)
+        self.assertEqual(preset.graph.state_mode, "pooled")
+        self.assertEqual(preset.graph.n_max, 8)
+        self.assertEqual(preset.graph.e_max, 168)
+        self.assertEqual(preset.graph.decoder_units, 256)
+        self.assertEqual(preset.graph.bbox_query_dim, 4)
+        self.assertIs(preset.progress.enabled, True)
+        self.assertEqual(preset.progress.beta, 0.05)
+        for name in ("node", "nodetgt", "relabs", "reltemp",
+                     "prior_progress_relabs", "progress_value", "graphdyn"):
+            self.assertEqual(preset.loss_scales[name], 1.0, name)
+        self.assertEqual(preset.loss_scales.graphrep, 0.05)
+        # There is no recurrent slot state to supervise in this arm.
+        for name in ("slotdyn", "slotalive", "prior_nodetgt"):
+            self.assertNotIn(name, preset.loss_scales)
+
     def test_every_arm_sees_the_same_privileged_observation(self):
         # The graph is built from privileged state in every graph arm, so the
         # graph-free baseline has to see the same fields or the comparison
@@ -448,10 +990,12 @@ class EnvConfigPlumbingTest(unittest.TestCase):
             "n_max": 8, "e_max": 168, "k_persist": -1, "app_dim": 384,
             "dino_model": "dinov2_vits14_reg", "dino_res": 112,
             "dino_weights": "", "staleness_enabled": False,
-            "bypass_teemo": False,
+            "bypass_teemo": False, "state_mode": "pooled",
         })
         out = graph_observation_config(graph_config, ["fetch_head"])
         self.assertIs(out["simple"], True)
+        # ``simple`` alone cannot tell the adapter which contract to emit.
+        self.assertEqual(out["state_mode"], "pooled")
         self.assertEqual(out["uid_vocab"], 64)
         self.assertEqual(out["cameras"], ["fetch_head"])
 

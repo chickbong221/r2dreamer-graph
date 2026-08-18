@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from dreamer import Dreamer  # noqa: E402
 from envs.maniskill import ManiSkillVecEnv  # noqa: E402
-from graph import graph_keys  # noqa: E402
+from graph import graph_keys, graph_schema  # noqa: E402
 
 
 def main():
@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--graph-only", action="store_true")
     parser.add_argument("--graph-simple", action="store_true")
+    parser.add_argument("--graph-state-mode", default="pooled",
+                        choices=("pooled", "slots"))
     args = parser.parse_args()
     if args.graph_only and args.graph_simple:
         parser.error("--graph-only and --graph-simple are mutually exclusive")
@@ -45,6 +47,7 @@ def main():
         f"buffer.storage_device={args.device}",
         f"model.graph_only_latent={str(args.graph_only).lower()}",
         f"model.graph_simple={str(args.graph_simple).lower()}",
+        f"model.graph.state_mode={args.graph_state_mode}",
     ]
     dino_weights = os.environ.get("DINO_WEIGHTS")
     if dino_weights and not args.graph_simple:
@@ -56,14 +59,23 @@ def main():
     try:
         env = ManiSkillVecEnv(config.env)
         spaces = env.observation_space.spaces
-        missing = [key for key in graph_keys(args.graph_simple) if key not in spaces]
+        schema = graph_schema(args.graph_simple, args.graph_state_mode)
+        missing = [key for key in graph_keys(schema) if key not in spaces]
         if missing:
             raise AssertionError(f"observation space is missing graph keys: {missing}")
         if args.graph_simple:
-            stale = [k for k in ("graph_node_app", "graph_node_bbox") if k in spaces]
-            if stale:
+            # Pooled graph-simple keeps boxes and drops identity; slot mode the
+            # reverse. Either way appearance is gone, and the key the *other*
+            # simple schema owns must not be present.
+            stale = ["graph_node_app"]
+            stale.append(
+                "graph_node_uid" if args.graph_state_mode == "pooled"
+                else "graph_node_bbox"
+            )
+            found = [key for key in stale if key in spaces]
+            if found:
                 raise AssertionError(
-                    f"graph_simple must not emit appearance keys, found: {stale}"
+                    f"graph schema {schema} must not emit: {found}"
                 )
         node_capacity = int(config.env.graph.n_max)
         edge_capacity = int(config.env.graph.e_max)

@@ -28,7 +28,13 @@ from .privileged_state import (
     end_frame_cache,
     purge_scene_caches,
 )
-from .graph_pack import graph_keys, pack_graph
+from .graph_pack import (
+    SCHEMA_FULL,
+    SCHEMA_SIMPLE_POOLED,
+    graph_keys,
+    graph_schema,
+    pack_graph,
+)
 from .graph_vocab import GraphVocab, build_graph_vocab
 from ..configs.loader import load_config as load_teemo_config
 from ..core.graph_builder import GraphBuilder
@@ -129,6 +135,7 @@ class GraphObsBuilder:
         bypass_teemo: bool = False,
         staleness_enabled: bool = False,
         simple: bool = False,
+        state_mode: str = "pooled",
         uid_vocab: int = 256,
     ):
         self.env = env
@@ -140,20 +147,29 @@ class GraphObsBuilder:
         self.bypass_teemo = bool(bypass_teemo)
         self.staleness_enabled = bool(staleness_enabled)
         self.simple = bool(simple)
+        # ``simple`` alone no longer names a contract: pooled graph-simple emits
+        # boxes and no identity code, slot graph-simple the reverse.
+        self.state_mode = str(state_mode)
+        self.schema = graph_schema(self.simple, self.state_mode)
+        self.appearance_enabled = self.schema == SCHEMA_FULL
+        self.bbox_enabled = self.schema in (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED)
+        self.uids_enabled = self.schema == SCHEMA_SIMPLE_SLOT
         self.uid_vocab = int(uid_vocab)
-        self.graph_keys = graph_keys(self.simple)
+        self.graph_keys = graph_keys(self.schema)
         self.cameras = list(cameras)
         if not self.cameras:
             raise ValueError("graph: cameras is empty")
         # Overlay rendering and the offline tools need one frame to draw on.
         # The model reads every camera independently and never sees this.
         self.record_camera = self.cameras[0]
-        # Simple mode never reads RGB or pools patch features, so a DINO
+        # Neither simple schema reads RGB or pools patch features, so a DINO
         # instance handed in anyway is dropped rather than kept resident.
-        self.dino = None if self.simple else dino
+        self.dino = dino if self.appearance_enabled else None
         self.app_dim = int(self.dino.dim if self.dino is not None else app_dim)
-        self.patch_grid = 0 if self.simple else (
-            int(self.dino.grid) if self.dino is not None else 8
+        self.patch_grid = (
+            (int(self.dino.grid) if self.dino is not None else 8)
+            if self.appearance_enabled
+            else 0
         )
         self.builders = []
         for i in range(self.num_envs):
@@ -165,7 +181,9 @@ class GraphObsBuilder:
                              camera_order=self.cameras,
                              staleness_enabled=self.staleness_enabled,
                              uid_vocab=self.uid_vocab,
-                             appearance_enabled=not self.simple)
+                             appearance_enabled=self.appearance_enabled,
+                             bbox_enabled=self.bbox_enabled,
+                             uids_enabled=self.uids_enabled)
             )
         self._frames = np.zeros(self.num_envs, dtype=np.int64)
         # Last packed arrays per env, re-emitted on terminal frames whose
@@ -398,7 +416,7 @@ class GraphObsBuilder:
         size per combination, which it keeps rather than returning to the OS.
         Terminal envs still pool nothing: only ``active`` writes a cache row.
         """
-        if self.simple:
+        if not self.appearance_enabled:
             return
         C, D, P = self.n_cams, self.app_dim, self.patch_grid ** 2
         if not any(graphs[i].nodes for i in active):
@@ -528,7 +546,7 @@ class GraphObsBuilder:
                     graphs[i], self.vocab,
                     n_max=self.n_max, e_max=self.e_max,
                     n_cams=self.n_cams, app_dim=self.app_dim,
-                    simple=self.simple, uid_vocab=self.uid_vocab,
+                    schema=self.schema, uid_vocab=self.uid_vocab,
                 )
                 self._last_packed[i] = out
                 self._fact_drops[i] = float(
@@ -601,11 +619,13 @@ def build_graph_obs(
         cameras = [graph_cfg.get("camera", "fetch_head")]
 
     simple = bool(graph_cfg.get("simple", False))
+    state_mode = str(graph_cfg.get("state_mode", "pooled"))
+    schema = graph_schema(simple, state_mode)
 
     dino = None
-    # Simple mode has no appearance channel at all, so the checkpoint is never
-    # loaded and no weights sit in VRAM for the run's lifetime.
-    if not simple and not bool(graph_cfg.get("bypass_teemo", False)):
+    # Neither simple schema has an appearance channel, so the checkpoint is
+    # never loaded and no weights sit in VRAM for the run's lifetime.
+    if schema == SCHEMA_FULL and not bool(graph_cfg.get("bypass_teemo", False)):
         dino = DinoFeatures(
             graph_cfg.get("dino_model") or "dinov2_vits14_reg",
             res=int(graph_cfg.get("dino_res", 112)),
@@ -632,5 +652,6 @@ def build_graph_obs(
         bypass_teemo=bool(graph_cfg.get("bypass_teemo", False)),
         staleness_enabled=bool(graph_cfg.get("staleness_enabled", False)),
         simple=simple,
+        state_mode=state_mode,
         uid_vocab=int(graph_cfg.get("uid_vocab", 256)),
     )

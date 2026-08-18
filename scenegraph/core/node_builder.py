@@ -153,6 +153,72 @@ def fill_appearance(
             node.patch_weights[cam] = cov.reshape(-1)
 
 
+def fill_bboxes(nodes: Dict[str, Node], seg_by_cam: List[np.ndarray]) -> None:
+    """Attach the per-camera bbox to every node, and nothing else.
+
+    The relation-only pooled contract needs boxes but no patch coverage, so this
+    is deliberately not ``fill_appearance`` with a flag: that function's cost is
+    the per-node ``isin`` sweep and the patch-grid reduction, both of which exist
+    only to feed the frozen appearance encoder.
+
+    One vectorised pass per camera. Segmentation ids are mapped to node rows
+    through a lookup table, so a node owning several ids costs nothing extra and
+    there is no Python loop over nodes doing full-frame work. Row 0 of the table
+    is the sentinel that absorbs background, ids this builder created no node
+    for, and anything out of range -- it is dropped afterwards, so no id can
+    index row -1 or leak into a real node's extent.
+
+    Boxes come out normalised to [0, 1] with exclusive maxima, byte-identical to
+    what ``fill_appearance`` produces, so the two paths stay interchangeable.
+    Node rows here are builder-local; whitelist admission and the registry's
+    capacity rules run later and decide the packed position.
+    """
+    n_cams = len(seg_by_cam)
+    keys = list(nodes)
+    for node in nodes.values():
+        node.bbox = np.zeros((n_cams, 4), np.float32)
+
+    owner: Dict[int, int] = {}
+    for row, key in enumerate(keys, start=1):
+        for seg_id in nodes[key].segmentation_ids:
+            seg_id = int(seg_id)
+            if seg_id > 0:
+                owner[seg_id] = row
+    if not owner:
+        return
+
+    max_id = max(owner)
+    lut = np.zeros(max_id + 1, np.int32)
+    for seg_id, row in owner.items():
+        lut[seg_id] = row
+    n_rows = len(keys) + 1
+
+    for cam, seg in enumerate(seg_by_cam):
+        H, W = seg.shape
+        # Ids above this table (another camera saw a larger one) and any
+        # non-positive id fall to the sentinel row rather than wrapping.
+        known = (seg > 0) & (seg <= max_id)
+        rows = lut[np.where(known, seg, 0)]
+        # Two boolean projections instead of one mask per node: each is a single
+        # scatter over the frame, and duplicate writes are all ``True``.
+        seen_x = np.zeros((n_rows, W), bool)
+        seen_y = np.zeros((n_rows, H), bool)
+        seen_x[rows, np.arange(W)[None, :]] = True
+        seen_y[rows, np.arange(H)[:, None]] = True
+        present = seen_x.any(1)
+        # argmax on a boolean row is the first True; reversed gives the last.
+        # Meaningless for an all-False row, which ``present`` filters out.
+        x0 = seen_x.argmax(1)
+        x1 = W - seen_x[:, ::-1].argmax(1)
+        y0 = seen_y.argmax(1)
+        y1 = H - seen_y[:, ::-1].argmax(1)
+        for row, key in enumerate(keys, start=1):
+            if present[row]:
+                nodes[key].bbox[cam] = (
+                    x0[row] / W, x1[row] / W, y0[row] / H, y1[row] / H,
+                )
+
+
 def _ingest_camera(
     seg: np.ndarray,
     state: PrivilegedState,
@@ -224,6 +290,7 @@ def build_nodes(
     admit: Optional[Callable[[Any], bool]] = None,
     patch_grid: int = 8,
     appearance: bool = True,
+    bbox: bool = True,
 ) -> Tuple[Dict[str, Node], MaskAccumulator, str, np.ndarray]:
     """Return (nodes_by_id, masks, record_camera_name, rgb).
 
@@ -272,9 +339,12 @@ def build_nodes(
         )
 
     nodes["ee"].pixel_area = area_by_key["ee"]
-    # Boxes and patch coverage exist only to feed the appearance encoder. A
-    # relation-only graph reads neither, and the per-node ``isin`` sweep over
-    # every camera is the most expensive step here.
+    # Patch coverage exists only to feed the appearance encoder, and computing
+    # it is the expensive half. Boxes are wanted on their own by the pooled
+    # relation contract, which reads no RGB and builds no DINO, so the two are
+    # separate switches rather than one.
     if appearance:
         fill_appearance(nodes, seg_by_cam, patch_grid)
+    elif bbox:
+        fill_bboxes(nodes, seg_by_cam)
     return nodes, masks, cam, rgb

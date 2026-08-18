@@ -12,6 +12,7 @@ import torch
 
 import progress as progress_module
 from graph import (
+    SCHEMA_SIMPLE_SLOT,
     UID_EE,
     UID_PAD,
     GraphEncoder,
@@ -76,6 +77,24 @@ def rssm_config():
         norm=True, unimix_ratio=0.01, initial="learned", device="cpu",
         sem_stoch=2, sem_discrete=3, sem_layers=1,
     )
+
+
+def pooled_graph(batch=2, time=3, n_valid=3, n_edges=4):
+    """The same frames on the pooled contract: boxes instead of a UID."""
+    graph = {
+        key: value
+        for key, value in slot_graph(batch, time, n_valid, n_edges).items()
+        if key != "graph_node_uid"
+    }
+    bbox = torch.zeros(batch, time, N_MAX, 2, 4, dtype=torch.float16)
+    boxes = torch.tensor([
+        [0.10, 0.40, 0.20, 0.50],
+        [0.50, 0.90, 0.10, 0.30],
+        [0.00, 0.20, 0.60, 0.80],
+    ])
+    bbox[..., :min(n_valid, 3), 0, :] = boxes[:min(n_valid, 3)].to(torch.float16)
+    graph["graph_node_bbox"] = bbox
+    return graph
 
 
 def slot_graph(batch=2, time=3, n_valid=3, n_edges=4, uids=None, ents=None):
@@ -190,14 +209,17 @@ class SlotEncoderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "relation-only"):
             GraphEncoder(config)
 
-    def test_pooled_mode_is_structurally_unchanged(self):
+    def test_pooled_mode_keeps_its_own_shape(self):
+        # Slot mode must not perturb the pooled arm. Pooled graph-simple has
+        # its own contract -- boxes, no UID, masked-mean pooling -- which is
+        # asserted in test_graph_simple; what matters here is only that it
+        # stays a single token of simple_units width and grows no slot table.
         encoder = GraphEncoder(graph_config(state_mode="pooled"))
         self.assertFalse(encoder.slot_mode)
-        self.assertIsNotNone(encoder.uid)
-        self.assertIsNotNone(encoder.query)
         self.assertEqual(encoder.units, 32)  # simple_units, not slot_dim
+        self.assertIsNone(encoder.uid)
         with torch.no_grad():
-            encoded = encoder(slot_graph())
+            encoded = encoder(pooled_graph())
         self.assertIsNone(encoded.slots)
         self.assertEqual(tuple(encoded.token.shape), (2, 3, 32))
 
@@ -665,7 +687,7 @@ class SlotDecoderTest(unittest.TestCase):
     def _run(self, target_row=1, relations=None):
         torch.manual_seed(0)
         decoder = SlotGraphDecoder(graph_config())
-        compact = compact_graph(slot_graph(batch=2, time=2), simple=True)
+        compact = compact_graph(slot_graph(batch=2, time=2), SCHEMA_SIMPLE_SLOT)
         post = torch.randn(2, 2, N_MAX, SLOT_DIM, requires_grad=True)
         prior = torch.randn(2, 2, N_MAX, SLOT_DIM, requires_grad=True)
         # Identity routing: observation row i is slot i.

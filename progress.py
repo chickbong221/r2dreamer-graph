@@ -200,6 +200,19 @@ class ProgressScorer(torch.nn.Module):
             torch.tensor([stage.weight / total for stage in stages], dtype=torch.float32),
             persistent=False,
         )
+        # The soft potential is linear in the predicted probabilities:
+        #     Phi = sum_k w_k sum_{l in A_k} p[r_k, l] = <p, W>.
+        # Folding the stage table into one (R, n_abs) matrix makes it a single
+        # multiply-and-reduce, so the stage axis is never materialised in the
+        # hot path and overlapping cumulative rungs cost nothing extra. Exactly
+        # equal to the stage sum; the hard scorer keeps the stage path because
+        # its arg-max is not linear.
+        potential = torch.zeros(len(relations), n_abs, dtype=torch.float32)
+        for index, stage in enumerate(stages):
+            potential[select[index]] += labels[index].float() * (
+                stage.weight / total
+            )
+        self.register_buffer("potential_weights", potential, persistent=False)
 
     def satisfaction(self, probs: torch.Tensor, hard: bool) -> torch.Tensor:
         """Per-stage satisfaction in ``[0, 1]`` from (..., R, n_abs) probs."""
@@ -212,6 +225,8 @@ class ProgressScorer(torch.nn.Module):
 
     def potential(self, probs: torch.Tensor, hard: bool = False) -> torch.Tensor:
         """Weighted stage satisfaction. Bounded by construction, not by clamp."""
+        if not hard:
+            return (probs.float() * self.potential_weights).sum((-2, -1))
         return (self.satisfaction(probs, hard) * self.weights).sum(-1)
 
     def forward(self, probs: torch.Tensor, hard: bool = False) -> torch.Tensor:
@@ -269,6 +284,18 @@ class ProgressReward(torch.nn.Module):
         # conditioned on "a target exists"; the null mass gates the potential.
         mass = weights.sum(-1).clamp_min(1e-6)
         return probs / mass[..., None, None], 1.0 - null
+
+    def pooled(self, probs: torch.Tensor):
+        """Shaping reward from a directly predicted EE-to-target block.
+
+        The pooled graph state has no slots to enumerate and no target-null
+        class: the subtask target is fixed for the episode and the recurrent
+        state is what carries it through occlusion. So the head's own (R, n_abs)
+        output is already conditioned on "the target", and the potential is one
+        contraction over the whole ``B * H`` rollout at once.
+        """
+        potential = self.scorer.potential(probs, hard=not self.soft)
+        return (1.0 - self.discount) * potential, potential
 
     def forward(self, decoder, slots, target_logits, slot_alive, hard=None):
         hard = (not self.soft) if hard is None else bool(hard)

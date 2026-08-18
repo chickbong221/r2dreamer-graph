@@ -28,9 +28,13 @@ def _repo_path(value: str | Path) -> Path:
 # key added to the env config but forgotten here silently downgrades the run
 # to the previous behaviour instead of failing.
 _GRAPH_CONFIG_KEYS = (
-    "enabled", "simple", "uid_vocab", "profile", "thresholds_path",
-    "whitelist_dir", "n_max", "e_max", "k_persist", "app_dim", "dino_model",
-    "dino_res", "dino_weights", "staleness_enabled", "bypass_teemo",
+    # ``simple`` alone no longer picks a contract: pooled graph-simple emits
+    # boxes and no identity code, slot graph-simple the reverse, so the env has
+    # to know the state mode too.
+    "enabled", "simple", "state_mode", "uid_vocab", "profile",
+    "thresholds_path", "whitelist_dir", "n_max", "e_max", "k_persist",
+    "app_dim", "dino_model", "dino_res", "dino_weights", "staleness_enabled",
+    "bypass_teemo",
 )
 
 _GRAPH_CONFIG_CASTS = {

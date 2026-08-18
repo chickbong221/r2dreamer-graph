@@ -27,6 +27,22 @@ from ..core.schema import Graph
 from .graph_vocab import GraphVocab, entity_key_for
 
 
+# Mirrors ``graph.py``; the tests assert the two agree. Duplicated rather than
+# imported so this package never reaches into the model package.
+SCHEMA_FULL = "full"
+SCHEMA_SIMPLE_POOLED = "simple_pooled_bbox"
+SCHEMA_SIMPLE_SLOT = "simple_slot_uid"
+GRAPH_SCHEMAS = (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED, SCHEMA_SIMPLE_SLOT)
+
+
+def graph_schema(simple: bool, state_mode: str = "pooled") -> str:
+    if not simple:
+        return SCHEMA_FULL
+    if str(state_mode) == "slots":
+        return SCHEMA_SIMPLE_SLOT
+    return SCHEMA_SIMPLE_POOLED
+
+
 _PHYSICAL = frozenset(PHYSICAL_RELATIONS)
 _AFFORDANCE = frozenset(AFFORDANCE_RELATIONS)
 
@@ -51,15 +67,24 @@ def pack_graph(
     e_max: int,
     n_cams: int,
     app_dim: int,
-    simple: bool = False,
+    schema: str = SCHEMA_FULL,
     uid_vocab: int = 256,
 ) -> Dict[str, np.ndarray]:
-    """Pack one frame.
+    """Pack one frame under one of the three observation schemas.
 
-    ``simple`` emits the relation-only contract: no appearance and no boxes,
-    plus ``graph_node_uid`` so a decoder can address a node across frames
-    without relying on the compact slot, which the registry reuses.
+    ``full`` carries appearance and boxes. ``simple_pooled_bbox`` keeps the
+    boxes and drops appearance and identity: a node is addressed by where it
+    currently is. ``simple_slot_uid`` is relation-only and carries
+    ``graph_node_uid`` instead, which is what names a node across frames for
+    slot alignment; the compact row cannot, because the registry reuses it.
     """
+    if schema not in SCHEMA_KEYS:
+        raise ValueError(
+            f"unknown graph schema {schema!r}; expected one of {GRAPH_SCHEMAS}"
+        )
+    want_uid = schema == SCHEMA_SIMPLE_SLOT
+    want_bbox = schema in (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED)
+    want_app = schema == SCHEMA_FULL
     if n_max > 255:
         raise ValueError(
             f"n_max={n_max} exceeds 255; edge endpoints are packed as uint8"
@@ -71,7 +96,8 @@ def pack_graph(
     # displaced by vertex overflow, and a bit on the wrong instance is worse
     # than no bit at all.
     node_target = np.zeros(n_max, dtype=np.uint8)
-    if simple:
+    uids = {}
+    if want_uid:
         if uid_vocab > 256:
             raise ValueError(
                 f"uid_vocab={uid_vocab} exceeds 256; graph_node_uid is packed "
@@ -79,8 +105,9 @@ def pack_graph(
             )
         node_uid = np.zeros(n_max, dtype=np.uint8)
         uids = graph.meta.get("node_uids") or {}
-    else:
+    if want_app:
         node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)
+    if want_bbox:
         node_bbox = np.zeros((n_max, n_cams, 4), dtype=np.float16)
     target_id = graph.meta.get("active_target_node_id")
 
@@ -100,7 +127,7 @@ def pack_graph(
                 "entity id; every packed vertex needs a whitelist key"
             )
         node_ent[i] = ent
-        if simple:
+        if want_uid:
             uid = uids.get(node.node_id)
             if uid is None:
                 raise ValueError(
@@ -113,11 +140,10 @@ def pack_graph(
                     "zero is padding and wrapping would alias two objects"
                 )
             node_uid[i] = int(uid)
-        else:
-            if node.bbox is not None:
-                node_bbox[i] = node.bbox
-            if node.appearance is not None:
-                node_app[i] = node.appearance
+        if want_bbox and node.bbox is not None:
+            node_bbox[i] = node.bbox
+        if want_app and node.appearance is not None:
+            node_app[i] = node.appearance
         if node.node_id == target_id:
             node_target[i] = 1
         position[node.node_id] = i
@@ -181,31 +207,50 @@ def pack_graph(
         "graph_edge_abs": edge_abs,
         "graph_edge_temp": edge_temp,
     }
-    if simple:
+    if want_uid:
         packed["graph_node_uid"] = node_uid
-    else:
+    if want_app:
         packed["graph_node_app"] = node_app
+    if want_bbox:
         packed["graph_node_bbox"] = node_bbox
     return packed
 
 
+# The three schemas, mirroring ``graph.py``. A field a schema does not name is
+# absent everywhere -- the observation space, the transition, replay and the
+# sampled batch -- rather than zeroed, so a run pays none of its bandwidth.
+_EDGE_KEYS = (
+    "graph_edge_src", "graph_edge_dst", "graph_edge_rel", "graph_edge_abs",
+    "graph_edge_temp",
+)
+
 FULL_GRAPH_KEYS = (
     "graph_node_ent", "graph_node_app", "graph_node_bbox", "graph_node_target",
-    "graph_edge_src", "graph_edge_dst", "graph_edge_rel", "graph_edge_abs",
-    "graph_edge_temp",
+    *_EDGE_KEYS,
 )
 
-# Relation-only contract. Appearance and boxes are absent everywhere -- the
-# observation space, the transition, replay and the sampled batch -- rather
-# than zeroed, so a simple-mode run pays none of their memory or bandwidth.
-SIMPLE_GRAPH_KEYS = (
-    "graph_node_ent", "graph_node_uid", "graph_node_target",
-    "graph_edge_src", "graph_edge_dst", "graph_edge_rel", "graph_edge_abs",
-    "graph_edge_temp",
+SIMPLE_POOLED_GRAPH_KEYS = (
+    "graph_node_ent", "graph_node_bbox", "graph_node_target", *_EDGE_KEYS,
 )
+
+SIMPLE_SLOT_GRAPH_KEYS = (
+    "graph_node_ent", "graph_node_uid", "graph_node_target", *_EDGE_KEYS,
+)
+
+SCHEMA_KEYS = {
+    SCHEMA_FULL: FULL_GRAPH_KEYS,
+    SCHEMA_SIMPLE_POOLED: SIMPLE_POOLED_GRAPH_KEYS,
+    SCHEMA_SIMPLE_SLOT: SIMPLE_SLOT_GRAPH_KEYS,
+}
 
 GRAPH_KEYS = FULL_GRAPH_KEYS
+SIMPLE_GRAPH_KEYS = SIMPLE_SLOT_GRAPH_KEYS
 
 
-def graph_keys(simple: bool) -> Tuple[str, ...]:
-    return SIMPLE_GRAPH_KEYS if simple else FULL_GRAPH_KEYS
+def graph_keys(schema: str) -> Tuple[str, ...]:
+    try:
+        return SCHEMA_KEYS[schema]
+    except KeyError:
+        raise ValueError(
+            f"unknown graph schema {schema!r}; expected one of {GRAPH_SCHEMAS}"
+        ) from None

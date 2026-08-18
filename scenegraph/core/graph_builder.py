@@ -109,6 +109,8 @@ class GraphBuilder:
         staleness_enabled: bool = False,
         uid_vocab: int = 256,
         appearance_enabled: bool = True,
+        bbox_enabled: bool = True,
+        uids_enabled: bool = True,
     ):
         self.env = env
         self.cfg = cfg
@@ -117,7 +119,14 @@ class GraphBuilder:
         self.camera = camera
         self.camera_order = list(camera_order) if camera_order else None
         self.staleness_enabled = bool(staleness_enabled)
+        # Two switches, not one. The pooled relation contract wants boxes and
+        # no patch coverage; appearance implies both.
         self.appearance_enabled = bool(appearance_enabled)
+        self.bbox_enabled = bool(bbox_enabled)
+        # Episode-random identity codes exist for slot alignment only. The
+        # pooled contract addresses nodes by their box, so nothing assigns or
+        # packs a UID there.
+        self.uids_enabled = bool(uids_enabled)
         self.uids = EpisodeUIDs(uid_vocab, seed=1000 + int(env_idx))
 
         self.temporal = TemporalBuffer(K=cfg["temporal"]["K"])
@@ -268,6 +277,7 @@ class GraphBuilder:
             need_masks=need_masks,
             patch_grid=patch_grid,
             appearance=self.appearance_enabled,
+            bbox=self.bbox_enabled,
             # Recording paths keep full masks/nodes for overlays; the training
             # hot path skips node construction for never-admissible entities.
             admit=None if need_masks else self._entity_admitted,
@@ -361,7 +371,11 @@ class GraphBuilder:
                 active_subtask=state.active_subtask_type,
                 active_obj_id=state.active_obj_id,
                 active_target_node_id=active_target_node_id,
-                node_uids={n.node_id: self._uid_for(n) for n in ordered},
+                node_uids=(
+                    {n.node_id: self._uid_for(n) for n in ordered}
+                    if self.uids_enabled
+                    else {}
+                ),
                 n_objects=sum(1 for n in ordered if n.node_type == "object"),
                 n_visible=sum(1 for n in ordered if n.visible),
             ),
