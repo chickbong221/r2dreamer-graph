@@ -5,6 +5,7 @@ Asset shape (``_schema_version: 4``)::
     {
       "_schema_version": 4,
       "subtask": "pick",
+      "task_group": "set_table",
       "target": "actor:024_bowl",
       "members": {
         "actor:024_bowl": {
@@ -115,6 +116,7 @@ _VALID_INTERACTION_TYPES = frozenset({
 @dataclass
 class Whitelist:
     subtask: str = ""
+    task_group: str = ""
     target: str = ""
     by_key: Dict[str, Set[str]] = field(default_factory=dict)
     interaction_types: Dict[str, Set[str]] = field(default_factory=dict)
@@ -152,7 +154,7 @@ def load_whitelist(path: str) -> Whitelist:
     if not path or not os.path.isfile(path):
         raise FileNotFoundError(
             f"per-subtask whitelist not found at {path!r}; mine it with "
-            "tools/build_subtask_whitelists.py before running the probe"
+            "tools/prepare_assets.py --mshab-task <group> before running the probe"
         )
     abspath = os.path.abspath(path)
     st = os.stat(abspath)
@@ -219,6 +221,7 @@ def load_whitelist(path: str) -> Whitelist:
 
     wl = Whitelist(
         subtask=str(raw.get("subtask", "") or ""),
+        task_group=str(raw.get("task_group", "") or ""),
         target=str(raw.get("target", "") or ""),
         by_key=by_key,
         interaction_types=interaction_types,
@@ -306,6 +309,21 @@ def derive_bin_edges(max_values: Dict[str, float]) -> Dict[str, List[float]]:
 # --------------------------------------------------------------------------- #
 # Filename resolver
 # --------------------------------------------------------------------------- #
+def whitelist_group_dir(whitelist_root: Optional[str],
+                        task_group: Optional[str]) -> Optional[str]:
+    """``<root>/<task_group>``: the one directory a run may read.
+
+    Whitelists are mined per MS-HAB task because the same object rests on
+    different things in each -- set_table's bowl in a counter drawer,
+    prepare_groceries' on the counter. Selecting the directory by group is what
+    stops a set_table run from loading a prepare_groceries file that would load
+    and validate perfectly while describing the wrong scene.
+    """
+    if not whitelist_root or not task_group:
+        return None
+    return os.path.join(whitelist_root, str(task_group))
+
+
 def resolve_whitelist_path(
     whitelist_dir: Optional[str],
     subtask_type: Optional[str],

@@ -17,7 +17,9 @@ Admissible = both endpoints visible and both carrying the whitelist
 ``interaction_types`` token; affordance also needs the mined components. Facts
 touching a node that left the view are the graph builder's business.
 
-Bin edges: ``cfg["bin_edges"]`` (whitelist), ``cfg["profile"]`` as fallback.
+Bin edges come from the mined whitelist alone (``cfg["bin_edges"]``). There is
+no rule-based fallback: a relation the asset does not calibrate is not
+emitted, so a token never means a hand-picked distance.
 """
 
 from __future__ import annotations
@@ -97,6 +99,15 @@ _BIN_LABELS: Dict[str, List[str]] = {
 }
 
 
+# Absolute relations the runtime cannot label at all without mined edges.
+# ``derive_bin_edges`` always emits the four compatibility scales (the score is
+# already normalised to [0, 1]) and derives the two spatial ones from the demo
+# statistics, so a v4 asset missing any of these was not mined against the task
+# being run. Change relations stay out: an asset legitimately omits one when
+# the demos never moved it.
+REQUIRED_BIN_RELATIONS: Tuple[str, ...] = SPATIAL_RELATIONS + AFFORDANCE_RELATIONS
+
+
 def temporal_bin_key(relation: str) -> str:
     return f"{relation}-change"
 
@@ -116,20 +127,15 @@ def bin_label(value: float, edges: List[float], labels: List[str]) -> str:
 
 
 def _get_bin_spec(cfg: dict, relation: str) -> Optional[Tuple[List[float], List[str]]]:
-    """Resolve ``(edges, labels)`` for ``relation`` from cfg.
+    """Resolve ``(edges, labels)`` for ``relation`` from the mined bins.
 
-    Whitelist-derived ``cfg["bin_edges"]`` wins; ``cfg["profile"]`` is the
-    fallback (legacy snake_case keys). Returns None when no source provides
-    edges for this relation.
+    ``cfg["bin_edges"]`` is the only source. The graph builder has already
+    refused to run without a mined union asset and checked that it calibrates
+    every absolute relation, so a None here means a change relation the demos
+    never moved -- that relation carries no label rather than borrowing one
+    from a hand-written scale.
     """
-    edges_map = cfg.get("bin_edges") or {}
-    edges = edges_map.get(relation)
-    if edges is None:
-        profile = cfg.get("profile") or {}
-        spec = profile.get(relation.replace("-", "_"))
-        if not isinstance(spec, dict):
-            return None
-        edges = spec.get("edges")
+    edges = (cfg.get("bin_edges") or {}).get(relation)
     if not edges:
         return None
     labels = _BIN_LABELS.get(relation)

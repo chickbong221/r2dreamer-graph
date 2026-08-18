@@ -15,7 +15,7 @@ from .affordance import canonical_affordance_key
 from .entity_identity import stable_entity_key, stable_node_id
 from .schema import Edge, Graph, Node
 from .node_builder import build_nodes
-from .relation_rules import build_absolute_edges
+from .relation_rules import REQUIRED_BIN_RELATIONS, build_absolute_edges
 from .temporal_buffer import TemporalBuffer
 from .mask_extractor import MaskAccumulator
 from .selector import EntityRegistry, NodeSelector
@@ -135,6 +135,7 @@ class GraphBuilder:
         self.cfg.setdefault("_affordance_selection_cache", {})
 
         self._whitelist_dir: Optional[str] = cfg.get("whitelist_dir")
+        self._task_group: str = str(cfg.get("task_group") or "")
         self._whitelist_key: Optional[Tuple[str, str]] = None
         self._bin_edges_subtask: Optional[str] = None
 
@@ -170,8 +171,10 @@ class GraphBuilder:
         The union file is the elementwise maximum of those statistics, so it
         never clips and holds one interpretation for the whole run.
 
-        cfg["profile"] stays the fallback for relations the asset omits, and
-        cfg["compat_norm"] is untouched.
+        The asset is the only source of bins -- there is no rule-based
+        fallback -- so an asset that does not calibrate an absolute relation
+        raises here rather than letting that relation quietly go unlabelled
+        for the whole run. cfg["compat_norm"] is untouched.
         """
         if self._bin_edges_subtask == subtask:
             return
@@ -180,10 +183,41 @@ class GraphBuilder:
             raise FileNotFoundError(
                 f"union whitelist not found for subtask={subtask!r} under "
                 f"whitelist_dir={self._whitelist_dir!r}; it supplies the global "
-                "relation bins. Build it with tools/build_union_whitelist.py."
+                "relation bins. Build it with tools/build_union_whitelist.py "
+                "(prepare_assets runs it for you)."
             )
-        self.cfg["bin_edges"] = dict(load_whitelist(path).bin_edges or {})
+        union = load_whitelist(path)
+        self._check_task_group(union, path)
+        bin_edges = dict(union.bin_edges or {})
+        missing = [r for r in REQUIRED_BIN_RELATIONS if not bin_edges.get(r)]
+        if missing:
+            raise ValueError(
+                f"union whitelist {path!r} calibrates no bins for "
+                f"{', '.join(missing)}; those relations would emit nothing for "
+                "the whole run. Re-mine the whitelists against the task being "
+                "run with tools/prepare_assets.py."
+            )
+        self.cfg["bin_edges"] = bin_edges
         self._bin_edges_subtask = subtask
+
+    def _check_task_group(self, whitelist, path: str) -> None:
+        """Refuse an asset mined against a different MS-HAB task.
+
+        The whitelist directory is already selected by group, so this only
+        fires on a file copied into the wrong tree -- which is exactly the case
+        no other check catches: it parses, validates and names plausible
+        furniture, just not the furniture this task has.
+        """
+        if not self._task_group:
+            return
+        if whitelist.task_group != self._task_group:
+            raise ValueError(
+                f"whitelist {path!r} was mined for task group "
+                f"{whitelist.task_group or '<none>'!r} but the run is "
+                f"{self._task_group!r}. Re-mine the group with "
+                "tools/prepare_assets.py rather than copying files between "
+                "task trees."
+            )
 
     def _resolve_and_bind_whitelist(self, state) -> None:
         """Bind the whitelist for this episode's (subtask, target).
@@ -228,9 +262,11 @@ class GraphBuilder:
             raise FileNotFoundError(
                 f"per-subtask whitelist not found for subtask={subtask!r}, "
                 f"target={target!r} under whitelist_dir={self._whitelist_dir!r}. "
-                "Mine assets with tools/build_subtask_whitelists.py."
+                "Mine this task group with tools/prepare_assets.py."
             )
-        self.selector.set_whitelist(load_whitelist(path))
+        whitelist = load_whitelist(path)
+        self._check_task_group(whitelist, path)
+        self.selector.set_whitelist(whitelist)
         self._whitelist_key = key
 
     def _entity_admitted(self, entity) -> bool:

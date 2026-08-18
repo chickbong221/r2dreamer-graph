@@ -1,14 +1,13 @@
 # TEEMO sim-probe thresholds.
 #
-# Bin edges for spatial, affordance, and change relations are mined per
-# (subtask, target) into the whitelist asset. The ``profiles`` block below is
-# the runtime FALLBACK used only when the active whitelist asset omits edges
-# for a particular relation. Two scale profiles:
-#   tabletop   -> ManiSkill PickCube-v1 (small workspace)
-#   room_scale -> MS-HAB (Fetch navigates room-scale scenes)
+# Bin edges for spatial, affordance, and change relations live in the mined
+# whitelist asset alone: the per-(subtask, target) files calibrate them and the
+# ``<subtask>_all.json`` union supplies the one set the whole run shares. There
+# is no hand-written fallback here on purpose -- a scale profile that does not
+# come from the task's own demonstrations makes a relation token mean a
+# different metric distance than the one it was mined for, silently.
 #
-# All distances in metres. Bin edges are upper-exclusive ascending. Labels and
-# edges must satisfy ``len(labels) == len(edges) + 1``.
+# All distances in metres.
 
 temporal:
   K: 5
@@ -25,9 +24,9 @@ support:
   min_vertical_force_ratio: 0.5
 
 affordances:
-  # Mined by scenegraph/tools/build_affordances.py into this directory. Paths
-  # resolve relative to this file.
-  asset_path: affordances.json
+  # Mined per MS-HAB task by scenegraph/tools/build_affordances.py into
+  # <asset_dir>/<task_group>.json. Paths resolve relative to this file.
+  asset_dir: affordances
   # EE-object affordance compatibility is always enabled. Obj-obj contact /
   # contain compatibility remains useful for tool-style interactions (e.g. a
   # knife contacting food). Obj-obj support-fit is useful for place-style
@@ -64,10 +63,14 @@ compat_norm:
   radial: 0.02
   axial: 0.03
 
-# One per-(subtask,target) whitelist is loaded from this directory and the run
-# fails loud if no file matches. Mine these via
-# scenegraph/tools/build_subtask_whitelists.py. Overridden by
-# env.maniskill.graph.whitelist_dir when that is set.
+# Root of the per-task-group whitelist trees. The run reads exactly one of
+# them -- <dir>/<task_group>/ -- and fails loud if no file matches the active
+# (subtask, target). Task-group namespacing is not cosmetic: the same object
+# rests on different furniture in each MS-HAB task, so a file from another
+# group would load and validate while describing a scene this run never enters.
+# Mine these via scenegraph/tools/prepare_assets.py. Overridden by
+# env.maniskill.graph.whitelist_dir when that is set (which must then point at
+# the group directory itself).
 whitelists:
   dir: subtask_whitelists
 
@@ -75,98 +78,3 @@ selection:
   n_max: 8                          # vertex capacity including the ee node
   k_persist: -1                     # frames a node stays after last seen; -1 = whole episode, 0 = disabled
 
-profiles:
-
-  tabletop:
-    planar_distance:
-      edges:  [0.04, 0.08, 0.20, 0.40]
-      labels: [very-near, near, medium, far, very-far]
-    height_offset:
-      edges:  [-0.15, -0.05, 0.05, 0.15]
-      labels: [far-below, below, level, above, far-above]
-    grasp_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    contact_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    support_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    contain_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    planar_distance_change:
-      edges:  [-0.06, -0.01, 0.01, 0.06]
-      labels: [approaching-fast, approaching-slow, stable-distance,
-               receding-slow, receding-fast]
-    height_offset_change:
-      edges:  [-0.06, -0.01, 0.01, 0.06]
-      labels: [lowering-fast, lowering-slow, stable-height,
-               rising-slow, rising-fast]
-    grasp_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [grasp-fit-better-fast, grasp-fit-better-slow, stable-grasp-fit,
-               grasp-fit-worse-slow, grasp-fit-worse-fast]
-    contact_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [contact-fit-better-fast, contact-fit-better-slow,
-               stable-contact-fit,
-               contact-fit-worse-slow, contact-fit-worse-fast]
-    support_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [support-fit-better-fast, support-fit-better-slow,
-               stable-support-fit,
-               support-fit-worse-slow, support-fit-worse-fast]
-    contain_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [contain-fit-better-fast, contain-fit-better-slow,
-               stable-contain-fit,
-               contain-fit-worse-slow, contain-fit-worse-fast]
-
-  room_scale:
-    planar_distance:
-      edges:  [0.15, 0.30, 1.00, 1.50]
-      labels: [very-near, near, medium, far, very-far]
-    height_offset:
-      edges:  [-0.15, -0.05, 0.05, 0.15]
-      labels: [far-below, below, level, above, far-above]
-    grasp_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    contact_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    support_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    contain_compatibility:
-      edges:  [0.3333333333333333, 0.6666666666666666]
-      labels: [match, partial-match, poor-match]
-    planar_distance_change:
-      edges:  [-0.18, -0.03, 0.03, 0.18]
-      labels: [approaching-fast, approaching-slow, stable-distance,
-               receding-slow, receding-fast]
-    height_offset_change:
-      edges:  [-0.06, -0.01, 0.01, 0.06]
-      labels: [lowering-fast, lowering-slow, stable-height,
-               rising-slow, rising-fast]
-    grasp_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [grasp-fit-better-fast, grasp-fit-better-slow, stable-grasp-fit,
-               grasp-fit-worse-slow, grasp-fit-worse-fast]
-    contact_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [contact-fit-better-fast, contact-fit-better-slow,
-               stable-contact-fit,
-               contact-fit-worse-slow, contact-fit-worse-fast]
-    support_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [support-fit-better-fast, support-fit-better-slow,
-               stable-support-fit,
-               support-fit-worse-slow, support-fit-worse-fast]
-    contain_compatibility_change:
-      edges:  [-0.30, -0.05, 0.05, 0.30]
-      labels: [contain-fit-better-fast, contain-fit-better-slow,
-               stable-contain-fit,
-               contain-fit-worse-slow, contain-fit-worse-fast]

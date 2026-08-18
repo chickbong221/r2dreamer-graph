@@ -31,7 +31,7 @@ _GRAPH_CONFIG_KEYS = (
     # ``simple`` alone no longer picks a contract: pooled graph-simple emits
     # boxes and no identity code, slot graph-simple the reverse, so the env has
     # to know the state mode too.
-    "enabled", "simple", "state_mode", "uid_vocab", "profile",
+    "enabled", "simple", "state_mode", "uid_vocab", "mshab_task",
     "thresholds_path", "whitelist_dir", "n_max", "e_max", "k_persist",
     "app_dim", "dino_model", "dino_res", "dino_weights", "staleness_enabled",
     "bypass_teemo",

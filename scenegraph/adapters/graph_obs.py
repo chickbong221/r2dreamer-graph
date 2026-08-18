@@ -66,16 +66,24 @@ _DTYPES: Dict[str, np.dtype] = {
 }
 
 
-def _verify_whitelist_coverage(env, whitelist_dir: str) -> None:
+def _verify_whitelist_coverage(
+    env, whitelist_dir: str, task_group: str,
+) -> None:
     """Fail at startup if any object-target plan lacks a mined whitelist.
 
     Catches the common split mismatch early, for example training with
     train-mined whitelists while eval uses val task plans. Only pick/place are
     checked because their runtime target is exactly actor:<obj>; open and close
     bind through live handle links and fail loudly at runtime instead.
+
+    Every file found is also read back and its recorded ``task_group`` checked
+    against the run's. Selecting the directory by group already isolates the
+    groups, so this catches the remaining case: a file hand-copied into the
+    wrong tree, which would otherwise load cleanly and describe furniture the
+    run never sees.
     """
     from ..core.affordance import canonical_affordance_key
-    from ..core.whitelist import resolve_whitelist_path
+    from ..core.whitelist import load_whitelist, resolve_whitelist_path
 
     base = getattr(env, "unwrapped", env)
     plans_by_bci = getattr(base, "build_config_idx_to_task_plans", None)
@@ -86,6 +94,7 @@ def _verify_whitelist_coverage(env, whitelist_dir: str) -> None:
         plans_by_bci.values() if hasattr(plans_by_bci, "values") else plans_by_bci
     )
     missing = set()
+    mislabelled = []
     checked = set()
     for plans in groups:
         for plan in plans:
@@ -104,15 +113,32 @@ def _verify_whitelist_coverage(env, whitelist_dir: str) -> None:
                     continue
                 checked.add(pair)
                 target = f"actor:{key}"
-                if resolve_whitelist_path(whitelist_dir, str(st_type), target) is None:
+                path = resolve_whitelist_path(whitelist_dir, str(st_type), target)
+                if path is None:
                     missing.add(pair)
+                    continue
+                recorded = load_whitelist(path).task_group
+                if recorded != task_group:
+                    mislabelled.append((path, recorded))
+
+    if mislabelled:
+        listing = ", ".join(
+            f"{path} records {recorded or '<none>'!r}"
+            for path, recorded in sorted(mislabelled)
+        )
+        raise ValueError(
+            f"graph: {len(mislabelled)} whitelist(s) under {whitelist_dir!r} do "
+            f"not belong to task group {task_group!r}: {listing}. Re-mine the "
+            "group instead of copying files between task trees."
+        )
 
     if missing:
         listing = ", ".join(f"{st}:{key}" for st, key in sorted(missing))
         raise FileNotFoundError(
             f"graph: {len(missing)} object-target whitelist(s) missing under "
             f"{whitelist_dir!r}: {listing}. Mine them with "
-            "tools/prepare_assets.py for the active mshab_split/"
+            f"'python -m scenegraph.tools.prepare_assets --mshab-task "
+            f"{task_group} --subtask pick' for the active mshab_split/"
             "mshab_eval_split before training."
         )
 
@@ -587,9 +613,15 @@ def build_graph_obs(
 
     # Unset paths arrive from elements.Config as "", which load_config reads as
     # "use the packaged thresholds".
+    task_group = str(graph_cfg.get("mshab_task") or "")
+    if not task_group:
+        raise ValueError(
+            "graph: mshab_task is empty; the affordance and whitelist assets "
+            "are mined per MS-HAB task and the adapter cannot pick a group "
+            "for the run"
+        )
     teemo_cfg = load_teemo_config(
-        graph_cfg.get("profile") or "tabletop",
-        path=graph_cfg.get("thresholds_path"),
+        path=graph_cfg.get("thresholds_path"), task_group=task_group,
     )
     if "n_max" in graph_cfg:
         teemo_cfg["selection"]["n_max"] = int(graph_cfg["n_max"])
@@ -603,7 +635,7 @@ def build_graph_obs(
             "graph.whitelist_dir or configure scenegraph/configs/thresholds.yaml."
         )
 
-    _verify_whitelist_coverage(env, teemo_cfg["whitelist_dir"])
+    _verify_whitelist_coverage(env, teemo_cfg["whitelist_dir"], task_group)
     vocab = build_graph_vocab(teemo_cfg["whitelist_dir"])
     if vocab.sizes["entity"] > np.iinfo(np.uint8).max + 1:
         raise ValueError(

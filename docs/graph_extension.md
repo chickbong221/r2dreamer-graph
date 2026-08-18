@@ -245,6 +245,64 @@ The important result is the ratio between 96 and 168. It should be close to
 one and no more than about 1.20x. Absolute time determines how much overhead
 the unchanged two-layer, 512-wide method adds to a full Dreamer update.
 
+## Offline assets
+
+The graph runtime reads three mined assets, and two of them are namespaced by
+MS-HAB task group:
+
+```
+scenegraph/configs/
+  affordances/<group>.json              per-object grasp/contact/support geometry
+  subtask_whitelists_raw/<group>/       every entity the rollouts touched
+  subtask_whitelists/<group>/           the pruned runtime gate + pick_all.json
+  instructions.npz                      shared: keyed by <subtask>/actor:<object>
+```
+
+Namespacing is not bookkeeping. The same object rests on different furniture in
+each task -- set_table's bowl starts inside a counter drawer, prepare_groceries'
+on the counter -- so a whitelist mined under one task names supporters the other
+never produces. Such a file loads and validates perfectly; nothing but the group
+label distinguishes it. `env.mshab_task` selects the directory, every asset
+records the group it was mined for, and the builder refuses one that disagrees.
+
+Mine one group per invocation. Passing several would collapse each shared object
+onto whichever task sorted first:
+
+```bash
+python -m scenegraph.tools.prepare_assets --mshab-task set_table --subtask pick --clean
+```
+
+`--dry-run` prints the coverage table and every subcommand without running any
+of them; collection is measured in sim-hours, so start there. `--clean` deletes
+the selected group's artifacts and nothing else.
+
+The pipeline runs five stages, each usable standalone:
+
+| stage | tool | writes |
+| --- | --- | --- |
+| collect | `collect_robot_success_states` | `$MS_ASSET_DIR/data/robot_success_states/fetch/<group>/<subtask>/` |
+| affordances | `build_affordances` | `configs/affordances/<group>.json` |
+| mine | `build_subtask_whitelists` | `configs/subtask_whitelists_raw/<group>/` |
+| prune | `prune_whitelists` | `configs/subtask_whitelists/<group>/` |
+| instructions | `build_instruction_embeddings` | `configs/instructions.npz` |
+
+Mining and pruning are separate on purpose. Raw whitelists keep every entity the
+robot interacted with (`--membership-policy full-evidence`), so changing what
+the runtime admits costs one re-prune instead of another collection run, and the
+evidence a rule discarded stays on disk. The default runtime policy,
+`target-supporters`, keeps the target plus whatever directly supports it: a
+rollout contacts whatever is in the way, so admitting every contacted entity
+fills a pick-the-bowl graph with the groceries the arm brushed past.
+
+Relation bin edges come from `<group>/pick_all.json` and from nowhere else.
+There is no scale profile to fall back on, because a hand-written one makes a
+relation token mean a distance the task's own demonstrations never produced.
+A union asset that fails to calibrate an absolute relation raises at bind time.
+
+Only `pick`, `open` and `close` have collectors. `place` has none, so these are
+assets for the pick training environment, not complete long-horizon task-group
+assets -- inventory `mshab_checkpoints/rl/<group>/` before assuming otherwise.
+
 ## MS-HAB runtime smoke
 
 The repository contains only the runtime scene-graph slice. It uses externally

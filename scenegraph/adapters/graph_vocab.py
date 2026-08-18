@@ -121,8 +121,10 @@ def build_temporal_vocab() -> Vocab:
 def build_entity_vocab(whitelist_dir: str) -> EntityVocab:
     if not os.path.isdir(whitelist_dir):
         raise FileNotFoundError(
-            f"whitelist_dir does not exist: {whitelist_dir!r}. "
-            "Mine assets with tools/build_subtask_whitelists.py first."
+            f"whitelist_dir does not exist: {whitelist_dir!r}. It is the "
+            "<task group> subdirectory of the whitelist root; mine that group "
+            "with 'python -m scenegraph.tools.prepare_assets --mshab-task "
+            "<group> --subtask pick' first."
         )
     keys: List[str] = [PAD_TOKEN, EE_TOKEN]
     seen = set(keys)

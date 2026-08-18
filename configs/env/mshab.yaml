@@ -48,7 +48,10 @@ graph:
   # graph_node_uid and no boxes. The adapter cannot derive this from `simple`.
   state_mode: ${model.graph.state_mode}
   uid_vocab: ${model.graph.uid_vocab}
-  profile: room_scale
+  # Which task group's mined assets to load. The affordance file and the
+  # whitelist directory are both namespaced by it, so this must track
+  # env.mshab_task or the run reads another task's scene description.
+  mshab_task: ${env.mshab_task}
   thresholds_path: ''
   whitelist_dir: ''
   # The node/edge contract follows the model config. Every arm pins the same
