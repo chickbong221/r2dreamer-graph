@@ -165,15 +165,31 @@ _WANDB_DIAGNOSTICS = {
     "train/node_target_acc",
     "train/node_target_frac",
     "train/graph_real_edges",
+    # Progress shaping. The critic's own loss arrives under train/loss/, but
+    # the schedule and its effect on the actor do not: beta is what the warm-up
+    # ramps, and influence is beta * E|A_progress| / E|A_env|, the ratio that
+    # says whether the ramp landed. potential_horizon_std is the control: a
+    # constant potential holds influence near zero whatever beta does.
+    "train/progress_beta",
+    "train/progress_influence",
+    "train/progress_adv_abs",
+    "train/env_adv_abs",
+    "train/progress_potential_horizon_std",
 }
 
 
 def wandb_scalars(scalars):
-    """Keep only metrics needed to compare learning and graph health."""
+    """Keep only metrics needed to compare learning and graph health.
+
+    `eval/` passes in full: it is written once per eval, so it costs nothing
+    per update, and the eval video already goes through -- the numbers beside
+    it should too.
+    """
     return {
         name: value
         for name, value in scalars
         if name.startswith("episode/")
+        or name.startswith("eval/")
         or name.startswith("train/loss/")
         or name.startswith("train/opt/")
         or name.startswith("system/process_")
