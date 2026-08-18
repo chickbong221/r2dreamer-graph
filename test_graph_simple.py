@@ -1053,7 +1053,15 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         self.assertEqual(preset.graph.decoder_units, 256)
         self.assertEqual(preset.graph.bbox_query_dim, 4)
         self.assertIs(preset.progress.enabled, True)
-        self.assertEqual(preset.progress.beta, 0.05)
+        # Beta is the only scheduled quantity, and both simple presets run the
+        # same warm-up: zero until 200k environment steps, linear to 0.2 by
+        # 400k. The losses that train the relation head and the progress critic
+        # are on from step 0 either way.
+        self.assertEqual(preset.progress.beta, 0.2)
+        self.assertEqual(preset.progress.beta_warmup_start, 200000)
+        self.assertEqual(preset.progress.beta_warmup_end, 400000)
+        pooled_100m = OmegaConf.load("configs/model/size100M_graph_simple.yaml")
+        self.assertEqual(preset.progress, pooled_100m.progress)
         for name in ("node", "nodetgt", "relabs", "reltemp",
                      "prior_progress_relabs", "progress_value", "graphdyn"):
             self.assertEqual(preset.loss_scales[name], 1.0, name)
