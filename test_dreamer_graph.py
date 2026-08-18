@@ -671,32 +671,57 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
 
     def test_the_warm_up_trains_the_progress_critic_without_steering_the_actor(self):
         model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
+        # A critic built at outscale 0 predicts a constant zero, which makes the
+        # progress advantage identically zero and every beta indistinguishable
+        # from every other. Give the head a real readout first, or the
+        # comparisons below compare zero with zero. The frozen copy shares this
+        # storage, so it reads the same weights.
+        with torch.no_grad():
+            model.progress_value.last.weight.normal_(0.0, 0.3)
         raw = model.preprocess(slot_sequence())
         initial = model.rssm.initial(2)
         ema = model.return_ema.ema_vals.clone()
+        progress_ema = model.progress_return_ema.ema_vals.clone()
 
-        model._env_step = 0.0  # inside the warm-up, where beta is zero
-        torch.manual_seed(1234)
-        _, warming = model._cal_grad(raw, initial)
-        model._optimizer.zero_grad(set_to_none=True)
-        model.return_ema.ema_vals.copy_(ema)
+        def run(step, progress=True):
+            # Same batch, same seed, same normaliser state: the environment
+            # advantage is identical across runs and only beta differs.
+            model.return_ema.ema_vals.copy_(ema)
+            model.progress_return_ema.ema_vals.copy_(progress_ema)
+            model.progress_enabled = progress
+            model._env_step = step
+            torch.manual_seed(1234)
+            _, metrics = model._cal_grad(raw, initial)
+            model._optimizer.zero_grad(set_to_none=True)
+            model.progress_enabled = True
+            return metrics
 
-        model.progress_enabled = False
-        torch.manual_seed(1234)
-        _, without_progress = model._cal_grad(raw, initial)
-        model.progress_enabled = True
-        model._optimizer.zero_grad(set_to_none=True)
+        warming = run(0.0)  # inside the warm-up
+        plateau = run(300000.0)  # after it
+        without_progress = run(0.0, progress=False)
 
-        # The actor sees nothing during the warm-up ...
+        # Warm-up: the critic trains and the actor never sees it.
+        self.assertGreater(float(warming["progress_adv_abs"]), 0.0)
         self.assertEqual(float(warming["progress_beta"]), 0.0)
         self.assertEqual(float(warming["progress_influence"]), 0.0)
+        self.assertIn("loss/progress_value", warming)
+        self.assertTrue(torch.isfinite(warming["loss/progress_value"]))
         torch.testing.assert_close(
             warming["loss/policy"], without_progress["loss/policy"]
         )
-        # ... while its critic keeps training against a live target.
-        self.assertIn("loss/progress_value", warming)
-        self.assertTrue(torch.isfinite(warming["loss/progress_value"]))
-        self.assertNotEqual(float(warming["progress_adv_abs"]), 0.0)
+
+        # Plateau: the same batch now moves the actor objective.
+        self.assertAlmostEqual(float(plateau["progress_beta"]), 0.2)
+        self.assertNotEqual(
+            float(plateau["loss/policy"]), float(warming["loss/policy"])
+        )
+        # rho = beta * E|A_progress| / E|A_env|, on the environment advantage
+        # as it was before the shaping term was mixed in.
+        self.assertAlmostEqual(
+            float(plateau["progress_influence"]),
+            0.2 * float(plateau["progress_adv_abs"]) / float(plateau["env_adv_abs"]),
+            places=4,
+        )
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_one_cuda_batch_completes_without_nan(self):
