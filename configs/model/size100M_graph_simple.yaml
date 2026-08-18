@@ -36,7 +36,7 @@ graph:
 # untouched.
 progress:
   enabled: True
-  beta: 0.2
+  beta: 0.15
   soft: True
 
 loss_scales:
