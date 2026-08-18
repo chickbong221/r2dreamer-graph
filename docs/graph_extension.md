@@ -265,6 +265,21 @@ never produces. Such a file loads and validates perfectly; nothing but the group
 label distinguishes it. `env.mshab_task` selects the directory, every asset
 records the group it was mined for, and the builder refuses one that disagrees.
 
+Affordances are per group for the same reason, which is less obvious because
+grasp anchors are expressed in the object's own frame. Three things make the
+file scene-bound anyway: over a third of its entries are furniture
+(`link:fridge-0/body`, `link:kitchen_counter-0/body`, scene backgrounds) whose
+support and contact components exist only because the rollouts touched them;
+grasp components are policy-conditioned, and each group trains its own
+per-object policy, so a bowl lifted out of a drawer is not sampled like a bowl
+lifted off a counter; and `build_subtask_whitelists` reads this file to mine the
+compatibility-change bins, so a shared one would let one group's geometry set
+another group's relation scales. A single file would also make the result
+depend on which group was mined last. Mining affordances is a post-processing
+pass over rollouts already on disk, so the separation costs minutes, not
+sim-hours. For more samples, raise `--n-success` within a group rather than
+merging across groups.
+
 Mine one group per invocation. Passing several would collapse each shared object
 onto whichever task sorted first:
 

@@ -222,7 +222,15 @@ def main(argv=None) -> int:
         # table is deliberately absent.
         print(f'\n[prep] clean (task group {group!r} only)')
         targets = [raw_dir, runtime_dir, affordances]
-        targets += [group_success / s for s in args.subtask]
+        if args.skip_collect:
+            # --clean would otherwise delete the rollouts that --skip-collect
+            # exists to reuse, and the run would then mine nothing from an
+            # empty tree. Re-mining hours-old evidence is the main reason to
+            # combine the two flags, so keep the pickles.
+            print('  keeping rollouts under '
+                  f'{group_success} (--skip-collect)')
+        else:
+            targets += [group_success / s for s in args.subtask]
         _clean(targets, args.dry_run)
 
     if not args.skip_collect:

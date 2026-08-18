@@ -41,6 +41,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from scenegraph.core.entity_identity import normalize_asset_key
+
 
 log = logging.getLogger("build_affordances")
 
@@ -54,13 +56,17 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _stable_key(value: Optional[str]) -> Optional[str]:
-    """Validate a pre-prefixed stable entity key from the collector.
+    """Validate and canonicalize a stable entity key from the collector.
 
     The collector emits ``actor:<id>`` / ``link:<art>/<link>`` / ``object:<n>``;
-    anything else is treated as malformed and dropped.
+    anything else is treated as malformed and dropped. The key is normalized
+    with the runtime's own normalizer, so a component mined for a merged scene
+    actor is stored under the key the runtime will ask for. Repairing the
+    whitelist keys alone would leave affordance lookup mismatched for exactly
+    those entities.
     """
     if isinstance(value, str) and value.startswith(("actor:", "link:", "object:")):
-        return value
+        return normalize_asset_key(value)
     return None
 
 

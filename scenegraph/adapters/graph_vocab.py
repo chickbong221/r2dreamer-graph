@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from ..core.entity_identity import normalize_asset_key
 from ..core.relation_rules import (
     ABS_LABELS,
     CHANGE_LABELS,
@@ -138,7 +139,12 @@ def build_entity_vocab(whitelist_dir: str) -> EntityVocab:
         for member_key in members.keys():
             if not isinstance(member_key, str) or member_key.startswith("_"):
                 continue
-            if member_key not in seen:
+            # Normalized, because the vocabulary has to be addressable by the
+            # keys ``match_key`` produces at runtime. An asset written before
+            # actor keys dropped their scene-set tag would otherwise register
+            # ids no live entity can ever look up.
+            member_key = normalize_asset_key(member_key)
+            if member_key and member_key not in seen:
                 seen.add(member_key)
                 keys.append(member_key)
     if len(keys) <= 2:

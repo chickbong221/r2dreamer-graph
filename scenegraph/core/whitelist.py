@@ -47,8 +47,12 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from .affordance import canonical_affordance_key
-from .entity_identity import entity_kind, normalize_asset_key, stable_entity_key
+from .entity_identity import (
+    canonical_actor_key,
+    entity_kind,
+    normalize_asset_key,
+    stable_entity_key,
+)
 from .schema import Node
 
 
@@ -68,7 +72,7 @@ def match_key(node: Node) -> Optional[str]:
     if stable:
         return normalize_asset_key(str(stable), attrs.get("entity_kind"))
     if attrs.get("is_actor"):
-        return normalize_asset_key(canonical_affordance_key(name) or name, "actor")
+        return normalize_asset_key(canonical_actor_key(name) or name, "actor")
     if attrs.get("is_link") or attrs.get("is_articulation_link"):
         return normalize_asset_key(name, "link")
     return normalize_asset_key(name)
@@ -90,7 +94,7 @@ def entity_match_key(entity) -> Optional[str]:
     if stable:
         return normalize_asset_key(str(stable), kind)
     if kind == "actor":
-        return normalize_asset_key(canonical_affordance_key(name) or name, "actor")
+        return normalize_asset_key(canonical_actor_key(name) or name, "actor")
     if kind == "link":
         return normalize_asset_key(name, "link")
     return normalize_asset_key(name)

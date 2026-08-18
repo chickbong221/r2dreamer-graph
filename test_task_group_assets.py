@@ -19,7 +19,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scenegraph.adapters.graph_vocab import build_entity_vocab
 from scenegraph.configs.loader import load_config
+from scenegraph.core.entity_identity import normalize_asset_key
 from scenegraph.core.graph_builder import GraphBuilder
 from scenegraph.core.whitelist import (
     load_whitelist,
@@ -378,6 +380,74 @@ class TestLoaderResolvesPerGroup(unittest.TestCase):
     def test_required_assets_need_a_group(self):
         with self.assertRaises(ValueError):
             load_config(require_assets=True)
+
+
+# --------------------------------------------------------------------------- #
+# Cross-build-config actor keys
+# --------------------------------------------------------------------------- #
+class TestSceneSetTagIsStripped(TempTree):
+    """One logical furniture asset is one key, whatever build config it sat in.
+
+    ReplicaCAD merges scene actors per build-config set, so the same chair is
+    ``scs-[2,3]_frl_apartment_chair_01`` in one config and ``scs-[6,7]_...`` in
+    another. Keeping the tag made a whitelist mined in one set unmatchable in
+    any other and split one chair into four vocabulary entries.
+    """
+
+    CHAIR_A = "actor:scs-[2,3]_frl_apartment_chair_01"
+    CHAIR_B = "actor:scs-[6,7]_frl_apartment_chair_01"
+    CHAIR = "actor:frl_apartment_chair_01"
+
+    def test_two_build_config_sets_collapse_to_one_key(self):
+        self.assertEqual(normalize_asset_key(self.CHAIR_A), self.CHAIR)
+        self.assertEqual(normalize_asset_key(self.CHAIR_B), self.CHAIR)
+
+    def test_single_index_and_env_prefixed_forms_collapse_too(self):
+        for raw in ("actor:scs-[4]_frl_apartment_chair_01",
+                    "actor:env-0_scs-[2,3]_frl_apartment_chair_01",
+                    "actor:frl_apartment_chair_01"):
+            self.assertEqual(normalize_asset_key(raw), self.CHAIR)
+
+    def test_distinct_furniture_variants_stay_distinct(self):
+        # The instance-suffix strip is ``-N``, not ``_N``, so chair_01 and
+        # chair_02 are different assets and must not merge.
+        self.assertNotEqual(
+            normalize_asset_key("actor:scs-[2,3]_frl_apartment_chair_01"),
+            normalize_asset_key("actor:scs-[2,3]_frl_apartment_chair_02"),
+        )
+
+    def test_ycb_targets_are_unchanged(self):
+        self.assertEqual(normalize_asset_key("actor:024_bowl"), BOWL)
+        self.assertEqual(normalize_asset_key("actor:env-0_024_bowl-0"), BOWL)
+
+    def test_link_payloads_keep_their_instance(self):
+        # A bare ``fridge-0`` fallback must not degrade to ``fridge``.
+        self.assertEqual(normalize_asset_key("link:fridge-0"), "link:fridge-0")
+        self.assertEqual(
+            normalize_asset_key("link:scs-[2,3]_kitchen_counter-0/drawer3"),
+            "link:kitchen_counter-0/drawer3",
+        )
+
+    def test_persisted_keys_migrate_without_recollection(self):
+        # Rollout pickles hold the prefixed key verbatim, so every reader of
+        # them has to canonicalize on the way in -- otherwise re-mining
+        # reproduces the same unmatchable keys.
+        raw = _whitelist("tidy_house", self.CHAIR_A)
+        path = self._write(self.tmp / "tidy_house" / "pick_024_bowl.json", raw)
+        whitelist = load_whitelist(str(path))
+        self.assertTrue(whitelist.contains(self.CHAIR))
+        self.assertFalse(whitelist.contains(self.CHAIR_A))
+
+    def test_vocabulary_registers_one_id_per_logical_asset(self):
+        group = self.tmp / "tidy_house"
+        self._write(group / "pick_024_bowl.json",
+                    _whitelist("tidy_house", self.CHAIR_A))
+        self._write(group / "pick_013_apple.json",
+                    _whitelist("tidy_house", self.CHAIR_B,
+                               target="actor:013_apple"))
+        vocab = build_entity_vocab(str(group))
+        self.assertEqual(
+            [k for k in vocab.token_to_id if "chair" in k], [self.CHAIR])
 
 
 # --------------------------------------------------------------------------- #

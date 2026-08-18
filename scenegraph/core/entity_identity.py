@@ -78,6 +78,26 @@ def display_name(name: Optional[str]) -> str:
     return _ASSET_NUM_PREFIX_RE.sub("", s) or s
 
 
+def canonical_actor_key(name: Optional[str]) -> Optional[str]:
+    """Cross-scene actor key: no ``env-N_``, no ``scs-[i,j]_``, no ``-N``.
+
+    Merged ReplicaCAD scene actors carry the same scene-config-set tag the
+    articulations do, so one logical asset appears as
+    ``scs-[2,3]_frl_apartment_chair_01`` in one build config and
+    ``scs-[6,7]_frl_apartment_chair_01`` in another. Keeping the tag made a
+    whitelist mined in one set of build configs unmatchable in any other, and
+    split one chair into four vocabulary entries. The link path has always
+    stripped it; this is the actor twin of that.
+
+    Only the whitelist key collapses. ``stable_node_id`` still carries the
+    instance, so two chairs standing in one scene remain two nodes.
+    """
+    if not name:
+        return None
+    scene = canonical_scene_name(name) or str(name)
+    return canonical_affordance_key(scene) or scene
+
+
 def stable_entity_key(entity) -> Optional[str]:
     """Return ``actor:<id>`` or ``link:<articulation>/<link>``.
 
@@ -90,8 +110,7 @@ def stable_entity_key(entity) -> Optional[str]:
     name = entity_name(entity)
     kind = entity_kind(entity)
     if kind == "actor":
-        canonical = canonical_affordance_key(name) or name
-        return f"actor:{canonical}"
+        return f"actor:{canonical_actor_key(name) or name}"
     if kind == "link":
         link_name = canonical_scene_name(name) or name
         art = _articulation(entity)
@@ -111,14 +130,29 @@ def stable_node_id(entity) -> str:
 
 
 def normalize_asset_key(key: Optional[str], kind: Optional[str] = None) -> Optional[str]:
-    """Normalize new and legacy whitelist keys to the stable-key namespace."""
+    """Normalize new and legacy whitelist keys to the stable-key namespace.
+
+    An already-namespaced key has its payload canonicalized rather than passed
+    through. That is what lets evidence persisted before the actor path stripped
+    ``scs-[i,j]_`` be re-mined without recollecting: rollout pickles carry the
+    prefixed key verbatim, and every reader of them funnels through here.
+    """
     if not key:
         return None
     value = str(key)
-    if value.startswith(("actor:", "link:", "object:")):
-        return value
+    for prefix in ("actor:", "link:", "object:"):
+        if value.startswith(prefix):
+            payload = value[len(prefix):]
+            if not payload:
+                return None
+            if prefix == "actor:":
+                return f"actor:{canonical_actor_key(payload) or payload}"
+            # Link and object payloads keep their instance suffix -- a bare
+            # ``fridge-0`` fallback must not become ``fridge`` -- so only the
+            # scene-set tag comes off.
+            return f"{prefix}{canonical_scene_name(payload) or payload}"
     if kind == "actor":
-        return f"actor:{canonical_affordance_key(value) or value}"
+        return f"actor:{canonical_actor_key(value) or value}"
     if kind == "link":
-        return f"link:{value}"
+        return f"link:{canonical_scene_name(value) or value}"
     return value
