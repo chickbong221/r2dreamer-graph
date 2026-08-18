@@ -1366,11 +1366,22 @@ class Dreamer(nn.Module):
                     - progress_dist.log_prob(progress_slow.detach())
                 )[:, :-1].unsqueeze(-1)
             )
-            metrics["progress_potential"] = torch.mean(imag_extra["progress_potential"])
+            potential = imag_extra["progress_potential"]
+            metrics["progress_potential"] = torch.mean(potential)
             metrics["progress_reward"] = torch.mean(progress_reward)
             metrics["progress_ret"] = torch.mean(progress_ret)
             metrics["progress_adv"] = torch.mean(progress_adv)
             metrics["progress_val"] = torch.mean(progress_value)
+            # Whether the shaping term carries any signal at all. A constant
+            # potential produces a zero advantage no matter what beta is, so
+            # these say whether beta is the thing worth changing.
+            # ``horizon_std`` is the one that matters: it is the spread within
+            # a single rollout, i.e. whether acting changes predicted progress.
+            metrics["progress_potential_std"] = torch.std(potential)
+            metrics["progress_potential_horizon_std"] = torch.mean(
+                torch.std(potential, dim=1)
+            )
+            metrics["progress_adv_abs"] = torch.mean(progress_adv.abs())
 
         policy = self.actor(imag_feat)
         # (B*T, T_imag-1, 1)
