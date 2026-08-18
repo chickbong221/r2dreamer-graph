@@ -80,6 +80,13 @@ def _already_done(
     )
     if not pkl.exists():
         return False
+    return _is_complete(pkl, min_samples)
+
+
+def _is_complete(pkl: Path, min_samples: int) -> bool:
+    """A schema-v4+ pickle holding at least ``min_samples`` of every array."""
+    if not pkl.exists():
+        return False
     try:
         import pickle
         with open(pkl, "rb") as f:
@@ -92,6 +99,25 @@ def _already_done(
         )
     except Exception:
         return False
+
+
+def _staging_root(asset_dir: Path) -> Path:
+    """Where a rollout in progress writes, before it has earned its place.
+
+    The wrapper commits on ``close()`` regardless of how many successes it
+    gathered, so writing straight to the final path lets a run that stalled at
+    1/30 replace a complete 30/30 pickle -- and with ``--no-skip-done`` that is
+    the common case, not the rare one. Staging keeps the previous evidence
+    intact until a full replacement exists.
+    """
+    return asset_dir / "robot_success_states.staging"
+
+
+def _final_path(asset_dir: Path, task: str, subtask: str, obj_id: str) -> Path:
+    return (
+        asset_dir / "robot_success_states" / "fetch" / task / subtask
+        / f"{obj_id}.pkl"
+    )
 
 
 def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
@@ -150,7 +176,7 @@ def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
     # wrapper has a chance to mutate them.
     collect = FetchCollectContactDataWrapper(
         env,
-        out_root=str(Path(args.asset_dir) / "robot_success_states"),
+        out_root=str(_staging_root(Path(args.asset_dir))),
         task_group=task,
         split=split,
         checkpoint_path=str(ckpt_dir) if ckpt_dir else "",
@@ -239,7 +265,7 @@ def _commit_successes_at_script_level(venv, collect, info, committed_mask):
         committed_mask[env_idx] = True
 
 
-def _collect_one(task: str, obj_id: str, ckpt_dir: Path, args) -> int:
+def _collect_one(task: str, obj_id: str, ckpt_dir: Path, args) -> Tuple[int, Path]:
     from scenegraph.adapters.policy_loader import load_policy
 
     venv, collect, plan_fp = _build_env(task, obj_id, args, ckpt_dir=ckpt_dir)
@@ -306,8 +332,8 @@ def _collect_one(task: str, obj_id: str, ckpt_dir: Path, args) -> int:
     # close() flushes the pickle to disk via the collector wrapper.
     venv.close()
     n_final = len(collect.success_robot_qpos)
-    print(f"[wrote] {collect.save_path}  ({n_final} samples)")
-    return n_final
+    print(f"[staged] {collect.save_path}  ({n_final} samples)")
+    return n_final, Path(collect.save_path)
 
 
 def parse_args(argv: Optional[Iterable[str]] = None):
@@ -410,10 +436,21 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             ok += 1
             continue
         try:
-            n = _collect_one(task, obj_id, ckpt_dir, args)
-            if n > 0:
+            n, staged = _collect_one(task, obj_id, ckpt_dir, args)
+            final = _final_path(asset_dir, task, args.subtask, obj_id)
+            if n >= args.n_success:
+                final.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged, final)
+                print(f"[wrote] {final}  ({n} samples)")
                 ok += 1
             else:
+                # Short of target: the staged file is real evidence but not the
+                # complete set the miners assume, so it is discarded rather
+                # than promoted over whatever is already there.
+                print(f"[incomplete] {obj_id}: {n}/{args.n_success} successes; "
+                      f"discarding {staged} and keeping any existing "
+                      f"{final.name}")
+                staged.unlink(missing_ok=True)
                 failed.append(obj_id)
         except Exception:
             print(f"[error] {task}/{obj_id}:")

@@ -168,6 +168,12 @@ def main(argv=None) -> int:
              'MS-HAB task so preparing one group never shrinks the shared '
              'table out from under another.',
     )
+    parser.add_argument(
+        '--allow-missing-checkpoints', action='store_true',
+        help='Prepare the covered targets even though some target the task '
+             'plans name has no per-object policy. Off by default: the run '
+             'would otherwise spend sim-hours and still end with gaps.',
+    )
     parser.add_argument('--clean', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--skip-collect', action='store_true')
@@ -193,7 +199,22 @@ def main(argv=None) -> int:
     print(f'[prep] task group {group!r}, subtasks {args.subtask}')
     needed = _plan_pairs(group, args.subtask, args.splits, args.obj)
     ckpt_objects = _checkpointed_objects(ckpt_root, group, args.subtask)
-    _report(needed, ckpt_objects, runtime_dir, table)
+    uncollectable = _report(needed, ckpt_objects, runtime_dir, table)
+
+    # Stop here, before --clean deletes anything and before hours of GPU
+    # collection, rather than at the verify step at the end. A target with no
+    # per-object policy under this group cannot produce rollouts, so the run is
+    # already known to end in missing whitelists.
+    if uncollectable and not args.allow_missing_checkpoints:
+        print(
+            f'[prep] ABORT: {len(uncollectable)} target(s) named by '
+            f'{group} task plans have no checkpoint under {ckpt_root}. '
+            'Collection would run for hours and still leave them without '
+            'a whitelist. Pass --allow-missing-checkpoints to prepare the '
+            'covered targets anyway.',
+            file=sys.stderr,
+        )
+        return 1
 
     if args.clean:
         # Group-scoped, every entry. Nothing here can name another group's
@@ -220,7 +241,8 @@ def main(argv=None) -> int:
 
     if not args.skip_affordances:
         print('\n[prep] affordances')
-        affordances.parent.mkdir(parents=True, exist_ok=True)
+        # build_affordances creates its own output parent; doing it here too
+        # would make --dry-run write to disk.
         for index, subtask in enumerate(args.subtask):
             cmd = [
                 'scenegraph.tools.build_affordances',

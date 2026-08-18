@@ -35,7 +35,11 @@ from scenegraph.tools.build_union_whitelist import merge
 from scenegraph.tools.collect_robot_success_states import (
     _already_done,
     _discover_work,
+    _final_path,
+    _is_complete,
+    _staging_root,
 )
+from scenegraph.tools.prepare_assets import _report
 from scenegraph.tools.prune_whitelists import prune_payload
 from scenegraph.tools import prune_whitelists
 
@@ -374,6 +378,72 @@ class TestLoaderResolvesPerGroup(unittest.TestCase):
     def test_required_assets_need_a_group(self):
         with self.assertRaises(ValueError):
             load_config(require_assets=True)
+
+
+# --------------------------------------------------------------------------- #
+# Preflight and partial-collection guards
+# --------------------------------------------------------------------------- #
+class TestPreflightReport(TempTree):
+    """The coverage report is a gate, not a printout."""
+
+    def _needed(self):
+        return {"train": {("pick", "013_apple"), ("pick", "024_bowl")}}
+
+    def test_uncollectable_targets_are_returned(self):
+        # 024_bowl has no per-object policy in this group, so hours of
+        # collection would still end with no whitelist for it.
+        missing = _report(
+            self._needed(), {"013_apple"},
+            self.tmp / "absent_whitelists", self.tmp / "absent_table.npz",
+        )
+        self.assertEqual(missing, [("pick", "024_bowl")])
+
+    def test_full_coverage_returns_nothing(self):
+        missing = _report(
+            self._needed(), {"013_apple", "024_bowl"},
+            self.tmp / "absent_whitelists", self.tmp / "absent_table.npz",
+        )
+        self.assertEqual(missing, [])
+
+
+class TestPartialCollections(TempTree):
+    """A stalled rollout must not pass for a complete one."""
+
+    def _pkl(self, path: Path, n: int) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as stream:
+            pickle.dump({
+                "_schema_version": 8,
+                "robot_qpos": [[0.0]] * n,
+                "tcp_pose_wrt_base": [[0.0]] * n,
+                "interaction_rollouts": [{"target_key": BOWL}] * n,
+                "provenance": {"task_group": "set_table"},
+            }, stream)
+        return path
+
+    def test_short_collection_is_not_complete(self):
+        pkl = self._pkl(self.tmp / "024_bowl.pkl", 1)
+        self.assertFalse(_is_complete(pkl, 30))
+        self.assertTrue(_is_complete(pkl, 1))
+
+    def test_full_collection_is_complete(self):
+        pkl = self._pkl(self.tmp / "024_bowl.pkl", 30)
+        self.assertTrue(_is_complete(pkl, 30))
+
+    def test_already_done_demands_the_full_target(self):
+        asset = self.tmp / "data"
+        self._pkl(_final_path(asset, "set_table", "pick", "024_bowl"), 1)
+        self.assertFalse(_already_done(asset, "set_table", "pick", "024_bowl", 30))
+
+    def test_staging_never_collides_with_the_final_tree(self):
+        asset = self.tmp / "data"
+        final = _final_path(asset, "set_table", "pick", "024_bowl")
+        staged = (_staging_root(asset) / "fetch" / "set_table" / "pick"
+                  / "024_bowl.pkl")
+        # A rollout in progress cannot overwrite the previous complete one,
+        # because it is not written to the same tree at all.
+        self.assertNotEqual(staged, final)
+        self.assertFalse(str(final).startswith(str(_staging_root(asset))))
 
 
 if __name__ == "__main__":

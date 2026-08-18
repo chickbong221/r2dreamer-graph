@@ -638,6 +638,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         data = _load_pkl(pkl_path)
         if data is None:
             continue
+        # Same provenance gate as the whitelist miner. Without it a pickle
+        # misplaced into this group's tree contaminates the group's affordance
+        # asset first, and the whitelist miner's later rejection comes too late
+        # to undo it -- the affordance file is what the whitelists are then
+        # mined against.
+        recorded = str((data.get("provenance") or {}).get("task_group") or "")
+        if not recorded:
+            log.error(
+                "%s carries no provenance.task_group; it predates the "
+                "task-namespaced collector and cannot be attributed to a task. "
+                "Recollect it with --no-skip-done", pkl_path,
+            )
+            return 2
+        if recorded != args.task_group:
+            log.error(
+                "%s sits under task group %r but records %r; refusing to mine "
+                "one task's poses into another's affordance asset",
+                pkl_path, args.task_group, recorded,
+            )
+            return 2
         # Pass 1: grasp components.
         rec = _mine_object(
             pkl_path, data, fk=fk,
