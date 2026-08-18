@@ -1,28 +1,35 @@
 defaults:
-  - env: dmc_vision
-  - model: size12M
+  - env: mshab
+  - model: size100M_graph_simple
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
   - _self_
 
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}
+logdir: ${oc.env:HOME}/logdir/r2dreamer-graph/${now:%Y-%m-%d}/${now:%H-%M-%S}/mshab-graph-simple-size100m-b28-s0
 seed: 0
+# Off. Seeding (set_seed_everywhere, always applied) fixes initialisation and
+# sampling; this would additionally fix the *order* of floating-point
+# accumulation -- fixed cuBLAS workspace, cuDNN autotuner off, and every op
+# required to have a deterministic kernel or PyTorch raises. It costs
+# throughput on the fixed-shape pixel convolutions, and the graph path's
+# index_add aggregation is exactly the kind of atomics-based op that can be
+# refused outright under it.
 deterministic_run: False
 device: 'cuda:0'
 
 wandb:
-  enabled: false
+  enabled: true
   project: RelRL
   entity: letuanhf-hanoi-university-of-science-and-technology
-  name: dreamerv3-mshab
-  group: na
+  name: graph-simple-size100m-b28-s0
+  group: mshab-prepare-groceries-size100m-b28-s0
   mode: online
 
 hydra:
   run:
     dir: ${logdir}
 
-batch_size: 32
+batch_size: 28
 batch_length: 64
 
 buffer:
@@ -42,7 +49,7 @@ buffer:
 trainer:
   steps: ${env.steps}
   pretrain: 0
-  eval_every: 1e4
+  eval_every: 5e4
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
   batch_length: ${batch_length}
@@ -51,5 +58,5 @@ trainer:
   video_every: 1e6
   video_fps: 15
   params_hist_log: False
-  update_log_every: 5e3
+  update_log_every: 1500
   action_repeat: ${env.action_repeat}

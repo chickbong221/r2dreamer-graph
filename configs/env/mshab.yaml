@@ -1,9 +1,9 @@
 task: maniskill_PickSubtaskTrain-v0
-steps: 1.01e6
-env_num: 32
+steps: 1e7
+env_num: 126
 eval_episode_num: 0
 action_repeat: 1
-train_ratio: 66
+train_ratio: 64
 time_limit: 100
 
 seed: ${seed}
@@ -12,7 +12,7 @@ device: ${device}
 mshab_task: prepare_groceries
 mshab_obj: all
 split: train
-num_build_configs: 4
+num_build_configs: 63
 obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: ''
@@ -43,8 +43,10 @@ graph:
   profile: room_scale
   thresholds_path: ''
   whitelist_dir: ''
-  # The node/edge contract follows the model config. size100M_graph_slots pins
-  # it to six nodes and 64 edges; the pooled baseline keeps 8/168.
+  # The node/edge contract follows the model config. Every arm pins the same
+  # 8/168 -- end effector plus seven objects, and 3 * n_max * (n_max - 1)
+  # edges, which is truncation-free. They have to match: the packer drops
+  # spatial relations first, so a tighter cap upstream is not a neutral loss.
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
   k_persist: -1

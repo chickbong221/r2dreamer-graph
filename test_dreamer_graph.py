@@ -17,6 +17,7 @@ def make_config(enabled, graph_only=False):
         config = compose(
             config_name="configs",
             overrides=[
+                "env=dmc_vision",
                 "model=size50M_graph",
                 "device=cpu",
                 f"model.graph.enabled={str(enabled).lower()}",
@@ -57,6 +58,7 @@ def make_slot_config(progress=False, beta=0.05):
         config = compose(
             config_name="configs",
             overrides=[
+                "env=dmc_vision",
                 "model=size100M_graph_slots",
                 "device=cpu",
                 "model.deter=16",
@@ -148,6 +150,7 @@ def make_pooled_config(progress=True, prior_scale=1.0):
         config = compose(
             config_name="configs",
             overrides=[
+                "env=dmc_vision",
                 "model=size50M_graph_simple",
                 "device=cpu",
                 "model.deter=16",
@@ -426,7 +429,8 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         config_dir = str(pathlib.Path(__file__).resolve().parent / "configs")
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             config = compose(
-                config_name="configs", overrides=["model=size50M_graph"]
+                config_name="configs",
+                overrides=["env=dmc_vision", "model=size50M_graph"],
             ).model
         self.assertEqual(config.graph.n_max, 8)
         self.assertEqual(config.graph.e_max, 168)
