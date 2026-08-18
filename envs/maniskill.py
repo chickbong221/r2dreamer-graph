@@ -64,15 +64,26 @@ def graph_observation_config(graph_config, camera_names) -> dict:
     return out
 
 
-def _select_build_configs(task_plans, count: int):
+def _select_build_configs(task_plans, count: int, label: str = "train"):
+    """Keep whole build configs, as a prefix of the sorted names.
+
+    A prefix, not a sample, so the same count always names the same scenes and
+    two runs are comparable. It also means there is no way to ask for the
+    *complement* of a training subset -- held-out scenes come from a different
+    split, not from a different slice of this one.
+    """
     if count <= 0:
+        print(
+            f"[env] using all build configs ({len(task_plans)} plans, {label})",
+            flush=True,
+        )
         return list(task_plans)
     names = sorted({plan.build_config_name for plan in task_plans})
     keep = set(names[:count])
     selected = [plan for plan in task_plans if plan.build_config_name in keep]
     print(
         f"[env] using {min(count, len(names))}/{len(names)} build configs "
-        f"({len(selected)}/{len(task_plans)} plans)",
+        f"({len(selected)}/{len(task_plans)} plans, {label})",
         flush=True,
     )
     return selected
@@ -81,7 +92,15 @@ def _select_build_configs(task_plans, count: int):
 class ManiSkillVecEnv:
     """OnlineTrainer-compatible wrapper around one ManiSkill GPU vector env."""
 
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, eval: bool = False):
+        """``eval=True`` builds the held-out arm of the same task.
+
+        It differs from training in three ways and nothing else: it reads
+        ``eval_split`` rather than ``split``, it takes every build config in
+        that split rather than a prefix, and it runs to ``eval_time_limit``.
+        The observation contract, the graph adapter and the action space are
+        constructed identically, so one agent drives both.
+        """
         import mani_skill.envs  # noqa: F401 - register ManiSkill tasks
         import mshab.envs  # noqa: F401 - register MS-HAB tasks
         from mani_skill import ASSET_DIR
@@ -94,7 +113,17 @@ class ManiSkillVecEnv:
         from envs.maniskill_obs import NamedCameraRGBWrapper, NonPrivilegedObsWrapper
         from scenegraph.adapters.graph_obs import build_graph_obs
 
-        self._num_envs = int(config.env_num)
+        self._eval = bool(eval)
+        # The eval loop runs exactly one episode per env, so the env count is
+        # the episode count.
+        self._num_envs = int(
+            config.eval_episode_num if self._eval else config.env_num
+        )
+        if self._num_envs <= 0:
+            raise ValueError(
+                "MS-HAB eval was requested with eval_episode_num<=0; that is "
+                "the switch that disables it, so no env should be built"
+            )
         self._device = torch.device(config.device)
         self._seed = int(config.seed)
         self._camera_names = list(config.cameras)
@@ -107,7 +136,11 @@ class ManiSkillVecEnv:
 
         task = str(config.task).split("_", 1)[1]
         subtask = task.split("SubtaskTrain", 1)[0].lower()
-        split = str(config.split)
+        # An empty eval_split evaluates on the training scenes, which measures
+        # fit rather than generalisation. Left possible on purpose, but it is
+        # not the default.
+        eval_split = str(getattr(config, "eval_split", "") or "")
+        split = eval_split if (self._eval and eval_split) else str(config.split)
         rearrange = ASSET_DIR / "scene_datasets/replica_cad_dataset/rearrange"
         plan_path = (
             rearrange
@@ -118,8 +151,16 @@ class ManiSkillVecEnv:
             / f"{config.mshab_obj}.json"
         )
         plan_data = plan_data_from_file(plan_path)
+        # Training subsets its split; evaluation takes the whole of its own by
+        # default, so a held-out score is not reported over a sliver of it.
         task_plans = _select_build_configs(
-            plan_data.plans, int(config.num_build_configs)
+            plan_data.plans,
+            int(
+                getattr(config, "eval_num_build_configs", 0)
+                if self._eval
+                else config.num_build_configs
+            ),
+            label="eval" if self._eval else "train",
         )
         if not task_plans:
             raise ValueError(f"MS-HAB task selection produced no plans: {plan_path}")
@@ -144,7 +185,11 @@ class ManiSkillVecEnv:
             ),
             require_build_configs_repeated_equally_across_envs=False,
             reward_mode=str(config.reward_mode),
-            max_episode_steps=int(config.time_limit),
+            max_episode_steps=int(
+                (getattr(config, "eval_time_limit", 0) or config.time_limit)
+                if self._eval
+                else config.time_limit
+            ),
             shader_dir=str(config.shader_dir),
         )
         control_mode = str(config.control_mode)
@@ -153,6 +198,13 @@ class ManiSkillVecEnv:
         sim_config = OmegaConf.to_container(config.sim_config, resolve=True)
         if sim_config:
             make_kwargs["sim_config"] = sim_config
+        if self._eval:
+            # Eval only, matching ReLDreamer/TD-MPC2. 0 pins the scene set for
+            # the whole run instead of rebuilding it per reset, so two
+            # evaluations differ by the policy and nothing else.
+            make_kwargs["reconfiguration_freq"] = int(
+                getattr(config, "eval_reconfiguration_frequency", 0)
+            )
         env = gym.make(**make_kwargs)
         if bool(config.nonprivileged_obs):
             env = NonPrivilegedObsWrapper(env)

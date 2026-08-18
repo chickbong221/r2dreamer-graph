@@ -26,18 +26,24 @@ def make_envs(config):
 
 
 def _make_maniskill_envs(config):
-    """Build the single GPU-vectorized MS-HAB training environment."""
-    if int(config.eval_episode_num) > 0:
-        raise ValueError(
-            "The minimal MS-HAB path does not construct a second GPU eval env. "
-            "Set env.eval_episode_num=0 for training."
-        )
+    """Build the MS-HAB training env, plus a held-out eval env when asked.
+
+    Both are GPU-vectorized ManiSkill envs in this process, so evaluation costs
+    a second set of render buffers for as long as the run lives -- sized by
+    ``eval_episode_num``, since the eval loop runs one episode per env.
+    ``eval_episode_num=0`` builds nothing and skips evaluation entirely.
+    """
     from envs.maniskill import ManiSkillVecEnv
 
     train_envs = ManiSkillVecEnv(config)
+    eval_envs = (
+        ManiSkillVecEnv(config, eval=True)
+        if int(config.eval_episode_num) > 0
+        else None
+    )
     return (
         train_envs,
-        None,
+        eval_envs,
         train_envs.observation_space,
         train_envs.action_space,
     )

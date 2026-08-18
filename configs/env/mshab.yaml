@@ -1,7 +1,10 @@
 task: maniskill_PickSubtaskTrain-v0
 steps: 1e7
 env_num: 126
-eval_episode_num: 0
+# Doubles as the eval env count: the eval loop runs exactly one episode per
+# env, so this is also the episode count. Match it to the number of build
+# configs to cover each scene once. 0 builds no eval env and skips evaluation.
+eval_episode_num: 10
 action_repeat: 1
 train_ratio: 64
 time_limit: 100
@@ -12,7 +15,12 @@ device: ${device}
 mshab_task: prepare_groceries
 mshab_obj: all
 split: train
-num_build_configs: 21
+eval_split: train
+eval_num_build_configs: ${env.num_build_configs}
+eval_time_limit: 200
+# Eval only. 0 pins the scene set instead of reconfiguring per reset.
+eval_reconfiguration_frequency: 0
+num_build_configs: 10
 obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: ''
