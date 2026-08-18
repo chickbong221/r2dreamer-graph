@@ -12,7 +12,7 @@ device: ${device}
 mshab_task: prepare_groceries
 mshab_obj: all
 split: train
-num_build_configs: 63
+num_build_configs: 21
 obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: ''
