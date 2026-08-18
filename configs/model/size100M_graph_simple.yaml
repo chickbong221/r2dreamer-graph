@@ -42,7 +42,7 @@ progress:
   # losses on, which trains the identical heads and never exposes the actor.
   beta: 0.2
   beta_warmup_start: 200000
-  beta_warmup_end: 300000
+  beta_warmup_end: 400000
   soft: True
 
 loss_scales:
