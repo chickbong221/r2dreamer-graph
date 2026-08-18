@@ -35,15 +35,8 @@ batch_length: 64
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
-  max_size: 5e5
-  # Where a sampled batch is moved to for the update.
+  max_size: 7.5e5
   device: ${device}
-  # Where the storage itself lives. LazyTensorStorage allocates the whole
-  # max_size as soon as the first batch fixes the shapes, and two 112x112 RGB
-  # cameras plus the latent writeback come to roughly 100 KB per transition --
-  # about 48 GB at the default max_size, which no single accelerator has spare
-  # alongside the model. Host RAM it is; sampling pays one pinned host-to-device
-  # copy per batch, which is small next to the update itself.
   storage_device: cpu
 
 trainer:
