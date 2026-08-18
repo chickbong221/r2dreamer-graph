@@ -115,28 +115,29 @@ class OnlineTrainer:
             once_done |= done
         # dict of (B, T, *)
         cache = torch.stack(cache, dim=1) if len(cache) else None
-        self.logger.scalar("episode/eval_score", returns.mean())
-        self.logger.scalar("episode/eval_length", steps.to(torch.float32).mean())
+        # Its own ``eval/`` namespace rather than ``episode/eval_*``: the two
+        # are measured differently -- greedy actions, a separate horizon -- and
+        # sharing a prefix puts them on the same dashboard panel as if they
+        # were comparable.
+        self.logger.scalar("eval/score", returns.mean())
+        self.logger.scalar("eval/length", steps.to(torch.float32).mean())
         # Mirrors the training reduction in ``train()``: the target-missing
         # flag becomes the fraction of frames it was set, every other gauge
-        # takes the episode max. A "once" flag is then 1.0 if it ever fired,
-        # which is what the old ``log_success`` clip was reaching for -- it
-        # never matched, because the emitted keys are log_success_once and
-        # log_success_at_end.
+        # takes the episode max, so a "once" flag reads 1.0 if it ever fired.
         length = steps.to(torch.float32).clamp_min(1)
         for key, value in log_maxima.items():
             if key == "log_graph_target_missing":
                 value = log_sums[key] / length
-            self.logger.scalar(f"episode/eval_{key[4:]}", value.mean())
+            self.logger.scalar(f"eval/{key[4:]}", value.mean())
         if video_frames:
             video = torch.stack(video_frames, dim=0)
             self.logger.video(
-                "eval_video", tools.to_np(video[None]), fps=self.video_fps)
+                "eval/video", tools.to_np(video[None]), fps=self.video_fps)
         if self.video_pred_log and cache is not None:
             initial = agent.get_initial_state(1)
             latent_keys = [key for key in LATENT_STATE_KEYS if key in initial]
             self.logger.video(
-                "eval_open_loop",
+                "eval/open_loop",
                 tools.to_np(
                     agent.video_pred(
                         cache[:1],  # give only first batch
