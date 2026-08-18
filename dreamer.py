@@ -1424,8 +1424,10 @@ class Dreamer(nn.Module):
             # says whether the ramp landed: roughly 5-20% at the plateau, under
             # 1% means beta is doing nothing, and much over 25% means progress
             # is doing the steering.
-            metrics["progress_influence"] = progress_beta * progress_adv_abs / (
-                env_adv_abs + 1e-8
+            # In float32: early on the environment advantage is near zero,
+            # and a float16 autocast would overflow the ratio to inf.
+            metrics["progress_influence"] = progress_beta * progress_adv_abs.float() / (
+                env_adv_abs.float() + 1e-8
             )
 
         policy = self.actor(imag_feat)

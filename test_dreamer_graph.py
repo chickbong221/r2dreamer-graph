@@ -713,14 +713,21 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         # Plateau: the same batch now moves the actor objective.
         self.assertAlmostEqual(float(plateau["progress_beta"]), 0.2)
         self.assertNotEqual(
-            float(plateau["loss/policy"]), float(warming["loss/policy"])
+            float(plateau["loss/policy"].detach()),
+            float(warming["loss/policy"].detach()),
         )
-        # rho = beta * E|A_progress| / E|A_env|, on the environment advantage
-        # as it was before the shaping term was mixed in.
+        # rho = beta * E|A_progress| / E|A_env|, on the environment advantage as
+        # it was before the shaping term was mixed in. An untrained value head
+        # is built at outscale 0 and makes that denominator exactly zero, which
+        # is what the epsilon is for; the ratio form keeps the check scale-free.
+        expected = (
+            0.2
+            * float(plateau["progress_adv_abs"])
+            / (float(plateau["env_adv_abs"]) + 1e-8)
+        )
+        self.assertGreater(expected, 0.0)
         self.assertAlmostEqual(
-            float(plateau["progress_influence"]),
-            0.2 * float(plateau["progress_adv_abs"]) / float(plateau["env_adv_abs"]),
-            places=4,
+            float(plateau["progress_influence"]) / expected, 1.0, places=4
         )
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
