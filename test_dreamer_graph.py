@@ -655,10 +655,17 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         )
 
     def test_beta_warms_up_on_environment_steps(self):
-        model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
-        # The window comes from the preset, not from this test.
-        self.assertEqual(model.progress_beta_start, 200000.0)
-        self.assertEqual(model.progress_beta_end, 300000.0)
+        config = make_slot_config(progress=True, beta=0.2)
+        model = Dreamer(config, *slot_spaces()).to("cpu")
+        # The window is plumbed from config, whatever the preset happens to say.
+        self.assertEqual(
+            model.progress_beta_start, float(config.progress.beta_warmup_start)
+        )
+        self.assertEqual(
+            model.progress_beta_end, float(config.progress.beta_warmup_end)
+        )
+        # Fixed here so the arithmetic below is independent of the preset.
+        model.progress_beta_start, model.progress_beta_end = 200000.0, 300000.0
         beta_at = model._progress_beta_at
         self.assertEqual(beta_at(0), 0.0)
         self.assertEqual(beta_at(199999), 0.0)
