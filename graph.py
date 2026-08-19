@@ -70,10 +70,13 @@ FULL_GRAPH_KEYS = (
 )
 
 # Pooled graph-simple. No appearance and no UID: the per-camera box is both the
-# node's distinguishing content and the decoder's address.
+# node's distinguishing content and the decoder's address. The world-frame
+# centroid rides alongside because the box cannot survive occlusion and the
+# retained target needs a position that does.
 SIMPLE_POOLED_GRAPH_KEYS = (
     "graph_node_ent",
     "graph_node_bbox",
+    "graph_node_centroid",
     "graph_node_target",
     *_EDGE_KEYS,
 )
@@ -99,7 +102,12 @@ SCHEMA_KEYS = {
 # encoder from a stale wrapper and quietly train an identity-conditioned model.
 RESERVED_GRAPH_KEYS = frozenset(
     key for keys in SCHEMA_KEYS.values() for key in keys
-) | {"graph_node_uid", "graph_node_app", "graph_node_bbox"}
+) | {
+    "graph_node_uid",
+    "graph_node_app",
+    "graph_node_bbox",
+    "graph_node_centroid",
+}
 
 GRAPH_KEYS = FULL_GRAPH_KEYS
 # Retained for callers that still speak of "the simple contract"; slot mode is

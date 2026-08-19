@@ -143,7 +143,9 @@ POOLED_NODES = 8
 POOLED_EDGES = 16
 
 
-def make_pooled_config(progress=True, prior_scale=1.0):
+def make_pooled_config(
+    progress=True, prior_scale=1.0, source="world_model", progress_scale=1.0
+):
     """The pooled graph-simple preset, shrunk but structurally identical."""
     config_dir = str(pathlib.Path(__file__).resolve().parent / "configs")
     with initialize_config_dir(version_base=None, config_dir=config_dir):
@@ -171,7 +173,9 @@ def make_pooled_config(progress=True, prior_scale=1.0):
                 "model.encoder.cnn.minres=1",
                 "model.decoder.cnn.minres=1",
                 f"model.progress.enabled={str(progress).lower()}",
+                f"model.progress.source={source}",
                 f"model.loss_scales.prior_progress_relabs={prior_scale}",
+                f"model.loss_scales.progress_model={progress_scale}",
             ],
         ).model
     config.encoder.mlp_keys = "^(state|instruction)$"
@@ -190,6 +194,9 @@ def pooled_spaces(with_uid=False):
         "reward": gym.spaces.Box(-np.inf, np.inf, (1,), np.float32),
         "graph_node_ent": gym.spaces.Box(0, 255, (POOLED_NODES,), np.uint8),
         "graph_node_bbox": gym.spaces.Box(0, 1, (POOLED_NODES, 2, 4), np.float16),
+        "graph_node_centroid": gym.spaces.Box(
+            -np.inf, np.inf, (POOLED_NODES, 3), np.float32
+        ),
         "graph_node_target": gym.spaces.Box(0, 1, (POOLED_NODES,), np.uint8),
         "graph_edge_src": gym.spaces.Box(0, POOLED_NODES - 1, (POOLED_EDGES,), np.uint8),
         "graph_edge_dst": gym.spaces.Box(0, POOLED_NODES - 1, (POOLED_EDGES,), np.uint8),
@@ -202,7 +209,13 @@ def pooled_spaces(with_uid=False):
     return gym.spaces.Dict(obs), gym.spaces.Box(-1, 1, (3,), np.float32)
 
 
-def pooled_sequence(batch=2, time=3, n_valid=3):
+def pooled_sequence(batch=2, time=3, n_valid=3, relations=6, duplicate=False):
+    """One pooled batch.
+
+    ``relations`` is how many of the scorer's six end-effector-to-target facts
+    the frame carries. Six is a complete ladder and the only case the progress
+    target is defined on; fewer exercises the strict validity mask.
+    """
     shape = (batch, time)
     values = {
         key: torch.zeros(*shape, POOLED_NODES, dtype=torch.uint8)
@@ -224,11 +237,26 @@ def pooled_sequence(batch=2, time=3, n_valid=3):
     ])[:n_valid]
     bbox[..., :n_valid, 0, :] = boxes.to(torch.float16)
     values["graph_node_bbox"] = bbox
-    # Four end-effector-to-target facts on relations the Pick scorer reads.
-    values["graph_edge_src"][..., :4] = 0
-    values["graph_edge_dst"][..., :4] = 1
-    values["graph_edge_rel"][..., :4] = torch.tensor([5, 6, 8, 7], dtype=torch.uint8)
-    values["graph_edge_abs"][..., :4] = torch.tensor([3, 8, 13, 13], dtype=torch.uint8)
+    centroid = torch.zeros(*shape, POOLED_NODES, 3, dtype=torch.float32)
+    centroid[..., :n_valid, :] = torch.tensor([
+        [0.00, 0.00, 0.90],
+        [0.40, 0.10, 0.75],
+        [-0.30, 0.60, 0.75],
+    ])[:n_valid]
+    values["graph_node_centroid"] = centroid
+    # The scorer's six end-effector-to-target facts, in its own relation order:
+    # planar-distance, height-offset, contact-compat, grasp-compat, contact,
+    # grasp. Labels here score 0.15 + 0.00 + 0.10 + 0.15 = 0.40.
+    rel = torch.tensor([5, 6, 8, 7, 1, 2], dtype=torch.uint8)[:relations]
+    lab = torch.tensor([3, 8, 13, 13, 1, 1], dtype=torch.uint8)[:relations]
+    if duplicate:
+        rel = torch.cat([rel, rel[:1]])
+        lab = torch.cat([lab, lab[:1]])
+    n_edge = int(rel.numel())
+    values["graph_edge_src"][..., :n_edge] = 0
+    values["graph_edge_dst"][..., :n_edge] = 1
+    values["graph_edge_rel"][..., :n_edge] = rel
+    values["graph_edge_abs"][..., :n_edge] = lab
     values.update(
         image=torch.randint(0, 256, (batch, time, 16, 16, 3), dtype=torch.uint8),
         state=torch.randn(batch, time, 5),
@@ -316,8 +344,10 @@ class PooledGraphSimpleTest(unittest.TestCase):
         )
         emitted = {k[len("loss/"):] for k in metrics if k.startswith("loss/")}
         for name in ("node", "nodetgt", "relabs", "reltemp", "graphdyn",
-                     "graphrep", "prior_progress_relabs", "progress_value"):
+                     "graphrep", "progress_model", "progress_value"):
             self.assertIn(name, emitted, name)
+        # The relation head is not built under the world-model source.
+        self.assertNotIn("prior_progress_relabs", emitted)
         # No recurrent slot state exists in this arm.
         for name in ("slotdyn", "slotalive", "prior_nodetgt", "prior_relabs",
                      "prior_reltemp"):
@@ -332,33 +362,49 @@ class PooledGraphSimpleTest(unittest.TestCase):
             model.preprocess(pooled_sequence()), model.rssm.initial(2)
         )
         for name in ("node_ent_acc", "node_target_acc", "relabs_acc",
-                     "reltemp_acc", "prior_progress_acc", "prior_progress_facts",
-                     "node_bbox_loss"):
+                     "reltemp_acc", "node_bbox_loss",
+                     "progress/valid_fraction", "progress/target_std",
+                     "progress/head_mae"):
             self.assertIn(name, metrics, name)
         # IoU needs its own kernels and optimises nothing: evaluation only.
         self.assertNotIn("node_bbox_iou", metrics)
 
-    def test_progress_critic_reads_the_policy_feature_plus_the_relations(self):
+    def test_progress_critic_reads_exactly_the_policy_feature(self):
+        # Under the world-model source the potential is already a function of
+        # imag_feat, so appending a second view of it would hand the critic a
+        # shortcut the actor does not have.
         model = self._model()
+        self.assertEqual(model.progress_feat_size, model.rssm.feat_size)
+
+    def test_relation_head_source_keeps_the_old_critic_feature(self):
+        model = self._model(source="relation_head")
         scorer_width = int(model.progress_scorer.relations.numel()) * 17
         self.assertEqual(
             model.progress_feat_size, model.rssm.feat_size + scorer_width
         )
+        self.assertTrue(model._prior_progress)
+        self.assertFalse(model._progress_model)
 
-    def test_progress_head_is_owned_by_the_decoder_and_frozen_with_it(self):
+    def test_progress_head_is_frozen_with_the_rest(self):
         # One set of parameters for training and imagination: the optimizer,
         # the checkpoint and clone_and_freeze all pick it up automatically.
         model = self._model()
         self.assertTrue(any(
-            name.startswith("graph_decoder.progress_head")
+            name.startswith("progress_head.")
             for name in model._named_params
         ))
-        self.assertIn(
-            "progress_head.weight", dict(model._frozen_graph_decoder.named_parameters())
-        )
+        frozen = dict(model._frozen_progress_head.named_parameters())
         self.assertTrue(torch.equal(
-            model.graph_decoder.progress_head.weight,
-            model._frozen_graph_decoder.progress_head.weight,
+            model.progress_head.last.weight, frozen["last.weight"]
+        ))
+        self.assertFalse(frozen["last.weight"].requires_grad)
+
+    def test_relation_head_source_still_owns_its_head_in_the_decoder(self):
+        model = self._model(source="relation_head")
+        self.assertIsNone(model.progress_head)
+        self.assertTrue(any(
+            name.startswith("graph_decoder.progress_head")
+            for name in model._named_params
         ))
 
     def test_imagined_progress_is_batched_not_stepwise(self):
@@ -375,11 +421,9 @@ class PooledGraphSimpleTest(unittest.TestCase):
         self.assertEqual(
             tuple(extra["progress_feat"].shape), (4, 5, model.progress_feat_size)
         )
-        # The critic feature is exactly imag_feat with the relation block
-        # appended -- no masks, counts, boxes or observed labels.
-        self.assertTrue(torch.equal(
-            extra["progress_feat"][..., : model.rssm.feat_size], feat
-        ))
+        # The critic feature is exactly imag_feat -- no relation block, no
+        # masks, counts, boxes or observed labels.
+        self.assertTrue(torch.equal(extra["progress_feat"], feat))
 
     def test_imagined_potential_stays_bounded(self):
         model = self._model()
@@ -395,7 +439,10 @@ class PooledGraphSimpleTest(unittest.TestCase):
 
     def test_zero_scale_switches_the_prior_branch_off(self):
         model = Dreamer(
-            make_pooled_config(progress=False, prior_scale=0.0), *pooled_spaces()
+            make_pooled_config(
+                progress=False, prior_scale=0.0, source="relation_head"
+            ),
+            *pooled_spaces(),
         ).to("cpu")
         self.assertFalse(model._prior_progress)
         _, metrics = model._cal_grad(
@@ -403,13 +450,36 @@ class PooledGraphSimpleTest(unittest.TestCase):
         )
         self.assertNotIn("loss/prior_progress_relabs", metrics)
 
+    def test_zero_scale_switches_the_world_model_branch_off(self):
+        model = Dreamer(
+            make_pooled_config(progress=False, progress_scale=0.0), *pooled_spaces()
+        ).to("cpu")
+        self.assertFalse(model._progress_model)
+        self.assertIsNone(model.progress_head)
+        _, metrics = model._cal_grad(
+            model.preprocess(pooled_sequence()), model.rssm.initial(2)
+        )
+        self.assertNotIn("loss/progress_model", metrics)
+
     def test_shaping_without_a_trained_head_is_refused(self):
-        # A zero scale leaves the fused head unsupervised; shaping the actor
-        # with it would be shaping on noise.
+        # A zero scale leaves the head unsupervised; shaping the actor with it
+        # would be shaping on noise. True of either source.
         with self.assertRaisesRegex(ValueError, "untrained"):
             Dreamer(
-                make_pooled_config(progress=True, prior_scale=0.0), *pooled_spaces()
+                make_pooled_config(progress=True, progress_scale=0.0),
+                *pooled_spaces(),
             )
+        with self.assertRaisesRegex(ValueError, "untrained"):
+            Dreamer(
+                make_pooled_config(
+                    progress=True, prior_scale=0.0, source="relation_head"
+                ),
+                *pooled_spaces(),
+            )
+
+    def test_unknown_progress_source_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "progress.source"):
+            Dreamer(make_pooled_config(source="oracle"), *pooled_spaces())
 
     def test_acting_runs_on_the_pooled_contract(self):
         model = self._model()

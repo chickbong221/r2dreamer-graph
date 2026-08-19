@@ -289,6 +289,7 @@ class ManiSkillVecEnv:
                 "log_graph_overflow_drops",
                 "log_graph_episode_entities",
                 "log_graph_fact_drops",
+                "log_graph_node_drops",
                 "log_graph_target_missing",
                 "log_graph_cache_entries",
             ):
@@ -380,6 +381,11 @@ class ManiSkillVecEnv:
             ).reshape(-1, 1)
             data["log_graph_fact_drops"] = torch.as_tensor(
                 self._graph.fact_drops, device=self._device
+            ).reshape(-1, 1)
+            # Reserving row 1 for the target costs a vertex in a frame with
+            # more visible objects than rows. Logged rather than swallowed.
+            data["log_graph_node_drops"] = torch.as_tensor(
+                self._graph.node_drops, device=self._device
             ).reshape(-1, 1)
             data["log_graph_target_missing"] = torch.as_tensor(
                 self._graph.target_missing, device=self._device

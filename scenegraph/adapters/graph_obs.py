@@ -247,6 +247,7 @@ class GraphObsBuilder:
         the object without ``__init__`` cannot miss one.
         """
         self._fact_drops = np.zeros(self.num_envs, dtype=np.float32)
+        self._node_drops = np.zeros(self.num_envs, dtype=np.float32)
         self._target_missing = np.zeros(self.num_envs, dtype=np.float32)
         self._target_unresolved = np.zeros(self.num_envs, dtype=np.float32)
 
@@ -297,6 +298,17 @@ class GraphObsBuilder:
     def fact_drops(self) -> np.ndarray:
         """Per-env facts the packer could not seat in the last packed frame."""
         return self._fact_drops.copy()
+
+    @property
+    def node_drops(self) -> np.ndarray:
+        """Per-env vertices the packer could not seat in the last frame.
+
+        The pooled schema reserves row 1 for the subtask target, so a frame
+        with more visible whitelisted objects than remaining rows loses one.
+        Reserving the row is deliberate; losing a vertex without saying so is
+        not, which is the whole reason this counter exists.
+        """
+        return self._node_drops.copy()
 
     @property
     def target_missing(self) -> np.ndarray:
@@ -580,6 +592,8 @@ class GraphObsBuilder:
                 self._last_packed[i] = out
                 self._fact_drops[i] = float(
                     graphs[i].meta.get("n_edges_dropped", 0))
+                self._node_drops[i] = float(
+                    graphs[i].meta.get("n_nodes_dropped", 0))
                 self._target_missing[i] = float(
                     not graphs[i].meta.get("target_packed", False))
                 self._target_unresolved[i] = float(

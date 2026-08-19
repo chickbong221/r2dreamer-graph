@@ -122,11 +122,15 @@ def slot_graph(batch=2, time=3, n_valid=3, n_edges=4, uids=None):
     return graph
 
 
-def pooled_graph(batch=2, time=3, n_valid=3, n_edges=4, boxes=None):
-    """The pooled contract: per-camera boxes, no UID.
+def pooled_graph(
+    batch=2, time=3, n_valid=3, n_edges=4, boxes=None, centroids=None
+):
+    """The pooled contract: per-camera boxes and world centroids, no UID.
 
     Camera 0 sees every valid node, camera 1 only the end effector, so masked
-    per-camera validity is actually exercised rather than assumed.
+    per-camera validity is actually exercised rather than assumed. Centroids
+    are independent of the boxes on purpose -- that separation is the point of
+    carrying both.
     """
     graph = {
         key: value
@@ -147,6 +151,19 @@ def pooled_graph(batch=2, time=3, n_valid=3, n_edges=4, boxes=None):
     bbox[..., :n_valid, 0, :] = boxes[:n_valid].to(torch.float16)
     bbox[..., 0, 1, :] = torch.tensor([0.2, 0.6, 0.2, 0.6]).to(torch.float16)
     graph["graph_node_bbox"] = bbox
+    centroid = torch.zeros(batch, time, N_MAX, 3, dtype=torch.float32)
+    if centroids is None:
+        centroids = torch.tensor([
+            [0.00, 0.00, 0.90],
+            [0.40, 0.10, 0.75],
+            [-0.30, 0.60, 0.75],
+            [1.20, -0.40, 0.05],
+            [-1.10, 1.30, 0.35],
+            [0.75, 0.75, 0.60],
+            [-0.50, -0.90, 0.20],
+        ])
+    centroid[..., :n_valid, :] = centroids[:n_valid]
+    graph["graph_node_centroid"] = centroid
     return graph
 
 
@@ -602,6 +619,70 @@ class PooledEncoderTest(unittest.TestCase):
             nodes = encoder(pooled_graph(n_valid=3)).nodes
         self.assertTrue(torch.equal(nodes[..., 3:, :], torch.zeros_like(nodes[..., 3:, :])))
 
+    def test_the_centroid_reaches_the_node_representation(self):
+        # An object that moved in the world with an unchanged box must encode
+        # differently -- otherwise a retained target carries no position.
+        encoder = self._encoder()
+        left = pooled_graph(batch=1, time=1, n_valid=3)
+        right = pooled_graph(
+            batch=1, time=1, n_valid=3,
+            centroids=torch.tensor([
+                [0.00, 0.00, 0.90],
+                [-0.85, 0.95, 0.20],
+                [-0.30, 0.60, 0.75],
+            ]),
+        )
+        self.assertTrue(torch.equal(
+            left["graph_node_bbox"], right["graph_node_bbox"]
+        ))
+        with torch.no_grad():
+            self.assertFalse(torch.allclose(
+                encoder(left).nodes[:, :, 1], encoder(right).nodes[:, :, 1]
+            ))
+
+    def test_an_invisible_node_still_carries_its_position(self):
+        # Boxes all zero, centroid intact: this is the retained target's frame,
+        # and it must not encode the same as a node that is simply absent.
+        encoder = self._encoder()
+        hidden = pooled_graph(batch=1, time=1, n_valid=3)
+        hidden["graph_node_bbox"][..., 1, :, :] = 0.0
+        moved = {k: v.clone() for k, v in hidden.items()}
+        moved["graph_node_centroid"][..., 1, :] = torch.tensor([-1.4, 0.2, 0.1])
+        with torch.no_grad():
+            self.assertFalse(torch.allclose(
+                encoder(hidden).nodes[:, :, 1], encoder(moved).nodes[:, :, 1]
+            ))
+
+    def test_centroids_are_normalised_on_fixed_bounds_not_batch_statistics(self):
+        encoder = self._encoder()
+        data = pooled_graph(batch=1, time=1, n_valid=3)
+        compact = compact_graph(data, SCHEMA_SIMPLE_POOLED)
+        feature = compact.centroid_feature(
+            torch.float32, encoder.centroid_origin, encoder.centroid_scale
+        )
+        want = (
+            data["graph_node_centroid"].reshape(1, N_MAX, 3)
+            - encoder.centroid_origin
+        ) / encoder.centroid_scale
+        self.assertTrue(torch.allclose(feature[:, :3], want[:, :3], atol=1e-6))
+        # Padded rows stay exactly zero rather than encoding the origin.
+        self.assertEqual(float(feature[:, 3:].abs().max()), 0.0)
+
+    def test_shifting_the_whole_scene_shifts_every_centroid_equally(self):
+        # The consequence of fixed bounds: normalisation carries no dependence
+        # on what else is in the batch.
+        encoder = self._encoder()
+        base = pooled_graph(batch=1, time=1, n_valid=3)
+        shifted = {k: v.clone() for k, v in base.items()}
+        shifted["graph_node_centroid"] = shifted["graph_node_centroid"] + 1.0
+        args = (torch.float32, encoder.centroid_origin, encoder.centroid_scale)
+        left = compact_graph(base, SCHEMA_SIMPLE_POOLED).centroid_feature(*args)
+        right = compact_graph(shifted, SCHEMA_SIMPLE_POOLED).centroid_feature(*args)
+        delta = (right - left)[:, :3]
+        self.assertTrue(torch.allclose(
+            delta, torch.ones_like(delta) / encoder.centroid_scale, atol=1e-6
+        ))
+
     def test_token_is_the_masked_mean_plus_the_count(self):
         encoder = self._encoder()
         data = pooled_graph(n_valid=3)
@@ -635,6 +716,9 @@ class PooledEncoderTest(unittest.TestCase):
         for key in ("graph_node_ent", "graph_node_target"):
             swapped[key] = swapped[key][..., order]
         swapped["graph_node_bbox"] = swapped["graph_node_bbox"][..., order, :, :]
+        swapped["graph_node_centroid"] = swapped["graph_node_centroid"][
+            ..., order, :
+        ]
         inverse = torch.tensor(
             [order.index(i) for i in range(N_MAX)], dtype=torch.uint8
         )

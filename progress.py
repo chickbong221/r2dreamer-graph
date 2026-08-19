@@ -1,22 +1,23 @@
-"""End-effector-to-target progress, read from predicted slot relations.
-
-The scorer never touches the simulator or an observed graph. It asks the slot
-relation decoder what facts it predicts between slot zero (the end effector) and
-the slot flagged as the subtask target, and turns those distributions into one
-potential in ``[0, 1]``.
+"""End-effector-to-target progress: one stage table, three ways in.
 
 Stages are compiled ahead of training -- a fixed table here, or a JSON file
-naming the same relations and labels. Nothing is decided at runtime.
+naming the same relations and labels. Nothing is decided at runtime. Every
+reader turns end-effector-to-target facts into one potential in ``[0, 1]``:
 
-Two scorers share one table:
+* ``replay_potential`` reads *observed* labels straight out of a packed graph.
+  One-hot in, so the result is the hard stage sum, and it is the regression
+  target the world-model progress head is trained on. This is the only entry
+  point that touches an observed graph.
+* ``potential(probs, hard=True)`` takes the arg-max label of each predicted
+  relation. Discrete, readable, and what the tests assert against.
+* ``potential(probs, hard=False)`` takes the probability mass on the satisfying
+  labels. Continuous, so a decoder-driven actor gets a gradient-friendly signal
+  rather than a step function.
 
-* ``hard`` takes the arg-max label of each relation. Discrete, readable, and
-  what the tests assert against.
-* ``soft`` takes the probability mass on the satisfying labels. Continuous, so
-  the actor gets a gradient-friendly signal rather than a step function.
-
-Both return ``sum_k w_k * p_k`` with positive weights summing to one, which is
-what bounds the potential without a clamp. With
+All three return ``sum_k w_k * p_k`` with positive weights summing to one,
+which is what bounds the potential without a clamp -- and it is the same
+contraction in each case, so the observed scalar and the predicted one are
+comparable by construction rather than by a second table. With
 ``progress_reward = (1 - discount) * potential`` the discounted return of a
 permanently-solved episode is at most one, so the term cannot outgrow the task
 return it is added to.

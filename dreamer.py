@@ -99,6 +99,20 @@ def _masked_mean(values, mask):
     return (values.float() * mask).sum() / mask.sum().clamp_min(1)
 
 
+def _masked_std(values, mask):
+    """Population std over the masked entries; zero when fewer than two.
+
+    No ``.item()``: this runs inside the training step, and reading the count
+    back to python would sync the device on every update just to log a number.
+    """
+    mask = mask.float()
+    count = mask.sum()
+    safe = count.clamp_min(1)
+    mean = (values.float() * mask).sum() / safe
+    var = (((values.float() - mean) ** 2) * mask).sum() / safe
+    return torch.where(count > 1, var.clamp_min(0).sqrt(), torch.zeros_like(var))
+
+
 def _frame_flag(value):
     """(B, T) view of a per-frame flag stored as either (B, T) or (B, T, 1)."""
     flag = value.bool()
@@ -248,14 +262,16 @@ class Dreamer(nn.Module):
             float(progress_config.beta) if progress_config is not None else 0.0
         )
         # Warm-up on the actor's exposure to progress, in environment steps.
-        # Beta is the only thing scheduled: `prior_progress_relabs` and
-        # `progress_value` train from step 0, and both read detached inputs, so
-        # a warm-up spent training them costs the world model, the graph
-        # decoder and the actor nothing. Beta is the single place progress
-        # reaches behaviour, so ramping it -- rather than the losses -- is what
-        # keeps a cold critic from steering, and an immature world model can
-        # hallucinate relation changes under imagined actions long after the
-        # real robot has stopped moving.
+        # Beta is the only thing scheduled: the progress head and
+        # `progress_value` train from step 0. The critic reads detached inputs,
+        # so its warm-up costs the actor nothing; the head does update the
+        # world-model latent, which is deliberate -- it is an auxiliary
+        # prediction task like the reward head, and it has its own loss scale
+        # if that needs turning down. Beta is the single place progress reaches
+        # *behaviour*, so ramping it -- rather than the losses -- is what keeps
+        # a cold critic from steering, and an immature world model can
+        # hallucinate progress under imagined actions long after the real robot
+        # has stopped moving.
         self.progress_beta_start = (
             float(getattr(progress_config, "beta_warmup_start", 0.0))
             if progress_config is not None
@@ -1386,6 +1402,11 @@ class Dreamer(nn.Module):
         # reward and continue
         self._trace_stage_start("reward and continuation losses")
         losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
+        if self._progress_model:
+            losses["progress_model"], progress_model_metrics = self._progress_model_loss(
+                feat, graph_encoding.compact, step_valid
+            )
+            metrics.update(progress_model_metrics)
         cont = 1.0 - to_f32(data["is_terminal"])
         losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
         # log
@@ -1471,34 +1492,40 @@ class Dreamer(nn.Module):
                 )[:, :-1].unsqueeze(-1)
             )
             potential = imag_extra["progress_potential"]
-            metrics["progress_potential"] = torch.mean(potential)
-            metrics["progress_reward"] = torch.mean(progress_reward)
-            metrics["progress_ret"] = torch.mean(progress_ret)
-            metrics["progress_adv"] = torch.mean(progress_adv)
-            metrics["progress_val"] = torch.mean(progress_value)
-            # Whether the shaping term carries any signal at all. A constant
-            # potential produces a zero advantage no matter what beta is, so
-            # these say whether beta is the thing worth changing.
-            # ``horizon_std`` is the one that matters: it is the spread within
-            # a single rollout, i.e. whether acting changes predicted progress.
-            metrics["progress_potential_std"] = torch.std(potential)
-            metrics["progress_potential_horizon_std"] = torch.mean(
-                torch.std(potential, dim=1)
-            )
             progress_adv_abs = torch.mean(progress_adv.abs())
-            metrics["progress_adv_abs"] = progress_adv_abs
-            metrics["env_adv_abs"] = env_adv_abs
-            metrics["progress_beta"] = progress_beta
+            # --- primary ---------------------------------------------------
             # How much of the actor's advantage the shaping term accounts for:
             # beta * E|A_progress| / E|A_env|. This, not beta alone, is what
             # says whether the ramp landed: roughly 5-20% at the plateau, under
             # 1% means beta is doing nothing, and much over 25% means progress
-            # is doing the steering.
+            # is doing the steering. A wrong value here is a normalisation or
+            # beta problem, not a head problem.
             # In float32: early on the environment advantage is near zero,
             # and a float16 autocast would overflow the ratio to inf.
-            metrics["progress_influence"] = progress_beta * progress_adv_abs.float() / (
+            metrics["progress/influence"] = progress_beta * progress_adv_abs.float() / (
                 env_adv_abs.float() + 1e-8
             )
+            # Whether the critic has caught up with its own return yet.
+            metrics["progress/critic_mae"] = torch.mean(
+                (progress_value[:, :-1] - progress_ret).abs()
+            )
+            # --- raw log ---------------------------------------------------
+            # Kept for debugging, not for the dashboard. ``horizon_std`` is the
+            # one worth reaching for first: it is the spread within a single
+            # rollout, i.e. whether acting changes predicted progress at all.
+            # A flat potential produces a zero advantage no matter what beta
+            # is, so it says whether beta is even the thing worth changing.
+            metrics["progress_potential"] = torch.mean(potential)
+            metrics["progress_potential_horizon_std"] = torch.mean(
+                torch.std(potential, dim=1)
+            )
+            metrics["progress_reward"] = torch.mean(progress_reward)
+            metrics["progress_ret"] = torch.mean(progress_ret)
+            metrics["progress_adv"] = torch.mean(progress_adv)
+            metrics["progress_val"] = torch.mean(progress_value)
+            metrics["progress_adv_abs"] = progress_adv_abs
+            metrics["env_adv_abs"] = env_adv_abs
+            metrics["progress_beta"] = progress_beta
 
         policy = self.actor(imag_feat)
         # (B*T, T_imag-1, 1)
@@ -1606,6 +1633,52 @@ class Dreamer(nn.Module):
             return 0.0
         return self.progress_beta * (step - start) / (end - start)
 
+    def _progress_model_loss(self, feat, compact, step_valid):
+        """Regress the bounded progress head onto the observed stage ladder.
+
+        The target is read from the packed graph, not predicted: row 0 to row 1
+        is the end-effector-to-target block by construction now, and the six
+        labels there go through the same scorer the old path applied to
+        predicted distributions. One-hot in, so the scalar is exactly the hard
+        stage sum.
+
+        Masking, not zeroing. A frame before the target is first observed has
+        no ladder to stand on, and a frame missing one of the six facts has an
+        incomplete one; scoring either as zero progress would teach the head
+        that an unseen target is a failed reach. Huber rather than squared
+        error because the target is a weighted step function -- a frame that
+        crosses two rungs at once is a real jump, not an outlier to chase.
+        """
+        graph_count = compact.graph_count
+        with torch.no_grad():
+            target, valid = self.progress_scorer.replay_potential(
+                compact.edge_rel,
+                compact.edge_abs,
+                compact.edge_src_local,
+                compact.edge_dst_local,
+                compact.edge_graph,
+                graph_count,
+            )
+            # Terminal frames carry a masked graph token, so whatever their
+            # edges say is not an observation of anything.
+            valid = valid & step_valid.reshape(graph_count)
+            target = target * valid.float()
+        phi = self.progress_head(feat).reshape(graph_count)
+        error = F.huber_loss(phi, target, reduction="none", delta=0.1)
+        denominator = valid.float().sum().clamp_min(1)
+        loss = (error * valid.float()).sum() / denominator
+        metrics = {
+            # The five that matter. `valid_fraction` reads as a persistence
+            # bug when it is low; `target_std` says whether behaviour produces
+            # any spread to learn at all, and a near-zero one makes every other
+            # progress number meaningless.
+            "progress/valid_fraction": valid.float().mean(),
+            "progress/target_std": _masked_std(target, valid),
+            "progress/head_mae": _masked_mean((phi - target).abs(), valid),
+            "progress/target_mean": _masked_mean(target, valid),
+        }
+        return loss, metrics
+
     def _progress_step(self, stoch, deter, sem, slot_alive):
         """Shaping reward and progress-critic input for one imagined state.
 
@@ -1691,7 +1764,28 @@ class Dreamer(nn.Module):
             extra["imag_alive"] = torch.stack(alive_trace, dim=1)
         # Stack along sequence dim T_imag. (B, T_imag, F)
         imag_feat = torch.stack(feats, dim=1)
-        if self.progress_enabled and self.graph_pooled_simple:
+        if (
+            self.progress_enabled
+            and self.graph_pooled_simple
+            and self.progress_source == "world_model"
+        ):
+            # Nothing progress-related ran inside the loop, and nothing needs
+            # to: the potential is one bounded head over the same feature the
+            # policy just read, so the whole path is one MLP over B * T_imag.
+            # The head is the frozen copy, so imagination reads exactly the
+            # parameters training wrote and pushes nothing back into them.
+            potential = self._frozen_progress_head(imag_feat).squeeze(-1)
+            reward = (1.0 - self.progress.discount) * potential
+            extra.update(
+                {
+                    "progress_reward": reward.unsqueeze(-1),
+                    "progress_potential": potential.unsqueeze(-1),
+                    # The critic reads the policy's own feature and nothing
+                    # else: the potential is already a function of it.
+                    "progress_feat": imag_feat,
+                }
+            )
+        elif self.progress_enabled and self.graph_pooled_simple:
             # Nothing progress-related ran inside the loop. g is already a
             # contiguous slice of the stacked feature -- get_feat lays out
             # [z, g, h] -- so no second list and no second stack are needed, and
