@@ -457,6 +457,28 @@ class MLPHead(nn.Module):
         return self._dist(self.last(self.mlp(x)))
 
 
+class ProgressHead(nn.Module):
+    """One bounded scalar in ``[0, 1]`` from a world-model feature.
+
+    Deliberately not an :class:`MLPHead`. The environment reward is unbounded
+    and gets a twohot distribution; progress is a potential with a known range
+    and a regression target, so a sigmoid over one logit is both the right
+    support and the thing that makes ``(1 - discount) * phi`` provably unable
+    to outgrow the task return it is added to. Nothing downstream clamps it.
+    """
+
+    def __init__(self, config, inp_dim):
+        super().__init__()
+        self.mlp = MLP(config, inp_dim)
+        self.last = nn.Linear(self.mlp.out_dim, 1, bias=True)
+        self.mlp.apply(weight_init_)
+        self.last.apply(weight_init_)
+
+    def forward(self, x):
+        # (..., 1) in [0, 1]
+        return torch.sigmoid(self.last(self.mlp(x)).float())
+
+
 class Projector(nn.Module):
     def __init__(self, in_ch1, in_ch2):
         super().__init__()
@@ -468,12 +490,24 @@ class Projector(nn.Module):
 
 
 class ReturnEMA(nn.Module):
-    """running mean and std"""
+    """running mean and std
 
-    def __init__(self, device, alpha=1e-2):
+    ``min_scale`` floors the inter-quantile spread the advantage is divided by.
+    One is right for an unbounded environment return -- it stops a run whose
+    rewards are all near zero from amplifying noise to unit scale. It is wrong
+    for a bounded auxiliary return: a potential in ``[0, 1]`` discounted by
+    ``(1 - discount)`` produces a spread far below one, so a floor of one would
+    divide by a constant and silently rescale the whole term instead of
+    normalising it. Such heads pass their own floor.
+    """
+
+    def __init__(self, device, alpha=1e-2, min_scale=1.0):
         super().__init__()
         self.device = device
         self.alpha = alpha
+        self.min_scale = float(min_scale)
+        if self.min_scale <= 0:
+            raise ValueError(f"ReturnEMA min_scale must be positive, got {min_scale}")
         self.range = torch.tensor([0.05, 0.95], device=device)
         self.register_buffer("ema_vals", torch.zeros(2, dtype=torch.float32, device=self.device))
 
@@ -481,6 +515,6 @@ class ReturnEMA(nn.Module):
         x_quantile = torch.quantile(torch.flatten(x.detach()), self.range)
         # Using out-of-place update for torch.compile compatibility
         self.ema_vals.copy_(self.alpha * x_quantile.detach() + (1 - self.alpha) * self.ema_vals)
-        scale = torch.clip(self.ema_vals[1] - self.ema_vals[0], min=1.0)
+        scale = torch.clip(self.ema_vals[1] - self.ema_vals[0], min=self.min_scale)
         offset = self.ema_vals[0]
         return offset.detach(), scale.detach()

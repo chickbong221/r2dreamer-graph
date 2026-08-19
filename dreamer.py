@@ -287,13 +287,35 @@ class Dreamer(nn.Module):
             )
         self.progress = None
         self.progress_value = None
+        self.progress_head = None
+        # Which potential imagination reads. `world_model` is the bounded
+        # scalar head regressed onto the observed ladder; `relation_head` is
+        # the original predicted-relation contraction, kept alongside so the
+        # two can be compared in one codebase and so a `relation_head` run
+        # still reproduces the old numbers exactly.
+        self.progress_source = str(
+            getattr(progress_config, "source", "world_model")
+            if progress_config is not None
+            else "world_model"
+        )
+        if self.progress_source not in ("world_model", "relation_head"):
+            raise ValueError(
+                f"progress.source={self.progress_source!r} is not one of "
+                "('world_model', 'relation_head')"
+            )
+        if self.progress_source == "relation_head" and self.graph_slots:
+            raise ValueError(
+                "progress.source=relation_head names the pooled fused head; "
+                "slot mode decodes relations per slot and ignores it"
+            )
         # The stage table is the single source of truth for which relations
-        # matter, and prior_progress_relabs needs it whether or not the shaping
-        # reward is switched on.
+        # matter. Both progress sources need it -- one to supervise predicted
+        # labels, the other to turn observed labels into a scalar target.
         self.progress_scorer = (
             ProgressScorer(
                 load_stages(str(progress_config.stages) if progress_config else ""),
                 int(config.graph.n_abs),
+                int(config.graph.n_rel),
             )
             if (self.graph_slots or self.graph_pooled_simple)
             else None
@@ -304,7 +326,14 @@ class Dreamer(nn.Module):
                 scorer, 1 - 1 / self.horizon, soft=bool(progress_config.soft)
             )
             relation_width = int(scorer.relations.numel()) * int(config.graph.n_abs)
-            if self.graph_pooled_simple:
+            if self.graph_pooled_simple and self.progress_source == "world_model":
+                # Exactly the latent the policy and the ordinary critic read,
+                # and nothing else. The predicted relation block is gone with
+                # the relation head: the potential is now a scalar function of
+                # this same feature, so appending a second view of it would
+                # only give the critic a shortcut the actor does not have.
+                self.progress_feat_size = self.rssm.feat_size
+            elif self.graph_pooled_simple:
                 # imag_feat is already [z, g, h], so the progress critic reads
                 # the exact latent the policy and the ordinary critic read, plus
                 # the predicted relation block. Nothing else is concatenated: no
@@ -326,7 +355,10 @@ class Dreamer(nn.Module):
             self._slow_progress = copy.deepcopy(self.progress_value)
             for param in self._slow_progress.parameters():
                 param.requires_grad = False
-            self.progress_return_ema = networks.ReturnEMA(device=self.device)
+            self.progress_return_ema = networks.ReturnEMA(
+                device=self.device,
+                min_scale=float(getattr(progress_config, "return_min_scale", 1.0)),
+            )
         if self.progress_scorer is not None:
             self.register_buffer(
                 "progress_relations",
@@ -339,15 +371,37 @@ class Dreamer(nn.Module):
         # rather than computed and multiplied by zero, which is the only kind of
         # switch this repository needs: losses are keyed by scale, not by an
         # enable flag per head.
-        self._prior_progress = self.graph_pooled_simple and (
-            float(self._loss_scales.get("prior_progress_relabs", 0.0)) != 0.0
+        self._prior_progress = (
+            self.graph_pooled_simple
+            and self.progress_source == "relation_head"
+            and float(self._loss_scales.get("prior_progress_relabs", 0.0)) != 0.0
         )
-        if self.progress_enabled and self.graph_pooled_simple and not self._prior_progress:
-            raise ValueError(
-                "progress.enabled with loss_scales.prior_progress_relabs=0 "
-                "leaves the fused progress head untrained; imagination would "
-                "shape the actor with an unsupervised readout"
+        self._progress_model = self.graph_pooled_simple and (
+            self.progress_source == "world_model"
+            and float(self._loss_scales.get("progress_model", 0.0)) != 0.0
+        )
+        if self._progress_model:
+            # Beside the environment reward head, on the same feature and
+            # trained the same way: posterior features from replay, applied to
+            # imagined ones. It is a separate head because the two quantities
+            # have different supports -- reward is unbounded and twohot,
+            # progress is a potential in [0, 1] and a sigmoid.
+            self.progress_head = networks.ProgressHead(
+                progress_config.head, self.rssm.feat_size
             )
+        if self.progress_enabled and self.graph_pooled_simple:
+            missing = (
+                "loss_scales.progress_model=0"
+                if self.progress_source == "world_model"
+                else "loss_scales.prior_progress_relabs=0"
+            )
+            if not (self._progress_model or self._prior_progress):
+                raise ValueError(
+                    f"progress.enabled with {missing} leaves the "
+                    f"{self.progress_source} progress path untrained; "
+                    "imagination would shape the actor with an unsupervised "
+                    "readout"
+                )
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
         self._finite_diagnostic_updates = 4
@@ -378,6 +432,8 @@ class Dreamer(nn.Module):
             )
         if self.progress_enabled:
             modules.update({"progress_value": self.progress_value})
+        if self.progress_head is not None:
+            modules.update({"progress_head": self.progress_head})
 
         if self.rep_loss == "dreamer":
             decoder_shapes = {
@@ -627,6 +683,20 @@ class Dreamer(nn.Module):
             for (name_orig, param_orig), (name_new, param_new) in zip(
                 self.graph_decoder.named_parameters(),
                 self._frozen_graph_decoder.named_parameters(),
+            ):
+                assert name_orig == name_new
+                param_new.data = param_orig.data
+                param_new.requires_grad_(False)
+
+        if self.progress_head is not None:
+            # Imagination reads the potential through this head, so it joins
+            # the frozen set for the same reason the graph decoder does: the
+            # actor update must not train the world model through the shaping
+            # term.
+            self._frozen_progress_head = copy.deepcopy(self.progress_head)
+            for (name_orig, param_orig), (name_new, param_new) in zip(
+                self.progress_head.named_parameters(),
+                self._frozen_progress_head.named_parameters(),
             ):
                 assert name_orig == name_new
                 param_new.data = param_orig.data

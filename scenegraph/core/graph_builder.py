@@ -20,7 +20,10 @@ from .temporal_buffer import TemporalBuffer
 from .mask_extractor import MaskAccumulator
 from .selector import EntityRegistry, NodeSelector
 from .whitelist import entity_match_key, load_whitelist, resolve_whitelist_path
-from ..adapters.privileged_state import get_privileged_state
+from ..adapters.privileged_state import (
+    entity_pose_world_array,
+    get_privileged_state,
+)
 
 # A node that left the view keeps only its most recently observed
 # object--object physical state. Spatial and affordance facts need current
@@ -146,6 +149,11 @@ class GraphBuilder:
         self._edge_history: Dict[Tuple[str, str, str], Edge] = {}
         # entity -> whitelist match key, identity-guarded (ids recycle).
         self._match_key_cache: Dict[int, Tuple[Any, Optional[str]]] = {}
+        # The one node that outlives its own visibility: the active subtask
+        # target. Written on every frame a camera sees it, replayed on every
+        # frame none does, cleared only by ``reset_episode``. No other node
+        # gets this -- general staleness stays off.
+        self._target_snapshot: Optional[Node] = None
 
     def _uid_for(self, node: Node) -> int:
         return self.uids.uid_for(node.node_id, is_ee=node.node_type == "ee")
@@ -160,6 +168,7 @@ class GraphBuilder:
         self._match_key_cache.clear()
         self.cfg.setdefault("_affordance_selection_cache", {}).clear()
         self._whitelist_key = None
+        self._target_snapshot = None
         self.uids.reset()
 
     def _bind_global_bin_edges(self, subtask: str) -> None:
@@ -286,6 +295,82 @@ class GraphBuilder:
             self._match_key_cache[id(entity)] = (entity, key)
         return wl.contains(key)
 
+    def _refresh_target_snapshot(
+        self,
+        nodes: Dict[str, Node],
+        active_target_node_id: Optional[str],
+        state,
+    ) -> Dict[str, Node]:
+        """Keep exactly one node alive across occlusion: the subtask target.
+
+        A frame that sees the target overwrites the snapshot outright. A frame
+        that does not replays it as an invisible vertex so its row, its entity
+        id and its six end-effector relations survive the gap. Nothing else is
+        retained -- an ordinary object that leaves the view leaves the graph.
+
+        Two details matter for what the progress ladder reads off this node.
+
+        Boxes go to zero while invisible. They are the only per-camera
+        visibility signal the packed observation carries, so a retained box
+        would tell the encoder a camera can still see the target.
+
+        The pose freezes only while the target is *also* ungrasped. A grasped
+        target rides with the gripper: freezing its centroid would report the
+        object still lying where it was picked up while ``grasp`` reads
+        ``holds`` on the same frame, and the ladder reads both -- planar
+        distance and height offset would climb away from zero exactly as the
+        two physical rungs are won. So a grasped target keeps asking the
+        simulator where it is. Only an unobserved, ungrasped object is
+        genuinely stationary and safe to freeze.
+        """
+        if active_target_node_id is None:
+            return nodes
+
+        live = nodes.get(active_target_node_id)
+        if live is not None and live.visible:
+            self._target_snapshot = replace(
+                live,
+                segmentation_ids=list(live.segmentation_ids),
+                bbox=None if live.bbox is None else np.array(live.bbox, copy=True),
+                patch_weights=None,
+                appearance=None,
+                attributes=dict(live.attributes),
+            )
+            return nodes
+        if live is not None or self._target_snapshot is None:
+            # Already present (the staleness path put it back), or never seen:
+            # there is nothing to replay and no slot to reserve.
+            return nodes
+
+        snapshot = self._target_snapshot
+        pose_world = snapshot.pose_world
+        if state.active_obj is not None and state.is_grasping(
+            state.active_obj, max_angle=self.cfg["grasp"]["max_angle"]
+        ):
+            moved = entity_pose_world_array(state.active_obj, self.env_idx)
+            if moved is not None:
+                pose_world = list(moved)
+                snapshot.pose_world = pose_world
+
+        nodes[active_target_node_id] = replace(
+            snapshot,
+            visible=False,
+            segmentation_ids=[],
+            pixel_area=0,
+            pose_world=pose_world,
+            bbox=None
+            if snapshot.bbox is None
+            else np.zeros_like(np.asarray(snapshot.bbox)),
+            patch_weights=None,
+            appearance=None,
+            # ``registry.assign`` fills this from the index it is already
+            # holding for the target; a stale one would survive an eviction.
+            index=None,
+            attributes=dict(snapshot.attributes),
+            source="retained-target",
+        )
+        return nodes
+
     def step(
         self, obs: dict, frame: int,
         *,
@@ -341,6 +426,7 @@ class GraphBuilder:
         nodes = self.selector.apply_whitelist(nodes)
         if self.staleness_enabled:
             nodes = self.selector.merge_persistent(nodes, frame)
+        nodes = self._refresh_target_snapshot(nodes, active_target_node_id, state)
 
         for nid, n in nodes.items():
             if n.node_type == "ee":

@@ -57,6 +57,7 @@ _DTYPES: Dict[str, np.dtype] = {
     "graph_node_uid": np.uint8,
     "graph_node_app": np.float16,
     "graph_node_bbox": np.float16,
+    "graph_node_centroid": np.float32,
     "graph_node_target": np.uint8,
     "graph_edge_src": np.uint8,
     "graph_edge_dst": np.uint8,
@@ -261,6 +262,7 @@ class GraphObsBuilder:
             "graph_node_uid":  (self.n_max,),
             "graph_node_app":  (self.n_max, self.n_cams, self.app_dim),
             "graph_node_bbox": (self.n_max, self.n_cams, 4),
+            "graph_node_centroid": (self.n_max, 3),
             "graph_node_target": (self.n_max,),
             "graph_edge_src":  (self.e_max,),
             "graph_edge_dst":  (self.e_max,),
@@ -641,6 +643,22 @@ def build_graph_obs(
         raise ValueError(
             f"graph: entity vocabulary has {vocab.sizes['entity']} entries; "
             "the compact PyTorch runtime supports at most 256"
+        )
+
+    # The model sizes nn.Embedding from model.graph.entity_vocab, which is a
+    # static config value. Re-mining a task group changes how many entities
+    # exist, and an id past the table's end is an out-of-range CUDA gather:
+    # it surfaces as a device-side assert inside the RSSM, several calls after
+    # the real fault. Compare the two here, where the numbers are still named.
+    declared = int(graph_cfg.get("entity_vocab", 0) or 0)
+    mined = int(vocab.sizes["entity"])
+    if declared and declared < mined:
+        raise ValueError(
+            f"graph: model.graph.entity_vocab={declared} is smaller than the "
+            f"{mined} entities mined for task group {task_group!r} under "
+            f"{teemo_cfg['whitelist_dir']!r}. Set model.graph.entity_vocab="
+            f"{mined} (or re-mine with a narrower membership policy); leaving "
+            "it short makes the entity embedding fail on the first act."
         )
 
     n_max = int(teemo_cfg["selection"]["n_max"])

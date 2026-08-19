@@ -14,8 +14,10 @@ temporal buffer.
   is what keeps the temporal change continuous across it.
 
 Admissible = both endpoints visible and both carrying the whitelist
-``interaction_types`` token; affordance also needs the mined components. Facts
-touching a node that left the view are the graph builder's business.
+``interaction_types`` token; affordance also needs the mined components. The
+one exception is the active subtask target, which the builder replays while it
+is occluded and which therefore keeps all six of its end-effector facts. Other
+facts touching a node that left the view are the graph builder's business.
 
 Bin edges come from the mined whitelist alone (``cfg["bin_edges"]``). There is
 no rule-based fallback: a relation the asset does not calibrate is not
@@ -206,8 +208,16 @@ def height_offset(a: Node, b: Node) -> Optional[float]:
     return height_offset_xyz(pa, pb)
 
 
-def _resolve_entity(node: Node, state: PrivilegedState):
-    """Node -> live simulator entity (for force queries)."""
+def _resolve_entity(node: Node, state: PrivilegedState, graph: Optional[Graph] = None):
+    """Node -> live simulator entity (for force queries).
+
+    A retained target carries no segmentation ids -- nothing saw it this frame
+    -- so the usual seg-id lookup returns nothing and its contact and grasp
+    facts would vanish exactly when they matter most, with the object in the
+    gripper hiding itself. ``state.active_obj`` is the handle for that one
+    node, so it is used as a fallback and only ever for the node whose id the
+    builder named as the active target.
+    """
     name = node.name
     for seg_id in node.segmentation_ids:
         ent = state.seg_id_map.get(seg_id)
@@ -216,13 +226,25 @@ def _resolve_entity(node: Node, state: PrivilegedState):
     ents = [state.seg_id_map.get(s) for s in node.segmentation_ids]
     ents = [e for e in ents if e is not None]
     if not ents:
-        return None
+        return _active_target_entity(node, state, graph)
     best_ent, best_count = None, 0
     for ent in ents:
         count = sum(1 for e in ents if e is ent)
         if count > best_count:
             best_ent, best_count = ent, count
     return best_ent
+
+
+def _active_target_entity(
+    node: Node, state: PrivilegedState, graph: Optional[Graph]
+):
+    """``state.active_obj``, but only for the exact node the builder flagged."""
+    if graph is None or state.active_obj is None:
+        return None
+    target_id = graph.meta.get("active_target_node_id")
+    if not target_id or node.node_id != target_id:
+        return None
+    return state.active_obj
 
 
 def _resolve_active_anchor(node: Node, state: PrivilegedState, cfg: dict):
@@ -325,13 +347,44 @@ def _visible_objects(graph: Graph) -> List[Node]:
     ]
 
 
+def _retained_target(graph: Graph) -> Optional[Node]:
+    """The active target when the builder is replaying it through occlusion."""
+    target_id = graph.meta.get("active_target_node_id")
+    if not target_id:
+        return None
+    node = graph.get_node(target_id)
+    if node is None or node.node_type != "object" or node.pose_world is None:
+        return None
+    return None if node.visible else node
+
+
+def _ee_object_nodes(graph: Graph) -> List[Node]:
+    """Objects the end-effector relations are computed against.
+
+    Every visible object, plus the retained active target whether or not a
+    camera saw it this frame. Occlusion must not punch a hole in the target's
+    relation history: the six facts the progress ladder reads are all defined
+    from the current end-effector pose against the target's current pose, and
+    both are known while it is hidden. Object--object facts keep the ordinary
+    visible-only rule -- there is no second retained endpoint to pair with.
+    """
+    nodes = _visible_objects(graph)
+    retained = _retained_target(graph)
+    return nodes if retained is None else nodes + [retained]
+
+
 # --------------------------------------------------------------------------- #
 # ee -> object
 # --------------------------------------------------------------------------- #
 def ee_object_spatial_edges(
     graph: Graph, state: PrivilegedState, cfg: dict
 ) -> List[Edge]:
-    """Object-center spatial facts for every visible object."""
+    """Object-center spatial facts for every visible object, plus the target.
+
+    Both facts are recomputed from the *current* end-effector position each
+    frame, so an occluded target's distance and height keep changing as the
+    robot moves even though its own centroid does not.
+    """
     ee = graph.get_node("ee")
     if ee is None or ee.pose_world is None:
         return []
@@ -340,7 +393,7 @@ def ee_object_spatial_edges(
     ho_spec = _get_bin_spec(cfg, "height-offset")
 
     edges: List[Edge] = []
-    for node in _visible_objects(graph):
+    for node in _ee_object_nodes(graph):
         obj_xyz = _xyz(node)
         if pd_spec is not None:
             d = planar_distance_xyz(ee_xyz, obj_xyz)
@@ -364,6 +417,10 @@ def ee_object_physical_edges(
 
     The two are independent: a grasped object reports ``grasp: holds`` and
     ``contact: holds`` at the same time.
+
+    Both are live simulator queries, so the retained target answers them while
+    invisible -- which is the case that matters, since an object in the gripper
+    is usually an object the cameras have lost.
     """
     ee = graph.get_node("ee")
     if ee is None or ee.pose_world is None:
@@ -372,13 +429,13 @@ def ee_object_physical_edges(
     grasp_angle = cfg["grasp"]["max_angle"]
 
     edges: List[Edge] = []
-    for node in _visible_objects(graph):
+    for node in _ee_object_nodes(graph):
         types = interaction_types(node)
         emit_contact = "contact" in types
         emit_grasp = "grasp" in types
         if not emit_contact and not emit_grasp:
             continue
-        ent = _resolve_entity(node, state)
+        ent = _resolve_entity(node, state, graph)
         if emit_contact:
             force = state.ee_object_contact_force(ent)
             edges.append(Edge(
@@ -403,6 +460,10 @@ def ee_object_affordance_edges(
     resolves. The compatibility score is computed for every admissible object
     regardless of distance; the near gate only decides whether the label is a
     score bin or ``unobserved``.
+
+    The retained target is admissible too: the anchor is re-derived from its
+    retained pose and scored against the current TCP, so both compatibility
+    rungs stay live through occlusion.
     """
     ee = graph.get_node("ee")
     if ee is None or ee.pose_world is None or state.tcp_pose_world is None:
@@ -421,7 +482,7 @@ def ee_object_affordance_edges(
     gripper_width = getattr(state, "gripper_width", None)
 
     edges: List[Edge] = []
-    for node in _visible_objects(graph):
+    for node in _ee_object_nodes(graph):
         types = interaction_types(node)
         emit_grasp = grasp_spec is not None and "grasp" in types
         emit_contact = contact_spec is not None and "contact" in types

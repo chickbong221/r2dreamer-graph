@@ -52,6 +52,11 @@ graph:
   # whitelist directory are both namespaced by it, so this must track
   # env.mshab_task or the run reads another task's scene description.
   mshab_task: ${env.mshab_task}
+  # Checked against the mined whitelist vocabulary at startup. The model sizes
+  # its entity embedding from this, and re-mining a task group changes how many
+  # entities exist, so a stale value shows up as a device-side assert deep in
+  # the RSSM rather than anywhere near the cause.
+  entity_vocab: ${model.graph.entity_vocab}
   thresholds_path: ''
   whitelist_dir: ''
   # The node/edge contract follows the model config. Every arm pins the same

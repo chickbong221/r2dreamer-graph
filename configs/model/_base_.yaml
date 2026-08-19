@@ -26,21 +26,60 @@ graph_simple: False
 # comparison needs the two measured apart.
 progress:
   enabled: False
+  # Where the imagined potential comes from. Both paths read the same stage
+  # table and both produce a potential in [0, 1]; they differ in what is
+  # learned and what it is learned from.
+  #
+  #   world_model:   one bounded scalar head on the world-model feature,
+  #                  regressed onto the potential computed from the *observed*
+  #                  EE->target labels in replay. Continuity comes from the
+  #                  regression, and an occluded target still has a target
+  #                  because the graph builder retains it.
+  #   relation_head: the original fused EE->target relation head on g_hat,
+  #                  scored through the stage table during imagination.
+  #                  Continuity comes from label uncertainty, and an occluded
+  #                  target supervises nothing.
+  #
+  # Kept side by side rather than swapped so the two can be compared in one
+  # codebase, and so `beta: 0` under `relation_head` reproduces the old runs
+  # exactly. The `relation_head` path is scheduled for removal once the
+  # `world_model` path has a validated run.
+  source: world_model
   # Weight on the progress advantage inside the actor, after the warm-up.
-  beta: 0.05
+  beta: 0.01
   # Warm-up window in environment steps: beta is 0 below `beta_warmup_start`,
   # ramps linearly to `beta` across the window, and holds `beta` after
-  # `beta_warmup_end`. Only beta is scheduled. `prior_progress_relabs` and
-  # `progress_value` stay on from step 0, both read detached inputs and so
-  # push no gradient into the world model, the graph decoder or the actor;
-  # the window is there to let the relation head and the progress critic fit
-  # before either can steer behaviour. `start == end` disables the warm-up.
-  beta_warmup_start: 200000
-  beta_warmup_end: 300000
+  # `beta_warmup_end`. Only beta is scheduled. The progress head and the
+  # progress critic train from step 0; both read detached inputs on the actor
+  # path, so a warm-up spent fitting them costs the actor nothing. The window
+  # is there to let them fit before either can steer behaviour.
+  # `start == end` disables the warm-up.
+  beta_warmup_start: 400000
+  beta_warmup_end: 700000
+  # Floor on the inter-quantile spread the progress advantage is divided by.
+  # The environment critic's floor of 1.0 is wrong here: the progress return
+  # is a potential in [0, 1], so its spread is far below one and a floor of
+  # one would rescale the term rather than normalise it. This value only binds
+  # when the potential is nearly constant, which is when the advantage should
+  # be small anyway -- set it from `progress/target_std` on a beta-zero
+  # diagnostic run rather than from the nominal range.
+  return_min_scale: 0.01
   # Empty uses the built-in Pick stages. A path loads a compiled JSON stage
   # table instead; there are no runtime LLM calls either way.
   stages: ''
+  # Only meaningful under `source: relation_head`, where the potential is a
+  # contraction over predicted label distributions. The world-model head
+  # predicts the scalar directly and has no hard/soft distinction.
   soft: True
+  # Bounded scalar head on the world-model feature. Sits beside the reward
+  # head and mirrors its trunk; one sigmoid output instead of a twohot.
+  head:
+    layers: 1
+    units: ${model.units}
+    act: ${model.act}
+    device: ${device}
+    symlog_inputs: False
+    name: 'progress'
 
 lr: 4e-5
 agc: 0.3
@@ -85,6 +124,10 @@ loss_scales:
   prior_nodetgt: 1.0
   prior_progress_relabs: 1.0
   progress_value: 1.0
+  # Regression of the bounded progress head onto the observed stage ladder.
+  # Zero switches the world-model progress path off entirely, the same way
+  # every other head here is keyed by its scale rather than by a flag.
+  progress_model: 1.0
 
 r2dreamer:
   lambd: 5e-4
@@ -157,6 +200,14 @@ graph:
   app: 64
   bbox: 8
   bbox_beta: 0.1
+  # World-frame normalisation for graph_node_centroid, pooled schema only:
+  # (centroid - origin) / scale. Fixed bounds, not batch statistics -- the same
+  # object in the same place has to encode identically in every episode, and a
+  # running normaliser would make a stationary target's position drift as the
+  # batch changes. The default spans a ReplicaCAD-sized apartment; a scalar is
+  # broadcast to all three axes.
+  centroid_origin: [0.0, 0.0, 0.0]
+  centroid_scale: 5.0
   reverse_edges: True
   act: ${model.act}
   # Simple modes. simple_units is the GNN width and also the pooled token

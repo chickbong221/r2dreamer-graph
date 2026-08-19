@@ -1,8 +1,10 @@
 """Hyper-relational per-frame packing.
 
-Nodes fill a compact prefix in vertex-index order, ee first, each carrying one
-bbox and one appearance vector per camera plus a flag marking the subtask's
-target; each fact is one row of (relation, absolute, temporal). Arrays use the
+Nodes fill a compact prefix, each carrying one bbox and one appearance vector
+per camera plus a flag marking the subtask's target; each fact is one row of
+(relation, absolute, temporal). Ordering is vertex-index order under the full
+and slot schemas; the pooled schema instead pins row 0 to the end effector and
+row 1 to the active target, and adds a world-frame centroid per node. Arrays use the
 narrowest dtype holding their vocabulary since these land in the replay buffer
 every step; the encoder casts back on read.
 
@@ -59,6 +61,50 @@ def _edge_priority(edge) -> Tuple[int, int]:
     return (family, int(edge.stale))
 
 
+def _row_assignment(graph, n_max: int, target_id, fixed_rows: bool):
+    """``([(row, node)], n_dropped)`` for one frame.
+
+    With ``fixed_rows`` the pooled schema pins two rows by meaning rather than
+    by arrival order: row 0 is the end effector, row 1 is the active subtask
+    target, and everything else fills upward from row 2. The vertex registry
+    cannot supply this -- it hands the target whichever index happened to be
+    free when it was first admitted -- and the encoder now needs the target at
+    a fixed row so an occluded one keeps the same identity frame to frame.
+
+    Row 1 stays padding until the target is first observed. Reserving it costs
+    one object row in a frame that has more visible whitelisted objects than
+    rows for them; the drop is returned rather than swallowed, because a
+    silently truncated vertex is a fact the model never learns to predict.
+    """
+    nodes = list(graph.nodes)
+    if not fixed_rows:
+        return list(enumerate(nodes[:n_max])), max(0, len(nodes) - n_max)
+
+    rows = []
+    rest = []
+    target_row_taken = False
+    for node in nodes:
+        if node.node_type == "ee":
+            if not any(row == 0 for row, _ in rows):
+                rows.append((0, node))
+            continue
+        if node.node_id == target_id and not target_row_taken and n_max > 1:
+            rows.append((1, node))
+            target_row_taken = True
+            continue
+        rest.append(node)
+
+    next_row = 2
+    dropped = 0
+    for node in rest:
+        if next_row >= n_max:
+            dropped += 1
+            continue
+        rows.append((next_row, node))
+        next_row += 1
+    return rows, dropped
+
+
 def pack_graph(
     graph: Graph,
     vocab: GraphVocab,
@@ -85,6 +131,10 @@ def pack_graph(
     want_uid = schema == SCHEMA_SIMPLE_SLOT
     want_bbox = schema in (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED)
     want_app = schema == SCHEMA_FULL
+    # Object-frame position, packed only where the encoder reads it. Boxes say
+    # where a node is on a screen; this says where it is in the world, which is
+    # what survives a node going invisible.
+    want_centroid = schema == SCHEMA_SIMPLE_POOLED
     if n_max > 255:
         raise ValueError(
             f"n_max={n_max} exceeds 255; edge endpoints are packed as uint8"
@@ -109,14 +159,16 @@ def pack_graph(
         node_app = np.zeros((n_max, n_cams, app_dim), dtype=np.float16)
     if want_bbox:
         node_bbox = np.zeros((n_max, n_cams, 4), dtype=np.float16)
+    if want_centroid:
+        # float32, not float16: eight rows of three is 96 bytes a frame, and
+        # half precision would quantise a table-scale scene to millimetres.
+        node_centroid = np.zeros((n_max, 3), dtype=np.float32)
     target_id = graph.meta.get("active_target_node_id")
 
     position: Dict[str, int] = {}
+    assigned, n_dropped = _row_assignment(graph, n_max, target_id, want_centroid)
     n_nodes = 0
-    for node in graph.nodes:
-        if n_nodes >= n_max:
-            break
-        i = n_nodes
+    for i, node in assigned:
         ent = vocab.entity.encode(entity_key_for(node))
         if ent == vocab.entity.pad_id:
             # Validity is read back as ``ent != pad``, so a real vertex landing
@@ -142,6 +194,8 @@ def pack_graph(
             node_uid[i] = int(uid)
         if want_bbox and node.bbox is not None:
             node_bbox[i] = node.bbox
+        if want_centroid and node.pose_world is not None:
+            node_centroid[i] = np.asarray(node.pose_world[:3], dtype=np.float32)
         if want_app and node.appearance is not None:
             node_app[i] = node.appearance
         if node.node_id == target_id:
@@ -191,6 +245,7 @@ def pack_graph(
     # Counts stay on the graph for logging and truncation warnings rather than
     # riding along in every replay transition.
     graph.meta["n_nodes_packed"] = n_nodes
+    graph.meta["n_nodes_dropped"] = n_dropped
     graph.meta["n_edges_packed"] = len(kept)
     graph.meta["n_edges_dropped"] = len(candidates) - len(kept)
     graph.meta["target_packed"] = bool(node_target.any())
@@ -213,6 +268,8 @@ def pack_graph(
         packed["graph_node_app"] = node_app
     if want_bbox:
         packed["graph_node_bbox"] = node_bbox
+    if want_centroid:
+        packed["graph_node_centroid"] = node_centroid
     return packed
 
 
@@ -230,7 +287,8 @@ FULL_GRAPH_KEYS = (
 )
 
 SIMPLE_POOLED_GRAPH_KEYS = (
-    "graph_node_ent", "graph_node_bbox", "graph_node_target", *_EDGE_KEYS,
+    "graph_node_ent", "graph_node_bbox", "graph_node_centroid",
+    "graph_node_target", *_EDGE_KEYS,
 )
 
 SIMPLE_SLOT_GRAPH_KEYS = (

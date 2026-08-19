@@ -152,6 +152,10 @@ class CompactGraph:
     node_uid: torch.Tensor | None
     node_app: torch.Tensor | None
     node_bbox: torch.Tensor | None
+    # World-frame object position, pooled schema only. Boxes vanish when a node
+    # goes invisible; this does not, which is what lets the retained target
+    # keep a position through occlusion.
+    node_centroid: torch.Tensor | None
     appearance_known: torch.Tensor | None
     camera_visible: torch.Tensor | None
     edge_src: torch.Tensor
@@ -188,6 +192,22 @@ class CompactGraph:
         seen = self.camera_visible.to(dtype)
         box = self.node_bbox.to(dtype) * seen[..., None]
         return torch.cat([box.flatten(-2), seen], -1)
+
+    def centroid_feature(
+        self, dtype: torch.dtype, origin: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """(G, N, 3) world centroid on fixed bounds, zero on padded rows.
+
+        Fixed bounds, not batch statistics: the same object in the same place
+        has to encode identically in every episode, and a running normaliser
+        would make a stationary target's position drift as the batch changes.
+        Padded rows stay exactly zero so an unfilled row cannot be read as a
+        position at the origin.
+        """
+        if self.node_centroid is None:
+            raise RuntimeError("this graph schema carries no centroids")
+        normed = (self.node_centroid.float() - origin) / scale
+        return (normed * self.node_valid[..., None]).to(dtype)
 
 
 @dataclass
@@ -259,7 +279,7 @@ def compact_graph(
     num_nodes = int(ent.shape[-1])
 
     node_ent = ent.reshape(graph_count, num_nodes).long()
-    node_uid = node_app = node_bbox = None
+    node_uid = node_app = node_bbox = node_centroid = None
     appearance_known = camera_visible = None
     if schema == SCHEMA_SIMPLE_SLOT:
         node_uid = graph["graph_node_uid"].reshape(graph_count, num_nodes).long()
@@ -278,6 +298,10 @@ def compact_graph(
                 graph_count, num_nodes, *app_tail
             )
             appearance_known = node_app.float().abs().sum(-1).ne(0)
+        else:
+            node_centroid = graph["graph_node_centroid"].reshape(
+                graph_count, num_nodes, 3
+            )
     node_target = graph["graph_node_target"].reshape(graph_count, num_nodes).long()
     node_valid = node_ent.ne(0)
 
@@ -302,6 +326,7 @@ def compact_graph(
         node_uid=node_uid,
         node_app=node_app,
         node_bbox=node_bbox,
+        node_centroid=node_centroid,
         appearance_known=appearance_known,
         camera_visible=camera_visible,
         edge_src=local_src + offset,
@@ -378,7 +403,11 @@ class GraphEncoder(nn.Module):
             self.uid = None
             self.app_proj = None
             self.bbox_proj = None
-            node_in = 2 * self.embed_dim + 5 * self.n_cams
+            # Boxes plus their per-camera visible bits, plus the world-frame
+            # centroid. The boxes say where a node is on each screen and go
+            # dark when it leaves; the centroid says where it is in the world
+            # and does not. Both are fed raw into the same projection.
+            node_in = 2 * self.embed_dim + 5 * self.n_cams + 3
         else:
             self.uid = None
             self.app_proj = nn.ModuleList(
@@ -392,6 +421,18 @@ class GraphEncoder(nn.Module):
                 + 2 * self.embed_dim
             )
         self.node = GraphMLP(node_in, self.units, str(config.act))
+        origin = torch.as_tensor(
+            getattr(config, "centroid_origin", (0.0, 0.0, 0.0)), dtype=torch.float32
+        ).reshape(3)
+        scale = torch.as_tensor(
+            getattr(config, "centroid_scale", 5.0), dtype=torch.float32
+        ).reshape(-1)
+        if scale.numel() == 1:
+            scale = scale.expand(3).clone()
+        if not bool((scale > 0).all()):
+            raise ValueError(f"graph.centroid_scale must be positive, got {scale}")
+        self.register_buffer("centroid_origin", origin, persistent=False)
+        self.register_buffer("centroid_scale", scale, persistent=False)
 
         self.relation = nn.Embedding(int(config.n_rel), self.embed_dim)
         self.absolute = nn.Embedding(int(config.n_abs), self.embed_dim)
@@ -445,6 +486,11 @@ class GraphEncoder(nn.Module):
         parts.extend((self.entity(compact.node_ent), self.target(compact.node_target)))
         if self.schema == SCHEMA_SIMPLE_POOLED:
             parts.append(compact.bbox_feature(parts[0].dtype))
+            parts.append(
+                compact.centroid_feature(
+                    parts[0].dtype, self.centroid_origin, self.centroid_scale
+                )
+            )
         if self.uid is not None:
             parts.append(self.uid(compact.node_uid))
         nodes = self.node(torch.cat(parts, -1)) * valid[..., None]

@@ -167,7 +167,9 @@ class ProgressScorer(torch.nn.Module):
     and the label mask that turns those distributions into stage satisfaction.
     """
 
-    def __init__(self, stages: Sequence[ProgressStage], n_abs: int):
+    def __init__(
+        self, stages: Sequence[ProgressStage], n_abs: int, n_rel: int = 0
+    ):
         super().__init__()
         stages = tuple(stages)
         if not stages:
@@ -213,6 +215,77 @@ class ProgressScorer(torch.nn.Module):
                 stage.weight / total
             )
         self.register_buffer("potential_weights", potential, persistent=False)
+        # Relation id -> row of ``potential_weights``, -1 for relations no stage
+        # names. The id is not the row: the rows follow the stage table's order
+        # of first appearance, not the relation vocabulary's.
+        width = int(n_rel) if int(n_rel) > 0 else int(max(relations)) + 1
+        if width <= int(max(relations)):
+            raise ValueError(
+                f"n_rel={n_rel} cannot address relation {max(relations)}"
+            )
+        row_of = torch.full((width,), -1, dtype=torch.long)
+        row_of[self.relations] = torch.arange(len(relations), dtype=torch.long)
+        self.register_buffer("row_of", row_of, persistent=False)
+
+    @property
+    def n_relations(self) -> int:
+        return int(self.relations.numel())
+
+    def replay_potential(
+        self,
+        edge_rel: torch.Tensor,
+        edge_abs: torch.Tensor,
+        edge_src_local: torch.Tensor,
+        edge_dst_local: torch.Tensor,
+        edge_graph: torch.Tensor,
+        graph_count: int,
+        target_row: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(potential, valid)`` per frame from *observed* relation labels.
+
+        Reads the end-effector-to-target block straight out of the packed
+        graph: row 0 to ``target_row``, one edge per scored relation. Labels
+        are one-hot, so the same linear contraction the soft scorer uses over
+        predicted probabilities returns exactly the hard stage sum here -- the
+        two agree by construction rather than by a second table.
+
+        Validity is strict and deliberately so. The stage weights sum to one
+        only when all of the scorer's relations are present; a frame missing
+        the grasp fact would score at most 0.70 through no fault of the robot,
+        and regressing on that would teach the head that losing a fact is
+        losing progress. Renormalising the present ones instead would make the
+        potential mean something different from frame to frame. So an
+        incomplete frame is masked, and a duplicated relation -- two edges
+        claiming the same fact, which would double-count in the scatter -- is
+        masked with it.
+        """
+        row = self.row_of.index_select(0, edge_rel)
+        keep = (
+            row.ge(0)
+            & edge_src_local.eq(0)
+            & edge_dst_local.eq(int(target_row))
+        )
+        frame = edge_graph[keep]
+        row = row[keep]
+        label = edge_abs[keep]
+        shape = (int(graph_count), self.n_relations)
+        device = self.potential_weights.device
+
+        onehot = torch.zeros(
+            (*shape, self.potential_weights.shape[-1]),
+            device=device,
+            dtype=torch.float32,
+        )
+        onehot[frame, row, label] = 1.0
+        count = torch.zeros(shape, device=device, dtype=torch.float32)
+        count.index_put_(
+            (frame, row), torch.ones_like(frame, dtype=torch.float32), accumulate=True
+        )
+        # Exactly one edge per scored relation: catches both absence and the
+        # duplicate that a one-hot scatter would otherwise hide.
+        valid = count.eq(1.0).all(-1)
+        potential = (onehot * self.potential_weights).sum((-2, -1))
+        return potential * valid.float(), valid
 
     def satisfaction(self, probs: torch.Tensor, hard: bool) -> torch.Tensor:
         """Per-stage satisfaction in ``[0, 1]`` from (..., R, n_abs) probs."""
