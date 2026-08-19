@@ -748,6 +748,9 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
 
     def test_the_warm_up_trains_the_progress_critic_without_steering_the_actor(self):
         model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
+        # Fixed here, like the schedule test above, so the two step counts
+        # below stay inside and outside the window whatever the preset says.
+        model.progress_beta_start, model.progress_beta_end = 200000.0, 300000.0
         # A critic built at outscale 0 predicts a constant zero, which makes the
         # progress advantage identically zero and every beta indistinguishable
         # from every other. Give the head a real readout first, or the

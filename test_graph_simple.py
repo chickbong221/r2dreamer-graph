@@ -1151,12 +1151,30 @@ class EnvConfigPlumbingTest(unittest.TestCase):
                 schedule.beta_warmup_end, schedule.beta_warmup_start, name
             )
         for name in ("node", "nodetgt", "relabs", "reltemp",
-                     "prior_progress_relabs", "progress_value", "graphdyn"):
+                     "prior_progress_relabs", "progress_model",
+                     "progress_value", "graphdyn"):
             self.assertEqual(preset.loss_scales[name], 1.0, name)
         self.assertEqual(preset.loss_scales.graphrep, 0.05)
         # There is no recurrent slot state to supervise in this arm.
         for name in ("slotdyn", "slotalive", "prior_nodetgt"):
             self.assertNotIn(name, preset.loss_scales)
+
+    def test_the_shipped_schedule_is_the_one_the_experiment_specifies(self):
+        """The numbers, not just the shape, for the run that is about to go.
+
+        Deliberately narrower than the shape check above: that one exists so a
+        smoke run can retune the window freely, and it stays that way. This one
+        pins the values the current experiment was specified with, so a stray
+        edit to a preset shows up here rather than as an unexplained difference
+        between two arms three days into training. Change both together when
+        the experiment changes.
+        """
+        for name in ("size50M_graph_simple", "size100M_graph_simple"):
+            schedule = OmegaConf.load(f"configs/model/{name}.yaml").progress
+            self.assertEqual(schedule.source, "world_model", name)
+            self.assertAlmostEqual(schedule.beta, 0.01, msg=name)
+            self.assertEqual(schedule.beta_warmup_start, 400000, name)
+            self.assertEqual(schedule.beta_warmup_end, 700000, name)
 
     def test_every_arm_sees_the_same_privileged_observation(self):
         # The graph is built from privileged state in every graph arm, so the
