@@ -165,15 +165,28 @@ _WANDB_DIAGNOSTICS = {
     "train/node_target_acc",
     "train/node_target_frac",
     "train/graph_real_edges",
-    # Progress shaping. The critic's own loss arrives under train/loss/, but
-    # the schedule and its effect on the actor do not: beta is what the warm-up
-    # ramps, and influence is beta * E|A_progress| / E|A_env|, the ratio that
-    # says whether the ramp landed. potential_horizon_std is the control: a
-    # constant potential holds influence near zero whatever beta does.
+    # Progress shaping. Five primary numbers, each answering one question that
+    # the others cannot:
+    #   valid_fraction  is the target being retained and fully labelled?
+    #                   low means a persistence or six-relation bug.
+    #   target_std      does behaviour produce any spread to learn from?
+    #                   near zero makes every number below it meaningless.
+    #   head_mae        has the world model learned to predict the ladder?
+    #   critic_mae      has the progress critic caught up with its own return?
+    #   influence       beta * E|A_progress| / E|A_env|, i.e. did the ramp
+    #                   land. Wrong here is a normalisation or beta problem.
+    "train/progress/valid_fraction",
+    "train/progress/target_std",
+    "train/progress/head_mae",
+    "train/progress/critic_mae",
+    "train/progress/influence",
+    # Two kept beside them rather than left to the raw log. Influence cannot be
+    # read without knowing which beta produced it, and horizon_std is the
+    # control: a potential that is constant within a rollout holds influence
+    # near zero whatever beta does, so it separates "beta is too small" from
+    # "acting does not change predicted progress". The adv/env_adv pair they
+    # replaced is redundant on a dashboard -- influence is exactly their ratio.
     "train/progress_beta",
-    "train/progress_influence",
-    "train/progress_adv_abs",
-    "train/env_adv_abs",
     "train/progress_potential_horizon_std",
 }
 

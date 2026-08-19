@@ -132,56 +132,126 @@ track graph size. Box IoU is an evaluation metric, not an update-loop one.
 
 ### Progress in pooled graph-simple
 
-`progress.enabled=true` works in both simple modes. Pooled reads one fused head
-`H(g_hat) -> [R, n_abs]` covering exactly the relations the scorer names -- six
-for the built-in Pick table -- rather than decoding a distribution per stage or
-per candidate target. The head lives inside `SimpleGraphDecoder`, so the
-optimizer, the checkpoint and `clone_and_freeze` pick it up automatically and
-imagination reads the parameters training wrote. Relation ids are mapped to
-output rows through the scorer's own relation order; the id is never the row.
+`progress.enabled=true` works in both simple modes. Pooled has two
+implementations of the potential, selected by `progress.source`, and they read
+the same stage table so their numbers are comparable.
 
-`prior_progress_relabs` supervises that head on the observed EE-to-target facts.
-The teacher mask is `not is_first and not is_last and target flagged and the
-edge exists`: `g_hat` has no preceding episode to predict the reset frame from,
-and a target admitted on any later frame is supervised immediately. Nothing
-about `target_resolved` reaches replay -- when the target is unresolved,
-unadmitted or occluded, the flag is dark and the edges are gone, so the frame
-drops out on its own.
+**`world_model` (default).** The potential is a scalar. `progress_head` is a
+bounded head beside the environment reward head -- `phi = sigmoid(MLP(feat))`
+on the same `[z, g, h]` the policy and the ordinary critic read -- and it is
+trained by regression, not classification:
 
-That last point is recurrent, not one-off. With `staleness_enabled: false` the
-target vertex is only emitted while a camera sees it; the registry holds its
-*index* through occlusion but the flag itself goes dark every time it is
-occluded. The design assumes one fixed target per episode and relies on `h` to
-carry that role through absence. There is no target-null class and no
-target-presence head, so a task where the target can change or be absent within
-an episode would need one.
+```
+progress_model = masked_huber(phi, progress_target)
+```
 
-Progress never runs inside a loop. During imagination `g` is already a
-contiguous slice of the stacked `imag_feat` (`[z, g, h]`), so after the rollout
-one linear, one softmax and one contraction cover all `B x H` states at once.
-The potential itself is a single precomputed `[R, n_abs]` matrix contraction,
-exactly equal to the cumulative-stage sum for `soft: true`. The progress critic
-input is `[imag_feat, vec(p)]` and nothing else -- no masks, no counts, no
-boxes, no observed labels. It is trained and normalised separately and enters
-the actor as `A = A_env + beta * A_progress`; the reported task return, the
-reward head, the continuation head and the environment critic are untouched.
+`progress_target` is computed from the *observed* labels in replay.
+`ProgressScorer.replay_potential` reads the end-effector-to-target block --
+row 0 to row 1, which packing now guarantees -- scatters the six labels
+one-hot and contracts them through the same `[R, n_abs]` matrix the predicted
+path uses. One-hot in, so the scalar is exactly the hard cumulative-stage sum;
+the observed and predicted potentials agree by construction rather than by a
+second table.
+
+Validity is strict. The stage weights sum to one only when every relation the
+scorer names is present, so a frame missing one would score low through no
+fault of the robot, and regressing on that teaches the head that losing a fact
+is losing progress. A frame is supervised only when all six relations are
+present and none is duplicated; anything else is *masked*, never scored zero.
+`train/progress/valid_fraction` is that mask, and a low value is a persistence
+or relation bug rather than a hard task.
+
+Imagination reads the frozen head directly: `phi = progress_head(imag_feat)`,
+`r_progress = (1 - gamma) * phi`. The progress critic input is `imag_feat` and
+nothing else -- the potential is already a function of it, so appending a
+second view would hand the critic a shortcut the actor does not have. Note the
+consequence: the head is fitted on posterior features and applied to imagined
+ones, exactly as the reward head is, which makes `graph_align_cos` and
+`graph_align_mse` load-bearing for progress quality.
+
+**`relation_head` (comparison arm, scheduled for removal).** The original path.
+One fused head `H(g_hat) -> [R, n_abs]` inside `SimpleGraphDecoder`, supervised
+by `prior_progress_relabs` on the observed EE-to-target facts, with the
+potential taken as a contraction over predicted label distributions at
+imagination time. Continuity there comes from label uncertainty (`soft: true`),
+which is why `progress.soft` has no meaning under `world_model`. The critic
+input is `[imag_feat, vec(p)]`. Kept so the two can be compared in one codebase
+and so a `relation_head` run reproduces the earlier numbers exactly.
+
+Under either source, progress never runs inside a loop: after the rollout one
+pass covers all `B x H` states at once.
+
+### The retained target
+
+Both sources depend on the target existing to have relations with. With
+`staleness_enabled: false` every other vertex is emitted only while a camera
+sees it, but the subtask target is retained: the graph builder keeps one
+snapshot, replays it as an invisible vertex on frames no camera saw it, and
+clears it only on episode reset. While retained it keeps row 1 and its entity
+id, its bounding boxes go to zero (the only per-camera visibility signal the
+packed observation carries), and all six end-effector relations keep being
+recomputed -- the four geometric ones from the current end-effector pose
+against its centroid, `contact` and `grasp` from live simulator queries through
+`state.active_obj`. So an occluded target's facts still change as the robot
+moves, and supervision is continuous after first observation rather than
+punched full of holes.
+
+Its pose freezes only while it is *also* ungrasped. A grasped target rides with
+the gripper, and a frozen centroid would report the object still lying where it
+was picked up while `grasp` reads `holds` on the same frame -- the two would
+contradict each other and the ladder reads both.
+
+`graph_node_centroid` `[N, 3]` carries the world-frame position that survives
+the boxes going dark, normalised in the encoder on fixed bounds
+(`graph.centroid_origin`, `graph.centroid_scale`) rather than batch statistics,
+so the same object in the same place encodes identically in every episode.
+
+Packing pins row 0 to the end effector and row 1 to the target; the vertex
+registry cannot supply this, because it hands the target whichever index was
+free when it was first admitted. Row 1 stays padding until the target is first
+observed. Reserving it costs one object row in a frame with more visible
+whitelisted objects than rows, which is counted, not swallowed --
+`log_graph_node_drops`. A persistently nonzero value means `n_max` is too small
+for the scene, not that the reservation is wrong.
+
+### Schedule and metrics
 
 `beta` is the only scheduled quantity. It is zero until
 `progress.beta_warmup_start` environment steps, linear to `progress.beta` by
-`progress.beta_warmup_end`, and constant after; `prior_progress_relabs` and
-`progress_value` run from step 0 throughout. That split is possible because the
-progress critic reads a detached input, so training it early moves neither the
-world model, the graph decoder nor the actor -- it only fits the baseline for
-the stationary relations of a robot that has not learned to move yet. Turning
-beta on together with a cold critic would instead let an unfitted critic steer,
-and an immature world model can hallucinate relation changes under imagined
-actions long after the real arm is still. `train/progress_beta` logs the current
-value and `train/progress_influence` logs
-`beta * E|A_progress| / E|A_env|`, which is the ratio worth watching during the
-ramp: roughly 5-20% at the plateau, under 1% means beta is too small to matter,
-well over 25% means progress is doing the steering. The clean paper comparison
-holds every loss fixed and varies only this schedule: `beta: 0.0` throughout for
-the control, the warm-up for the treatment.
+`progress.beta_warmup_end`, and constant after; the progress head and
+`progress_value` run from step 0 throughout. The critic reads a detached input,
+so training it early moves neither the world model nor the actor. The head does
+update the world-model latent, deliberately -- it is an auxiliary prediction
+task like the reward head, with its own loss scale if that needs turning down.
+Turning beta on together with a cold critic would instead let an unfitted
+critic steer, and an immature world model can hallucinate progress under
+imagined actions long after the real arm is still.
+
+Five primary metrics, each answering a question the others cannot:
+
+| Metric | Reads wrong as |
+|---|---|
+| `progress/valid_fraction` | target persistence or six-relation bug |
+| `progress/target_std` | behaviour produces near-constant progress |
+| `progress/head_mae` | world-model progress prediction not ready |
+| `progress/critic_mae` | progress critic not ready |
+| `progress/influence` | normalisation or beta problem |
+
+`influence` is `beta * E|A_progress| / E|A_env|`: roughly 5-20% at the plateau,
+under 1% means beta is too small to matter, well over 25% means progress is
+doing the steering. `train/progress_beta` and
+`train/progress_potential_horizon_std` sit beside them -- influence cannot be
+read without knowing which beta produced it, and horizon_std separates "beta is
+too small" from "acting does not change predicted progress".
+
+The progress return is normalised with its own floor
+(`progress.return_min_scale`), not the environment critic's `1.0`: a potential
+in `[0, 1]` has an inter-quantile spread far below one, and a floor of one
+would rescale the term rather than normalise it. Set it from `target_std` on a
+beta-zero diagnostic run.
+
+The clean paper comparison holds every loss fixed and varies only the schedule:
+`beta: 0.0` throughout for the control, the warm-up for the treatment.
 
 `r_progress = (1 - gamma) * Phi` is a bounded progress-*potential* return, not
 classical potential-difference shaping: it rewards reaching and holding high

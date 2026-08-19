@@ -1168,7 +1168,7 @@ class EnvConfigPlumbingTest(unittest.TestCase):
     def test_simple_mode_reaches_the_builder(self):
         graph_config = OmegaConf.create({
             "enabled": True, "simple": True, "uid_vocab": 64,
-            "mshab_task": "set_table",
+            "mshab_task": "set_table", "entity_vocab": 14,
             "thresholds_path": "", "whitelist_dir": "",
             "n_max": 8, "e_max": 168, "k_persist": -1, "app_dim": 384,
             "dino_model": "dinov2_vits14_reg", "dino_res": 112,

@@ -780,7 +780,7 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         # Warm-up: the critic trains and the actor never sees it.
         self.assertGreater(float(warming["progress_adv_abs"]), 0.0)
         self.assertEqual(float(warming["progress_beta"]), 0.0)
-        self.assertEqual(float(warming["progress_influence"]), 0.0)
+        self.assertEqual(float(warming["progress/influence"]), 0.0)
         self.assertIn("loss/progress_value", warming)
         self.assertTrue(torch.isfinite(warming["loss/progress_value"]))
         torch.testing.assert_close(
@@ -804,7 +804,7 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         )
         self.assertGreater(expected, 0.0)
         self.assertAlmostEqual(
-            float(plateau["progress_influence"]) / expected, 1.0, places=4
+            float(plateau["progress/influence"]) / expected, 1.0, places=4
         )
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
