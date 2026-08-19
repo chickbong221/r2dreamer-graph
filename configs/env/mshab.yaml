@@ -13,7 +13,13 @@ seed: ${seed}
 device: ${device}
 
 mshab_task: set_table
-mshab_obj: all
+# Names the MS-HAB task-plan file, `task_plans/<mshab_task>/pick/<split>/
+# <mshab_obj>.json`, and through it which whitelist the runtime resolves:
+# `024_bowl` binds `pick_024_bowl.json`, which admits the bowl and the counter
+# drawer it sits in. `all` widens the scene set to every pick target in the
+# group. Relation bins always come from the union file regardless, so the two
+# share one interpretation of "near".
+mshab_obj: 024_bowl
 split: train
 eval_split: train
 eval_num_build_configs: ${env.num_build_configs}
