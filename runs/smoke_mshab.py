@@ -68,9 +68,9 @@ def main():
             # reverse. Either way appearance is gone, and the key the *other*
             # simple schema owns must not be present.
             stale = ["graph_node_app"]
-            stale.append(
-                "graph_node_uid" if args.graph_state_mode == "pooled"
-                else "graph_node_bbox"
+            stale.extend(
+                ["graph_node_uid"] if args.graph_state_mode == "pooled"
+                else ["graph_node_bbox", "graph_node_centroid"]
             )
             found = [key for key in stale if key in spaces]
             if found:

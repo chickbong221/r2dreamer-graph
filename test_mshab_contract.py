@@ -18,6 +18,7 @@ class _FakeGraph:
         "graph_node_ent": (8,),
         "graph_node_app": (8, 2, 384),
         "graph_node_bbox": (8, 2, 4),
+        "graph_node_centroid": (8, 3),
         "graph_node_target": (8,),
         "graph_edge_src": (168,),
         "graph_edge_dst": (168,),
@@ -29,6 +30,7 @@ class _FakeGraph:
         "graph_node_ent": np.uint8,
         "graph_node_app": np.float16,
         "graph_node_bbox": np.float16,
+        "graph_node_centroid": np.float32,
         "graph_node_target": np.uint8,
         "graph_edge_src": np.uint8,
         "graph_edge_dst": np.uint8,
@@ -39,6 +41,7 @@ class _FakeGraph:
     overflow_drops = np.zeros(2, np.float32)
     episode_entities = np.zeros(2, np.float32)
     fact_drops = np.zeros(2, np.float32)
+    node_drops = np.zeros(2, np.float32)
     target_missing = np.zeros(2, np.float32)
     cache_entries = 3
 

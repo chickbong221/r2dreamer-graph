@@ -94,6 +94,13 @@ def pooled_graph(batch=2, time=3, n_valid=3, n_edges=4):
     ])
     bbox[..., :min(n_valid, 3), 0, :] = boxes[:min(n_valid, 3)].to(torch.float16)
     graph["graph_node_bbox"] = bbox
+    centroid = torch.zeros(batch, time, N_MAX, 3, dtype=torch.float32)
+    centroid[..., :min(n_valid, 3), :] = torch.tensor([
+        [0.00, 0.00, 0.90],
+        [0.40, 0.10, 0.75],
+        [-0.30, 0.60, 0.75],
+    ])[:min(n_valid, 3)]
+    graph["graph_node_centroid"] = centroid
     return graph
 
 
