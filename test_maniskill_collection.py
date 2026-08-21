@@ -515,3 +515,45 @@ class IncidentalExclusionTest(unittest.TestCase):
         store.freeze(min_presence=0.2)
         self.assertEqual(store.excluded, {})
         self.assertEqual(len(store.complete_buckets()), 2)
+
+
+class ExcludedReportingTest(unittest.TestCase):
+    """An excluded bucket is reported once, at the rate it was judged on."""
+
+    def _store(self):
+        store = BucketStore(target=5)
+        always = make_bucket("grasp", EE_KEY, "actor:cubeA")
+        brush = make_bucket("contact", EE_KEY, "actor:cubeB")
+        for i in range(25):
+            ep = EpisodeEvidence()
+            ep.add(InteractionEvent(always, i))
+            if i == 0:
+                ep.add(InteractionEvent(brush, i))
+            ep.observe_success(True)
+            ep.commit(store)
+        store.freeze(min_presence=0.2)
+        return store, always, brush
+
+    def test_presence_does_not_decay_after_exclusion(self):
+        store, always, brush = self._store()
+        at_freeze = store.presence(brush)
+        for i in range(275):            # run on to 300 episodes
+            ep = EpisodeEvidence()
+            ep.add(InteractionEvent(always, i))
+            ep.observe_success(True)
+            ep.commit(store)
+        self.assertEqual(store.episodes, 300)
+        self.assertEqual(store.presence(brush), at_freeze)
+        self.assertAlmostEqual(at_freeze, 0.04)
+
+    def test_excluded_bucket_appears_once_in_the_report(self):
+        store, _, brush = self._store()
+        report = store.report()
+        self.assertEqual(report.count(str(brush)), 1)
+        self.assertIn("SKIP", report)
+        self.assertNotIn(f"SHORT    1/5", report)
+
+    def test_incidental_does_not_repeat_excluded_buckets(self):
+        store, _, brush = self._store()
+        self.assertIn(brush, store.excluded)
+        self.assertEqual(store.incidental(0.2), [])

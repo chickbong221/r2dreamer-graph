@@ -130,14 +130,26 @@ class BucketStore:
                 self.episode_presence[bucket] += 1
 
     def presence(self, bucket: BucketKey) -> float:
-        """Fraction of committed episodes this bucket appeared in."""
+        """Fraction of committed episodes this bucket appeared in.
+
+        An excluded bucket reports the rate measured when it was frozen out.
+        It stops accumulating presence at that point while episodes keep
+        counting, so a live ratio would decay toward zero and misreport why
+        the bucket was dropped.
+        """
+        if bucket in self.excluded:
+            return self.excluded[bucket]
         if not self.episodes:
             return 0.0
         return self.episode_presence[bucket] / self.episodes
 
     def incidental(self, min_presence: float) -> List[BucketKey]:
-        """Buckets too rare across episodes to be a task interaction."""
-        return [b for b in self.buckets() if self.presence(b) < min_presence]
+        """Buckets too rare to be a task interaction and not already frozen
+        out. Freeze reports its own; this catches the rest, which is what a
+        pilot run (no freeze) needs."""
+        return [b for b in self.buckets()
+                if b not in self.excluded
+                and self.presence(b) < min_presence]
 
     def freeze(self, min_presence: float = 0.0) -> None:
         """Stop admitting new buckets. Existing ones keep filling.
@@ -179,6 +191,8 @@ class BucketStore:
         lines = [f"episodes committed: {self.episodes}",
                  f"target per bucket: {self.target}"]
         for b in self.buckets():
+            if b in self.excluded:
+                continue          # reported once, on its own SKIP line
             have, seen = len(self.samples[b]), self.seen_counts[b]
             mark = "ok " if have >= self.target else "SHORT"
             lines.append(
