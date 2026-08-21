@@ -28,8 +28,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from scenegraph.adapters.interaction_events import (
-    EE_KEY, BucketStore, DiscoveryWindow, EpisodeEvidence, InteractionEvent,
-    make_bucket,
+    EE_KEY, GROUP_GAP, GROUP_WINDOW, BucketStore, DiscoveryWindow,
+    EpisodeEvidence, GroupAccumulator, InteractionEvent, make_bucket,
 )
 from scenegraph.adapters.maniskill_scene import scene_entities
 from scenegraph.adapters.privileged_state import (
@@ -68,21 +68,38 @@ class InteractionRecorder:
     """
 
     def __init__(self, env, *, eps_force=0.05, min_vertical_ratio=0.5,
-                 grasp_angle=30, env_idx=0):
+                 grasp_angle=30, env_idx=0, group_gap=GROUP_GAP,
+                 group_window=GROUP_WINDOW):
         self.env = env
         self.env_idx = int(env_idx)
         self.eps_force = float(eps_force)
         self.min_vertical_ratio = float(min_vertical_ratio)
         self.grasp_angle = int(grasp_angle)
         self.episode = EpisodeEvidence()
+        # Contact and support reduce around peak force; a grasp interval keeps
+        # its last positive frame, which is the pose at release.
+        self.groups = {
+            "contact": GroupAccumulator("peak", group_gap, group_window),
+            "support": GroupAccumulator("peak", group_gap, group_window),
+            "grasp": GroupAccumulator("last", group_gap, group_window),
+        }
         self.entities: Optional[List[Any]] = None
         self.keys: Dict[int, str] = {}
         self.frame = 0
 
     def reset_episode(self) -> None:
         self.episode.reset()
+        for acc in self.groups.values():
+            acc.open.clear()
         self.frame = 0
         self.entities = None
+
+    def finalize_episode(self) -> None:
+        """Close groups still open when the episode ended -- a grasp held
+        through success has no release frame to wait for."""
+        for acc in self.groups.values():
+            for event in acc.close_all():
+                self.episode.add(event)
 
     def on_env_reset(self) -> None:
         """Called after every ``env.reset``, including the one inside solve().
@@ -114,11 +131,14 @@ class InteractionRecorder:
             state = get_privileged_state(self.env, self.env_idx)
         self._ee_relations(state)
         self._object_relations(state)
+        for acc in self.groups.values():
+            for event in acc.tick(self.frame):
+                self.episode.add(event)
         self.frame += 1
 
     def _add(self, relation, src, dst, payload):
-        self.episode.add(InteractionEvent(
-            make_bucket(relation, src, dst), self.frame, payload))
+        self.groups[relation].observe(
+            make_bucket(relation, src, dst), self.frame, payload)
 
     def _ee_relations(self, state) -> None:
         tcp = _list(state.tcp_pose_world)
@@ -212,7 +232,8 @@ def collect(args) -> BucketStore:
 
     recorder = InteractionRecorder(
         env, eps_force=args.eps_force,
-        min_vertical_ratio=args.min_vertical_ratio)
+        min_vertical_ratio=args.min_vertical_ratio,
+        group_gap=args.group_gap, group_window=args.group_window)
     box.append(recorder)
 
     store = BucketStore(target=args.target)
@@ -230,6 +251,7 @@ def collect(args) -> BucketStore:
             print(f"[warn] seed {seed}: solver failed: {exc}", flush=True)
         seed += 1
 
+        recorder.finalize_episode()
         succeeded = recorder.episode.success_once
         buckets = ({e.bucket for e in recorder.episode.events}
                    if succeeded else set())
@@ -257,6 +279,13 @@ def collect(args) -> BucketStore:
     print(f"\nattempts={attempts} successes={successes} "
           f"rate={successes / max(attempts, 1):.1%}")
     print(store.report())
+    incidental = store.incidental(args.min_presence)
+    if incidental:
+        print()
+        print(f"incidental (< {args.min_presence:.0%} of episodes) "
+              "-- likely brushes, not task interactions:")
+        for b in incidental:
+            print(f"  {store.presence(b):.0%}  {b}")
     return store
 
 
@@ -275,6 +304,7 @@ def write_shard(store: BucketStore, args) -> Path:
             for b, evs in store.samples.items()
         },
         "incomplete": [str(b) for b in store.incomplete()],
+        "presence": {str(b): store.presence(b) for b in store.buckets()},
         "late": {str(b): n for b, n in store.late.items()},
     }
     with open(path, "wb") as f:
@@ -296,6 +326,12 @@ def parse_args(argv=None):
     p.add_argument("--out", default="data/maniskill_evidence")
     p.add_argument("--eps-force", type=float, default=0.05)
     p.add_argument("--min-vertical-ratio", type=float, default=0.5)
+    p.add_argument("--group-gap", type=int, default=GROUP_GAP,
+                   help="observed steps without the predicate to end a group")
+    p.add_argument("--group-window", type=int, default=GROUP_WINDOW,
+                   help="positive frames averaged around the peak")
+    p.add_argument("--min-presence", type=float, default=0.2,
+                   help="buckets in fewer than this fraction of episodes are reported as incidental, never silently dropped")
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--pilot", action="store_true",
                    help="short run: measure rates and buckets, write no shard")

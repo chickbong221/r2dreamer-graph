@@ -221,6 +221,7 @@ def _recorder(env=None):
 
 class RecorderDetectionTest(unittest.TestCase):
     def _buckets(self, rec):
+        rec.finalize_episode()      # groups only emit when they close
         return {str(e.bucket) for e in rec.episode.events}
 
     def test_scene_excludes_ground_and_robot(self):
@@ -274,17 +275,20 @@ class RecorderDetectionTest(unittest.TestCase):
         rec = _recorder()
         rec.observe({"success": [False]},
                     _FakeState(ee_force={"cube": 1.0}, grasped=["cube"]))
+        rec.finalize_episode()
         store = BucketStore(target=5)
         self.assertEqual(rec.episode.commit(store), 0)
         self.assertEqual(store.buckets(), [])
 
-    def test_successful_episode_commits_every_frame(self):
+    def test_successful_episode_commits_one_sample_per_group(self):
         rec = _recorder()
         rec.observe({}, _FakeState(ee_force={"cube": 1.0}))
         rec.observe({"success": [True]},
                     _FakeState(ee_force={"cube": 1.0}, grasped=["cube"]))
+        rec.finalize_episode()
         store = BucketStore(target=5)
-        self.assertEqual(rec.episode.commit(store), 3)
+        # Two contact frames are one group, plus one grasp interval.
+        self.assertEqual(rec.episode.commit(store), 2)
         self.assertEqual(store.episodes, 1)
 
     def test_reset_clears_the_buffer(self):
@@ -342,3 +346,117 @@ class ReconfigureTest(unittest.TestCase):
         env.scene = self._pegs(10).scene
         self.assertFalse(
             set(map(id, stale)) & set(map(id, env.scene.actors.values())))
+
+
+from scenegraph.adapters.interaction_events import GroupAccumulator
+
+_B = make_bucket("contact", "actor:a", "actor:b")
+
+
+def _run(acc, frames, forces=None, payloads=None):
+    """Feed positive frames, ticking every step in between."""
+    out = []
+    for step in range(max(frames) + 1 + acc.gap):
+        if step in frames:
+            i = frames.index(step)
+            pay = dict(payloads[i]) if payloads else {}
+            pay.setdefault("force", forces[i] if forces else 1.0)
+            acc.observe(_B, step, pay)
+        out.extend(acc.tick(step))
+    return out
+
+
+class GroupAccumulatorTest(unittest.TestCase):
+    def test_single_frame_touch_is_a_group(self):
+        samples = _run(GroupAccumulator("peak"), [3])
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].payload["duration"], 1)
+        self.assertEqual(samples[0].payload["n_frames"], 1)
+
+    def test_short_gap_stays_one_group(self):
+        samples = _run(GroupAccumulator("peak", gap=5), [0, 1, 4, 5])
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].payload["n_frames"], 4)
+
+    def test_five_blank_steps_split_the_group(self):
+        samples = _run(GroupAccumulator("peak", gap=5), [0, 1, 10, 11])
+        self.assertEqual(len(samples), 2)
+        self.assertEqual([s.payload["n_frames"] for s in samples], [2, 2])
+
+    def test_groups_are_never_averaged_together(self):
+        samples = _run(GroupAccumulator("peak", gap=5), [0, 20],
+                       forces=[1.0, 9.0])
+        self.assertEqual([s.payload["peak_force"] for s in samples],
+                         [1.0, 9.0])
+
+    def test_peak_frame_supplies_orientation(self):
+        payloads = [{"obj_pose": [float(i)] * 7} for i in range(5)]
+        samples = _run(GroupAccumulator("peak", gap=5, window=5),
+                       [0, 1, 2, 3, 4], forces=[1, 1, 9, 1, 1],
+                       payloads=payloads)
+        self.assertEqual(samples[0].payload["obj_pose"], [2.0] * 7)
+        self.assertEqual(samples[0].payload["peak_frame"], 2)
+
+    def test_window_caps_the_averaged_frames(self):
+        samples = _run(GroupAccumulator("peak", gap=5, window=3),
+                       list(range(10)))
+        self.assertEqual(samples[0].payload["n_averaged"], 3)
+        self.assertEqual(samples[0].payload["n_frames"], 10)
+
+    def test_vectors_are_averaged_and_normals_renormalized(self):
+        payloads = [{"contact_position": [0.0, 0, 0],
+                     "contact_normal": [3.0, 0, 0]},
+                    {"contact_position": [2.0, 0, 0],
+                     "contact_normal": [0.0, 4.0, 0]}]
+        samples = _run(GroupAccumulator("peak", gap=5), [0, 1],
+                       payloads=payloads)
+        pay = samples[0].payload
+        self.assertEqual(pay["contact_position"], [1.0, 0.0, 0.0])
+        norm = sum(x * x for x in pay["contact_normal"]) ** 0.5
+        self.assertAlmostEqual(norm, 1.0)
+
+    def test_grasp_keeps_the_last_frame_before_release(self):
+        payloads = [{"gripper_width": float(i)} for i in range(4)]
+        samples = _run(GroupAccumulator("last", gap=5), [0, 1, 2, 3],
+                       payloads=payloads)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].payload["gripper_width"], 3.0)
+
+    def test_two_grasp_intervals_give_two_samples(self):
+        samples = _run(GroupAccumulator("last", gap=5), [0, 1, 20, 21])
+        self.assertEqual(len(samples), 2)
+
+    def test_close_all_finalizes_a_grasp_held_at_success(self):
+        acc = GroupAccumulator("last", gap=5)
+        acc.observe(_B, 0, {"force": 1.0, "gripper_width": 0.02})
+        acc.tick(0)
+        self.assertEqual(acc.tick(1), [])       # still open
+        samples = acc.close_all()
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].payload["gripper_width"], 0.02)
+
+
+class PresenceTest(unittest.TestCase):
+    def _commit(self, store, buckets, success=True):
+        ep = EpisodeEvidence()
+        for i, b in enumerate(buckets):
+            ep.add(InteractionEvent(b, i))
+        ep.observe_success(success)
+        ep.commit(store)
+
+    def test_presence_separates_brush_from_interaction(self):
+        store = BucketStore(target=1000)
+        always = make_bucket("grasp", EE_KEY, "actor:cubeA")
+        brush = make_bucket("contact", EE_KEY, "actor:cubeB")
+        for i in range(10):
+            self._commit(store, [always] + ([brush] if i == 0 else []))
+        self.assertEqual(store.presence(always), 1.0)
+        self.assertAlmostEqual(store.presence(brush), 0.1)
+        self.assertEqual(store.incidental(0.2), [brush])
+
+    def test_failed_episodes_do_not_count_toward_presence(self):
+        store = BucketStore()
+        b = make_bucket("grasp", EE_KEY, "actor:cube")
+        self._commit(store, [b], success=False)
+        self.assertEqual(store.episodes, 0)
+        self.assertEqual(store.presence(b), 0.0)
