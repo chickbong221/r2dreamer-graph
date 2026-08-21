@@ -1,0 +1,293 @@
+"""Success-gated interaction collection for normal ManiSkill tasks.
+
+Drives ManiSkill's own motion-planning solutions and records what the robot
+actually did, keeping only episodes that succeeded. No task registry: relation
+buckets are discovered from the scene and from physics.
+
+Single-environment by construction -- the official solutions read ``pose.sp``,
+which requires batch size one, so the sim runs on CPU. Parallelism is multiple
+processes writing separate shards.
+
+Two stages. Discovery runs until no new bucket appears for ``--patience``
+successful episodes; collection then fills the frozen set to ``--target``.
+
+    python -m scenegraph.tools.collect_maniskill_interactions \
+        --env-id PickCube-v1 --target 300 --out data/maniskill_evidence
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import pickle
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+from scenegraph.adapters.interaction_events import (
+    EE_KEY, BucketStore, DiscoveryWindow, EpisodeEvidence, InteractionEvent,
+    make_bucket,
+)
+from scenegraph.adapters.maniskill_scene import scene_entities
+from scenegraph.adapters.privileged_state import (
+    entity_pose_world_array, get_privileged_state, set_merged_view_aliasing,
+)
+from scenegraph.core.entity_identity import stable_entity_key
+
+SCHEMA_VERSION = 1
+
+
+def _pose(entity, env_idx=0):
+    arr = entity_pose_world_array(entity, env_idx)
+    return None if arr is None else np.asarray(arr, dtype=float).tolist()
+
+
+def _list(value):
+    return None if value is None else np.asarray(value, dtype=float).tolist()
+
+
+def success_flag(info, env_idx: int = 0) -> bool:
+    value = info.get("success") if isinstance(info, dict) else None
+    if value is None:
+        return False
+    arr = np.asarray(value.cpu() if hasattr(value, "cpu") else value)
+    if arr.ndim == 0:
+        return bool(arr)
+    return bool(arr.reshape(-1)[min(env_idx, arr.size - 1)])
+
+
+class InteractionRecorder:
+    """Per-step relation detection behind an episode success gate.
+
+    Emits one event per (bucket, step). Grouping those into one sample per
+    physical interaction is the accumulators' job, not this class's.
+    """
+
+    def __init__(self, env, *, eps_force=0.05, min_vertical_ratio=0.5,
+                 grasp_angle=30, env_idx=0):
+        self.env = env
+        self.env_idx = int(env_idx)
+        self.eps_force = float(eps_force)
+        self.min_vertical_ratio = float(min_vertical_ratio)
+        self.grasp_angle = int(grasp_angle)
+        self.episode = EpisodeEvidence()
+        self.entities: List[Any] = []
+        self.keys: Dict[int, str] = {}
+        self.frame = 0
+
+    def reset_episode(self) -> None:
+        self.episode.reset()
+        self.frame = 0
+        self.entities = scene_entities(self.env, self.env_idx)
+        self.keys = {id(e): stable_entity_key(e) for e in self.entities}
+
+    def observe(self, info: Optional[dict] = None, state: Any = None) -> None:
+        """Record one control step. Called once per ``env.step``.
+
+        ``state`` is injectable so the detection rules can be tested without a
+        simulator.
+        """
+        if info is not None:
+            self.episode.observe_success(success_flag(info, self.env_idx))
+        if state is None:
+            state = get_privileged_state(self.env, self.env_idx)
+        self._ee_relations(state)
+        self._object_relations(state)
+        self.frame += 1
+
+    def _add(self, relation, src, dst, payload):
+        self.episode.add(InteractionEvent(
+            make_bucket(relation, src, dst), self.frame, payload))
+
+    def _ee_relations(self, state) -> None:
+        tcp = _list(state.tcp_pose_world)
+        for ent in self.entities:
+            key = self.keys[id(ent)]
+            force = float(state.ee_object_contact_force(ent))
+            grasped = state.is_grasping(ent, max_angle=self.grasp_angle)
+            if force <= self.eps_force and not grasped:
+                continue
+            payload = {
+                "force": force,
+                "tcp_pose": tcp,
+                "obj_pose": _pose(ent, self.env_idx),
+                "gripper_width": state.gripper_width,
+            }
+            if force > self.eps_force:
+                self._add("contact", EE_KEY, key, payload)
+            if grasped:
+                self._add("grasp", EE_KEY, key, dict(payload))
+
+    def _object_relations(self, state) -> None:
+        """Every unordered object pair. These scenes hold few objects, so the
+        one-hop restriction MS-HAB needs for ReplicaCAD is unnecessary."""
+        for a, b in itertools.combinations(self.entities, 2):
+            vec = np.asarray(state.pairwise_force_vector(a, b), dtype=float)
+            force = float(np.linalg.norm(vec))
+            if force <= self.eps_force:
+                continue
+            ka, kb = self.keys[id(a)], self.keys[id(b)]
+            payload = {
+                "force": force,
+                "force_vector": vec.tolist(),
+                "pose_a": _pose(a, self.env_idx),
+                "pose_b": _pose(b, self.env_idx),
+            }
+            self._add("contact", ka, kb, payload)
+
+            # "force on a due to b": fz < 0 means a carries b.
+            if abs(float(vec[2])) / force < self.min_vertical_ratio:
+                continue
+            if float(vec[2]) < 0.0:
+                self._add("support", ka, kb, dict(payload))
+            else:
+                self._add("support", kb, ka, dict(payload))
+
+
+def make_env(env_id: str, recorder_box: list):
+    """Env wrapped so every control step reaches the recorder.
+
+    The solutions call ``planner.env.step``, and the planner is constructed
+    with whatever ``solve`` was handed, so wrapping here is enough.
+    """
+    import gymnasium as gym
+    import mani_skill.envs  # noqa: F401
+
+    class _Wrapper(gym.Wrapper):
+        def step(self, action):
+            out = self.env.step(action)
+            if recorder_box:
+                recorder_box[0].observe(out[4])
+            return out
+
+    env = gym.make(env_id, obs_mode="none", control_mode="pd_joint_pos",
+                   render_mode="rgb_array", sim_backend="cpu")
+    return _Wrapper(env)
+
+
+def get_solver(env_id: str):
+    from mani_skill.examples.motionplanning.panda.run import MP_SOLUTIONS
+
+    if env_id not in MP_SOLUTIONS:
+        raise SystemExit(
+            f"no motion-planning solution for {env_id}; "
+            f"have {sorted(MP_SOLUTIONS)}"
+        )
+    return MP_SOLUTIONS[env_id]
+
+
+def collect(args) -> BucketStore:
+    box: list = []
+    env = make_env(args.env_id, box)
+    solve = get_solver(args.env_id)
+    env.reset(seed=args.seed)
+    set_merged_view_aliasing(env, True)
+
+    recorder = InteractionRecorder(
+        env, eps_force=args.eps_force,
+        min_vertical_ratio=args.min_vertical_ratio)
+    box.append(recorder)
+
+    store = BucketStore(target=args.target)
+    window = DiscoveryWindow(patience=args.patience)
+    seed = args.seed
+    attempts = successes = 0
+    started = time.time()
+
+    while attempts < args.max_attempts:
+        attempts += 1
+        recorder.reset_episode()
+        try:
+            solve(env, seed=seed, debug=False, vis=False)
+        except Exception as exc:                       # noqa: BLE001
+            print(f"[warn] seed {seed}: solver failed: {exc}", flush=True)
+        seed += 1
+
+        succeeded = recorder.episode.success_once
+        buckets = ({e.bucket for e in recorder.episode.events}
+                   if succeeded else set())
+        committed = recorder.episode.commit(store)
+        if succeeded:
+            successes += 1
+            if store.frozen is None:
+                window.observe(buckets)
+                if window.settled:
+                    store.freeze()
+                    print(f"[prep] discovery settled after {successes} "
+                          f"successes: {len(store.buckets())} buckets",
+                          flush=True)
+        if attempts % args.log_every == 0:
+            rate = successes / max(attempts, 1)
+            print(f"[{attempts}] success={successes} ({rate:.0%}) "
+                  f"buckets={len(store.buckets())} "
+                  f"committed={committed} "
+                  f"{time.time() - started:.0f}s", flush=True)
+        if store.frozen is not None and store.is_done():
+            print("[prep] every frozen bucket reached target", flush=True)
+            break
+
+    env.close()
+    print(f"\nattempts={attempts} successes={successes} "
+          f"rate={successes / max(attempts, 1):.1%}")
+    print(store.report())
+    return store
+
+
+def write_shard(store: BucketStore, args) -> Path:
+    out = Path(args.out) / args.env_id
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"shard_{args.shard:03d}.pkl"
+    payload = {
+        "_schema_version": SCHEMA_VERSION,
+        "env_id": args.env_id,
+        "target": args.target,
+        "episodes": store.episodes,
+        "seen_counts": {str(b): n for b, n in store.seen_counts.items()},
+        "samples": {
+            str(b): [{"frame": e.frame, "payload": e.payload} for e in evs]
+            for b, evs in store.samples.items()
+        },
+        "incomplete": [str(b) for b in store.incomplete()],
+        "late": {str(b): n for b, n in store.late.items()},
+    }
+    with open(path, "wb") as f:
+        pickle.dump(payload, f)
+    print(f"wrote {path}")
+    return path
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Collect ManiSkill interactions")
+    p.add_argument("--env-id", default="PickCube-v1")
+    p.add_argument("--target", type=int, default=300,
+                   help="samples per discovered bucket")
+    p.add_argument("--patience", type=int, default=25,
+                   help="successful episodes with no new bucket before freeze")
+    p.add_argument("--max-attempts", type=int, default=5000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--shard", type=int, default=0)
+    p.add_argument("--out", default="data/maniskill_evidence")
+    p.add_argument("--eps-force", type=float, default=0.05)
+    p.add_argument("--min-vertical-ratio", type=float, default=0.5)
+    p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--pilot", action="store_true",
+                   help="short run: measure rates and buckets, write no shard")
+    return p.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    if args.pilot:
+        args.max_attempts = min(args.max_attempts, 25)
+        args.patience = 10 ** 6      # never freeze; report what appears
+    store = collect(args)
+    if not args.pilot:
+        write_shard(store, args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
