@@ -7,6 +7,11 @@ assets mined at num_envs=1 name actor:peg_0 while a vectorised run emits keys
 the entity vocabulary has never seen.
 """
 
+import importlib.util
+import json
+import os
+import subprocess
+import sys
 import unittest
 from types import SimpleNamespace
 
@@ -145,29 +150,55 @@ class MergedViewIdentityTest(unittest.TestCase):
         self.assertEqual(after, {"actor:peg", "actor:box_with_hole"})
 
 
+def _worker_keys(num_envs, env_idx, backend):
+    """Build one env and print its per-env stable keys. Subprocess entry point.
+
+    SAPIEN enables GPU PhysX once per process, so the CPU collection shape and
+    the GPU runtime shape cannot be built in one interpreter.
+    """
+    import gymnasium as gym
+    import mani_skill.envs  # noqa: F401
+
+    env = gym.make("PegInsertionSide-v1", num_envs=num_envs,
+                   sim_backend=backend)
+    try:
+        env.reset(seed=0)
+        set_merged_view_aliasing(env, True)
+        seg = per_env_segmentation_id_map(env, env_idx)
+        keys = sorted(stable_entity_key(e) for e in seg.values())
+        print("KEYS " + json.dumps(keys))
+    finally:
+        env.close()
+
+
 @unittest.skipUnless(
-    __import__("importlib").util.find_spec("mani_skill"), "needs ManiSkill"
+    importlib.util.find_spec("mani_skill"), "needs ManiSkill"
 )
 class RealPegInsertionIdentityTest(unittest.TestCase):
     """Server-only: the same assertion against the real task."""
 
-    def _keys(self, num_envs, env_idx):
-        import gymnasium as gym
-        import mani_skill.envs  # noqa: F401
-
-        env = gym.make("PegInsertionSide-v1", num_envs=num_envs,
-                       sim_backend="auto")
-        try:
-            env.reset(seed=0)
-            set_merged_view_aliasing(env, True)
-            seg = per_env_segmentation_id_map(env, env_idx)
-            return {stable_entity_key(e) for e in seg.values()}
-        finally:
-            env.close()
+    def _keys(self, num_envs, env_idx, backend):
+        out = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--keys",
+             str(num_envs), str(env_idx), backend],
+            capture_output=True, text=True, timeout=900,
+        )
+        line = next((l for l in out.stdout.splitlines()
+                     if l.startswith("KEYS ")), None)
+        if line is None:
+            self.fail(f"worker rc={out.returncode}\n{out.stdout}\n{out.stderr}")
+        return set(json.loads(line[len("KEYS "):]))
 
     def test_peg_and_box_keys_match_across_env_counts(self):
-        one = self._keys(1, 0)
+        one = self._keys(1, 0, "cpu")      # collection shape
         self.assertIn("actor:peg", one)
         self.assertIn("actor:box_with_hole", one)
-        many = self._keys(16, 9)
+        many = self._keys(16, 9, "gpu")    # runtime shape
         self.assertEqual(one, many)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--keys":
+        _worker_keys(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
+    else:
+        unittest.main()
