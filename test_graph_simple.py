@@ -1080,15 +1080,27 @@ class EnvConfigPlumbingTest(unittest.TestCase):
     """The env config is flattened key by key, so a new key is easy to drop."""
 
     def test_every_env_graph_key_is_forwarded(self):
-        env_config = OmegaConf.load("configs/env/mshab.yaml")
-        declared = set(env_config.graph.keys())
-        forwarded = set(_GRAPH_CONFIG_KEYS) | {"cameras"}
-        self.assertEqual(
-            declared - forwarded,
-            set(),
-            "configs/env/mshab.yaml declares graph keys the adapter never "
-            "passes to build_graph_obs; they would be silently ignored",
-        )
+        for name in ("mshab", "maniskill"):
+            env_config = OmegaConf.load(f"configs/env/{name}.yaml")
+            declared = set(env_config.graph.keys())
+            forwarded = set(_GRAPH_CONFIG_KEYS) | {"cameras"}
+            self.assertEqual(
+                declared - forwarded, set(),
+                f"configs/env/{name}.yaml declares graph keys the adapter "
+                "never passes to build_graph_obs; they would be ignored",
+            )
+
+    def test_every_forwarded_key_is_declared(self):
+        """The other direction: graph_observation_config getattrs every key,
+        so one added here and not to a config raises at env construction."""
+        for name in ("mshab", "maniskill"):
+            declared = set(
+                OmegaConf.load(f"configs/env/{name}.yaml").graph.keys())
+            self.assertEqual(
+                set(_GRAPH_CONFIG_KEYS) - declared, set(),
+                f"configs/env/{name}.yaml is missing graph keys the adapter "
+                "reads; the env would fail to build",
+            )
 
     def test_pooled_stays_the_default_state_mode(self):
         # The frozen baseline must not move because slot mode exists.
@@ -1192,6 +1204,7 @@ class EnvConfigPlumbingTest(unittest.TestCase):
             "dino_model": "dinov2_vits14_reg", "dino_res": 112,
             "dino_weights": "", "staleness_enabled": False,
             "bypass_teemo": False, "state_mode": "pooled",
+            "edge_contract": "legacy_v1", "use_target_flag": True,
         })
         out = graph_observation_config(graph_config, ["fetch_head"])
         self.assertIs(out["simple"], True)
