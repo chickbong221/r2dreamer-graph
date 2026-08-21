@@ -460,3 +460,58 @@ class PresenceTest(unittest.TestCase):
         self._commit(store, [b], success=False)
         self.assertEqual(store.episodes, 0)
         self.assertEqual(store.presence(b), 0.0)
+
+
+class IncidentalExclusionTest(unittest.TestCase):
+    """A bucket seen in 1 episode of 25 cannot reach 300, so it must not
+    hold the run open."""
+
+    def _store(self, episodes=25, brush_every=25, target=5):
+        store = BucketStore(target=target)
+        always = make_bucket("grasp", EE_KEY, "actor:cubeA")
+        brush = make_bucket("contact", EE_KEY, "actor:cubeB")
+        for i in range(episodes):
+            ep = EpisodeEvidence()
+            ep.add(InteractionEvent(always, i))
+            if i % brush_every == 0:
+                ep.add(InteractionEvent(brush, i))
+            ep.observe_success(True)
+            ep.commit(store)
+        return store, always, brush
+
+    def test_run_would_never_finish_without_exclusion(self):
+        store, _, brush = self._store()
+        store.freeze(min_presence=0.0)
+        self.assertIn(brush, store.incomplete())
+        self.assertFalse(store.is_done())
+
+    def test_freeze_excludes_incidental_and_lets_the_run_finish(self):
+        store, always, brush = self._store()
+        store.freeze(min_presence=0.2)
+        self.assertIn(brush, store.excluded)
+        self.assertNotIn(brush, store.incomplete())
+        self.assertIn(always, store.complete_buckets())
+        self.assertTrue(store.is_done())
+
+    def test_excluded_buckets_stop_collecting_but_stay_reported(self):
+        store, _, brush = self._store()
+        store.freeze(min_presence=0.2)
+        before = len(store.samples[brush])
+        ep = EpisodeEvidence()
+        ep.add(InteractionEvent(brush, 99))
+        ep.observe_success(True)
+        ep.commit(store)
+        self.assertEqual(len(store.samples[brush]), before)
+        self.assertEqual(store.late[brush], 0)   # excluded, not "late"
+        self.assertIn("SKIP", store.report())
+
+    def test_excluded_never_reaches_the_whitelist(self):
+        store, always, brush = self._store()
+        store.freeze(min_presence=0.2)
+        self.assertEqual(store.complete_buckets(), [always])
+
+    def test_frequent_buckets_are_not_excluded(self):
+        store, always, _ = self._store(brush_every=1)
+        store.freeze(min_presence=0.2)
+        self.assertEqual(store.excluded, {})
+        self.assertEqual(len(store.complete_buckets()), 2)

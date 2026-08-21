@@ -105,9 +105,15 @@ class BucketStore:
         self.episode_presence: Dict[BucketKey, int] = defaultdict(int)
         # Buckets rejected because discovery had already frozen.
         self.late: Dict[BucketKey, int] = defaultdict(int)
+        # Buckets frozen out as incidental. Reported, never chased: an object
+        # the gripper brushes in one episode of twenty cannot reach target, and
+        # waiting for it would stall the whole run.
+        self.excluded: Dict[BucketKey, float] = {}
 
     def add(self, event: InteractionEvent) -> bool:
         bucket = event.bucket
+        if bucket in self.excluded:
+            return False
         if self.frozen is not None and bucket not in self.frozen:
             self.late[bucket] += 1
             return False
@@ -133,9 +139,20 @@ class BucketStore:
         """Buckets too rare across episodes to be a task interaction."""
         return [b for b in self.buckets() if self.presence(b) < min_presence]
 
-    def freeze(self) -> None:
-        """Stop admitting new buckets. Existing ones keep filling."""
-        self.frozen = set(self.samples) | set(self.seen_counts)
+    def freeze(self, min_presence: float = 0.0) -> None:
+        """Stop admitting new buckets. Existing ones keep filling.
+
+        Buckets below ``min_presence`` are frozen out here rather than at the
+        end: discovery has settled by now, so presence is measured over enough
+        episodes to trust, and excluding them is what lets the run finish.
+        """
+        known = set(self.samples) | set(self.seen_counts)
+        if min_presence > 0.0:
+            for bucket in sorted(known):
+                rate = self.presence(bucket)
+                if rate < min_presence:
+                    self.excluded[bucket] = rate
+        self.frozen = known - set(self.excluded)
 
     def buckets(self) -> List[BucketKey]:
         return sorted(set(self.samples) | set(self.seen_counts))
@@ -145,12 +162,18 @@ class BucketStore:
                 if len(self.samples[b]) >= self.target]
 
     def incomplete(self) -> List[BucketKey]:
+        """Buckets still short of target, excluding incidental ones."""
         return [b for b in self.buckets()
-                if len(self.samples[b]) < self.target]
+                if b not in self.excluded
+                and len(self.samples[b]) < self.target]
 
     def is_done(self) -> bool:
-        buckets = self.buckets()
-        return bool(buckets) and not self.incomplete()
+        wanted = [b for b in self.buckets() if b not in self.excluded]
+        return bool(wanted) and not self.incomplete()
+
+    def complete_buckets(self) -> List[BucketKey]:
+        """The only buckets a whitelist may be built from."""
+        return [b for b in self.complete() if b not in self.excluded]
 
     def report(self) -> str:
         lines = [f"episodes committed: {self.episodes}",
@@ -161,6 +184,8 @@ class BucketStore:
             lines.append(
                 f"  {mark} {have:4d}/{self.target}  (seen {seen}, "
                 f"in {self.presence(b):.0%} of episodes)  {b}")
+        for b, rate in sorted(self.excluded.items()):
+            lines.append(f"  SKIP  incidental at {rate:.0%} of episodes: {b}")
         for b, n in sorted(self.late.items()):
             lines.append(f"  LATE  discovered after freeze, {n} events: {b}")
         return "\n".join(lines)

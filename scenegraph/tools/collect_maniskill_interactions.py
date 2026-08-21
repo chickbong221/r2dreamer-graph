@@ -261,9 +261,10 @@ def collect(args) -> BucketStore:
             if store.frozen is None:
                 window.observe(buckets)
                 if window.settled:
-                    store.freeze()
+                    store.freeze(args.min_presence)
                     print(f"[prep] discovery settled after {successes} "
-                          f"successes: {len(store.buckets())} buckets",
+                          f"successes: {len(store.frozen)} buckets kept, "
+                          f"{len(store.excluded)} incidental",
                           flush=True)
         if attempts % args.log_every == 0:
             rate = successes / max(attempts, 1)
@@ -305,6 +306,8 @@ def write_shard(store: BucketStore, args) -> Path:
         },
         "incomplete": [str(b) for b in store.incomplete()],
         "presence": {str(b): store.presence(b) for b in store.buckets()},
+        "excluded": {str(b): r for b, r in store.excluded.items()},
+        "complete": [str(b) for b in store.complete_buckets()],
         "late": {str(b): n for b, n in store.late.items()},
     }
     with open(path, "wb") as f:
