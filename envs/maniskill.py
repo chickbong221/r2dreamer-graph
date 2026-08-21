@@ -32,6 +32,7 @@ _GRAPH_CONFIG_KEYS = (
     # boxes and no identity code, slot graph-simple the reverse, so the env has
     # to know the state mode too.
     "enabled", "simple", "state_mode", "uid_vocab", "mshab_task", "entity_vocab",
+    "edge_contract", "use_target_flag",
     "thresholds_path", "whitelist_dir", "n_max", "e_max", "k_persist",
     "app_dim", "dino_model", "dino_res", "dino_weights", "staleness_enabled",
     "bypass_teemo",
@@ -39,6 +40,7 @@ _GRAPH_CONFIG_KEYS = (
 
 _GRAPH_CONFIG_CASTS = {
     "enabled": bool,
+    "use_target_flag": bool,
     "simple": bool,
     "staleness_enabled": bool,
     "bypass_teemo": bool,

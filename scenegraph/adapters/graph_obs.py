@@ -37,6 +37,7 @@ from .graph_pack import (
     pack_graph,
 )
 from .graph_vocab import GraphVocab, build_graph_vocab
+from ..core.relation_rules import EDGE_CONTRACT_LEGACY
 from ..configs.loader import load_config as load_teemo_config
 from ..core.graph_builder import GraphBuilder
 
@@ -154,6 +155,7 @@ class GraphObsBuilder:
         num_envs: int,
         teemo_cfg: dict,
         vocab: GraphVocab,
+        use_target_flag: bool = True,
         n_max: int,
         e_max: int,
         cameras: List[str],
@@ -170,6 +172,7 @@ class GraphObsBuilder:
         self.sensor_source = sensor_source
         self.num_envs = int(num_envs)
         self.vocab = vocab
+        self.use_target_flag = bool(use_target_flag)
         self.n_max = int(n_max)
         self.e_max = int(e_max)
         self.bypass_teemo = bool(bypass_teemo)
@@ -211,7 +214,8 @@ class GraphObsBuilder:
                              uid_vocab=self.uid_vocab,
                              appearance_enabled=self.appearance_enabled,
                              bbox_enabled=self.bbox_enabled,
-                             uids_enabled=self.uids_enabled)
+                             uids_enabled=self.uids_enabled,
+                             use_target_flag=self.use_target_flag)
             )
         self._frames = np.zeros(self.num_envs, dtype=np.int64)
         # Last packed arrays per env, re-emitted on terminal frames whose
@@ -588,6 +592,7 @@ class GraphObsBuilder:
                     n_max=self.n_max, e_max=self.e_max,
                     n_cams=self.n_cams, app_dim=self.app_dim,
                     schema=self.schema, uid_vocab=self.uid_vocab,
+                    use_target_flag=self.use_target_flag,
                 )
                 self._last_packed[i] = out
                 self._fact_drops[i] = float(
@@ -645,6 +650,10 @@ def build_graph_obs(
         teemo_cfg["selection"]["k_persist"] = int(graph_cfg["k_persist"])
     if graph_cfg.get("whitelist_dir"):
         teemo_cfg["whitelist_dir"] = graph_cfg["whitelist_dir"]
+    contract = str(graph_cfg.get("edge_contract") or EDGE_CONTRACT_LEGACY)
+    teemo_cfg["edge_contract"] = contract
+    use_target_flag = bool(graph_cfg.get("use_target_flag", True))
+    teemo_cfg["use_target_flag"] = use_target_flag
     if teemo_cfg.get("whitelist_dir") is None:
         raise ValueError(
             "graph: whitelist_dir is not set in the loaded config; set "
@@ -652,7 +661,7 @@ def build_graph_obs(
         )
 
     _verify_whitelist_coverage(env, teemo_cfg["whitelist_dir"], task_group)
-    vocab = build_graph_vocab(teemo_cfg["whitelist_dir"])
+    vocab = build_graph_vocab(teemo_cfg["whitelist_dir"], contract)
     if vocab.sizes["entity"] > np.iinfo(np.uint8).max + 1:
         raise ValueError(
             f"graph: entity vocabulary has {vocab.sizes['entity']} entries; "
@@ -708,6 +717,7 @@ def build_graph_obs(
         num_envs=num_envs,
         teemo_cfg=teemo_cfg,
         vocab=vocab,
+        use_target_flag=use_target_flag,
         n_max=n_max,
         e_max=e_max,
         cameras=list(cameras),

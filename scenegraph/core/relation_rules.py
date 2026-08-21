@@ -71,8 +71,28 @@ TEMPORAL_RELATIONS = frozenset(SPATIAL_RELATIONS + AFFORDANCE_RELATIONS)
 NOT_HOLDS = "not-holds"
 HOLDS = "holds"
 UNOBSERVED = "unobserved"
+SRC_HOLDS = "src-holds"
+DST_HOLDS = "dst-holds"
+
+# Edge contracts. ``legacy_v1`` is MS-HAB as shipped: support and contain emit
+# both orderings, and object pairs follow registry order. ``canonical_v2`` emits
+# one edge per unordered pair in stable key order and moves the role into the
+# label, so a pair's direction never depends on whether the predicate holds.
+EDGE_CONTRACT_LEGACY = "legacy_v1"
+EDGE_CONTRACT_CANONICAL = "canonical_v2"
+EDGE_CONTRACTS = (EDGE_CONTRACT_LEGACY, EDGE_CONTRACT_CANONICAL)
+
+# Physical relations whose direction carries meaning.
+DIRECTED_RELATIONS: Tuple[str, ...] = ("support", "contain")
+# Their affordance twins. Role orientation comes from mined components, which
+# are fixed for the episode, so these stay in COMPAT_LABELS and only collapse
+# to a single emission.
+DIRECTED_COMPAT_RELATIONS: Tuple[str, ...] = (
+    "support-compatibility", "contain-compatibility",
+)
 
 PHYSICAL_LABELS: List[str] = [NOT_HOLDS, HOLDS]
+DIRECTIONAL_PHYSICAL_LABELS: List[str] = [NOT_HOLDS, SRC_HOLDS, DST_HOLDS]
 COMPAT_BIN_LABELS: List[str] = ["match", "partial-match", "poor-match"]
 COMPAT_LABELS: List[str] = COMPAT_BIN_LABELS + [UNOBSERVED]
 SPATIAL_LABELS: Dict[str, List[str]] = {
@@ -86,11 +106,28 @@ CHANGE_LABELS: List[str] = [
 ]
 
 # Absolute-state vocabulary per relation, used by the encoder and the decoder.
-ABS_LABELS: Dict[str, List[str]] = {
-    **{r: PHYSICAL_LABELS for r in PHYSICAL_RELATIONS},
-    **SPATIAL_LABELS,
-    **{r: COMPAT_LABELS for r in AFFORDANCE_RELATIONS},
-}
+def abs_labels_for(contract: str = EDGE_CONTRACT_LEGACY) -> Dict[str, List[str]]:
+    """Legal absolute labels per relation, for one edge contract."""
+    if contract not in EDGE_CONTRACTS:
+        raise ValueError(
+            f"unknown edge_contract {contract!r}; have {list(EDGE_CONTRACTS)}"
+        )
+    labels: Dict[str, List[str]] = {
+        **{r: PHYSICAL_LABELS for r in PHYSICAL_RELATIONS},
+        **SPATIAL_LABELS,
+        **{r: COMPAT_LABELS for r in AFFORDANCE_RELATIONS},
+    }
+    if contract == EDGE_CONTRACT_CANONICAL:
+        for relation in DIRECTED_RELATIONS:
+            labels[relation] = DIRECTIONAL_PHYSICAL_LABELS
+    return labels
+
+
+def edge_contract(cfg: dict) -> str:
+    return str(cfg.get("edge_contract") or EDGE_CONTRACT_LEGACY)
+
+
+ABS_LABELS: Dict[str, List[str]] = abs_labels_for(EDGE_CONTRACT_LEGACY)
 
 # Label sets that pair with binned edges. Compatibility bins only cover the
 # three scored labels; ``unobserved`` is assigned outside the binning path.
@@ -523,8 +560,26 @@ def ee_object_affordance_edges(
 # --------------------------------------------------------------------------- #
 # object -> object
 # --------------------------------------------------------------------------- #
-def _object_pairs(graph: Graph) -> List[Tuple[Node, Node]]:
+def pair_sort_key(node: Node) -> Tuple[str, str]:
+    """Cross-episode ordering key. ``whitelist_key`` is semantic and stable;
+    ``node_id`` separates instances that share one key."""
+    attrs = node.attributes or {}
+    return (str(attrs.get("whitelist_key") or ""), str(node.node_id))
+
+
+def _object_pairs(
+    graph: Graph, contract: str = EDGE_CONTRACT_LEGACY,
+) -> List[Tuple[Node, Node]]:
+    """Unordered object pairs.
+
+    Legacy inherits registry order, which shifts as nodes arrive, are evicted
+    and reuse slots -- so a pair's ``(a, b)`` orientation is not stable across
+    frames. Canonical sorts by ``pair_sort_key`` instead, which is what lets a
+    single stored edge mean the same thing every frame.
+    """
     objs = [n for n in _visible_objects(graph) if n.segmentation_ids]
+    if contract == EDGE_CONTRACT_CANONICAL:
+        objs = sorted(objs, key=pair_sort_key)
     out: List[Tuple[Node, Node]] = []
     for i in range(len(objs)):
         for j in range(i + 1, len(objs)):
@@ -553,8 +608,9 @@ def object_object_physical_edges(
 
     All three are evaluated independently -- a supported object in contact with
     its supporter reports both. ``contact`` is undirected and emitted once per
-    pair; ``support`` and ``contain`` are directed and emitted for both
-    orderings, with at most one of the two labelled ``holds``.
+    pair. Under legacy, ``support`` and ``contain`` emit both orderings with at
+    most one labelled ``holds``; under canonical they emit once in stable key
+    order and name the role in the label.
 
     Pairs whose centers exceed the maximum plausible contact distance skip the
     SAPIEN force query and report ``not-holds`` directly: two rigid bodies
@@ -564,9 +620,11 @@ def object_object_physical_edges(
     min_vertical_ratio = cfg["support"].get("min_vertical_force_ratio", 0.5)
     pair_force_max_distance = float(cfg.get("pair_force_max_distance", 2.0))
     aff_set = cfg.get("affordance_set")
+    contract = edge_contract(cfg)
+    canonical = contract == EDGE_CONTRACT_CANONICAL
 
     edges: List[Edge] = []
-    for a, b in _object_pairs(graph):
+    for a, b in _object_pairs(graph, contract):
         ta, tb = interaction_types(a), interaction_types(b)
         want_contact = _both(ta, tb, "contact")
         want_support = _both(ta, tb, "support")
@@ -575,6 +633,7 @@ def object_object_physical_edges(
             continue
 
         if want_contain and aff_set is not None:
+            oriented = []
             for container, containee in ((a, b), (b, a)):
                 container_comps = lookup_contain_components(aff_set, container)
                 key_comps = lookup_key_components(aff_set, containee)
@@ -586,11 +645,32 @@ def object_object_physical_edges(
                     )
                     for cc in container_comps for kc in key_comps
                 )
-                edges.append(Edge(
-                    container.node_id, containee.node_id, "contain",
-                    HOLDS if held else NOT_HOLDS, raw_value=float(held),
-                    attributes={"contain_role": "container"},
-                ))
+                oriented.append((container, containee, held))
+            if canonical:
+                if len(oriented) > 1:
+                    raise ValueError(
+                        f"contain role is ambiguous for "
+                        f"{a.node_id!r}/{b.node_id!r}: both orientations have "
+                        "mined components. Extend the schema rather than "
+                        "emitting two edges."
+                    )
+                if oriented:
+                    container, _, held = oriented[0]
+                    label = NOT_HOLDS
+                    if held:
+                        label = SRC_HOLDS if container is a else DST_HOLDS
+                    edges.append(Edge(
+                        a.node_id, b.node_id, "contain", label,
+                        raw_value=float(held),
+                        attributes={"contain_role": "container"},
+                    ))
+            else:
+                for container, containee, held in oriented:
+                    edges.append(Edge(
+                        container.node_id, containee.node_id, "contain",
+                        HOLDS if held else NOT_HOLDS, raw_value=float(held),
+                        attributes={"contain_role": "container"},
+                    ))
 
         if not (want_contact or want_support):
             continue
@@ -631,14 +711,26 @@ def object_object_physical_edges(
             if in_contact and force > 0.0:
                 if abs(float(force_vector[2])) / force >= min_vertical_ratio:
                     supporter = a if float(force_vector[2]) < 0.0 else b
-            for src, dst in ((a, b), (b, a)):
-                holds = supporter is src
+            if canonical:
+                label = NOT_HOLDS
+                if supporter is a:
+                    label = SRC_HOLDS
+                elif supporter is b:
+                    label = DST_HOLDS
                 edges.append(Edge(
-                    src.node_id, dst.node_id, "support",
-                    HOLDS if holds else NOT_HOLDS,
-                    raw_value=force if holds else 0.0,
+                    a.node_id, b.node_id, "support", label,
+                    raw_value=force if supporter is not None else 0.0,
                     attributes={"support_role": "supporter"},
                 ))
+            else:
+                for src, dst in ((a, b), (b, a)):
+                    holds = supporter is src
+                    edges.append(Edge(
+                        src.node_id, dst.node_id, "support",
+                        HOLDS if holds else NOT_HOLDS,
+                        raw_value=force if holds else 0.0,
+                        attributes={"support_role": "supporter"},
+                    ))
     return edges
 
 
@@ -683,7 +775,9 @@ def object_object_affordance_edges(
     norm = _compat_norm(cfg)
 
     edges: List[Edge] = []
-    for a, b in _object_pairs(graph):
+    contract = edge_contract(cfg)
+    canonical = contract == EDGE_CONTRACT_CANONICAL
+    for a, b in _object_pairs(graph, contract):
         a_xyz, b_xyz = _xyz(a), _xyz(b)
         ta, tb = interaction_types(a), interaction_types(b)
         d = planar_distance_xyz(a_xyz, b_xyz)
@@ -710,11 +804,20 @@ def object_object_affordance_edges(
                 ))
 
         if support_spec is not None and _both(ta, tb, "support"):
+            oriented = []
             for supporter, supported in ((a, b), (b, a)):
                 sup_comps = lookup_support_components(aff_set, supporter)
                 bot_comps = lookup_bottom_components(aff_set, supported)
-                if not sup_comps or not bot_comps:
-                    continue
+                if sup_comps and bot_comps:
+                    oriented.append((supporter, supported, sup_comps, bot_comps))
+            if canonical and len(oriented) > 1:
+                raise ValueError(
+                    f"support-compatibility role is ambiguous for "
+                    f"{a.node_id!r}/{b.node_id!r}: both orientations have "
+                    "mined components. Extend the schema rather than emitting "
+                    "two edges."
+                )
+            for supporter, supported, sup_comps, bot_comps in oriented:
                 score = None
                 if scored:
                     meas = support_compatibility(
@@ -736,11 +839,20 @@ def object_object_affordance_edges(
                 ))
 
         if contain_spec is not None and _both(ta, tb, "contain"):
+            oriented = []
             for container, containee in ((a, b), (b, a)):
                 con_comps = lookup_contain_components(aff_set, container)
                 key_comps = lookup_key_components(aff_set, containee)
-                if not con_comps or not key_comps:
-                    continue
+                if con_comps and key_comps:
+                    oriented.append((container, containee, con_comps, key_comps))
+            if canonical and len(oriented) > 1:
+                raise ValueError(
+                    f"contain-compatibility role is ambiguous for "
+                    f"{a.node_id!r}/{b.node_id!r}: both orientations have "
+                    "mined components. Extend the schema rather than emitting "
+                    "two edges."
+                )
+            for container, containee, con_comps, key_comps in oriented:
                 score = None
                 if scored:
                     meas = contain_compatibility(

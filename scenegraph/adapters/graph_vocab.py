@@ -21,8 +21,10 @@ from ..core.entity_identity import normalize_asset_key
 from ..core.relation_rules import (
     ABS_LABELS,
     CHANGE_LABELS,
+    EDGE_CONTRACT_LEGACY,
     RELATION_TYPES,
     TEMPORAL_RELATIONS,
+    abs_labels_for,
 )
 
 
@@ -106,10 +108,13 @@ def build_relation_vocab() -> Vocab:
     return Vocab(token_to_id=_index(list(RELATION_TYPES)))
 
 
-def build_absolute_vocab() -> Vocab:
+def build_absolute_vocab(contract: str = EDGE_CONTRACT_LEGACY) -> Vocab:
+    """sigma for one edge contract. canonical_v2 adds the two directional
+    physical labels, so it is two tokens wider than legacy_v1."""
+    labels = abs_labels_for(contract)
     seen: List[str] = []
     for relation in RELATION_TYPES:
-        for label in ABS_LABELS[relation]:
+        for label in labels[relation]:
             if label not in seen:
                 seen.append(label)
     return Vocab(token_to_id=_index(seen))
@@ -154,17 +159,20 @@ def build_entity_vocab(whitelist_dir: str) -> EntityVocab:
     return EntityVocab(token_to_id={k: i for i, k in enumerate(keys)})
 
 
-def build_graph_vocab(whitelist_dir: str) -> GraphVocab:
+def build_graph_vocab(
+    whitelist_dir: str, contract: str = EDGE_CONTRACT_LEGACY,
+) -> GraphVocab:
     entity = build_entity_vocab(whitelist_dir)
     relation = build_relation_vocab()
-    absolute = build_absolute_vocab()
+    absolute = build_absolute_vocab(contract)
     temporal = build_temporal_vocab()
+    labels = abs_labels_for(contract)
 
     abs_valid = np.zeros((len(relation), len(absolute)), dtype=bool)
     temp_valid = np.zeros((len(relation),), dtype=bool)
     for name in RELATION_TYPES:
         rid = relation.encode(name)
-        for label in ABS_LABELS[name]:
+        for label in labels[name]:
             abs_valid[rid, absolute.encode(label)] = True
         temp_valid[rid] = name in TEMPORAL_RELATIONS
 

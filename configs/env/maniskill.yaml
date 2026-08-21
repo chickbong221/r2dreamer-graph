@@ -1,0 +1,62 @@
+# Normal ManiSkill (non-MS-HAB) tabletop tasks.
+#
+# Two things differ from mshab.yaml and nothing else does: there is no language
+# instruction, and there is no subtask target. The second is load-bearing --
+# progress.py scores EE-to-target facts only, so a targetless run has no
+# shaping signal and trains on the environment reward alone.
+task: maniskill_PickCube-v1
+steps: 1e7
+env_num: 126
+eval_episode_num: 10
+action_repeat: 1
+train_ratio: 64
+time_limit: 100
+
+seed: ${seed}
+device: ${device}
+
+eval_time_limit: 200
+obs_mode: rgb+segmentation
+sim_backend: gpu
+control_mode: ''
+reward_mode: normalized_dense
+shader_dir: minimal
+nonprivileged_obs: false
+sim_config: {}
+size: [112, 112]
+cameras: [base_camera, hand_camera]
+
+# No instruction key: the encoder reads state only.
+encoder:
+  mlp_keys: '^state$'
+  cnn_keys: '^image_(base|hand)$'
+decoder:
+  mlp_keys: '^state$'
+  cnn_keys: '^image_(base|hand)$'
+
+# Targetless: no progress head, no progress critic, no shaping.
+progress:
+  enabled: false
+  beta: 0.0
+
+graph:
+  enabled: ${model.graph.enabled}
+  simple: ${model.graph_simple}
+  state_mode: ${model.graph.state_mode}
+  uid_vocab: ${model.graph.uid_vocab}
+  # Names the mined asset tree, not an MS-HAB task plan.
+  mshab_task: ${env.task}
+  entity_vocab: ${model.graph.entity_vocab}
+  edge_contract: canonical_v2
+  use_target_flag: false
+  thresholds_path: ''
+  whitelist_dir: ''
+  n_max: ${model.graph.n_max}
+  e_max: ${model.graph.e_max}
+  k_persist: -1
+  app_dim: ${model.graph.app_dim}
+  dino_model: dinov2_vits14_reg
+  dino_res: 112
+  dino_weights: ''
+  staleness_enabled: false
+  bypass_teemo: false

@@ -20,6 +20,20 @@ import torch.nn.functional as F
 from torch import nn
 
 from tools import weight_init_
+from scenegraph.adapters.graph_vocab import build_absolute_vocab
+from scenegraph.core.relation_rules import (
+    EDGE_CONTRACT_CANONICAL,
+    EDGE_CONTRACT_LEGACY,
+    RELATION_TYPES,
+    abs_labels_for,
+)
+
+# Relation ids match build_relation_vocab: index 0 is pad.
+_RELATION_IDS = {name: i + 1 for i, name in enumerate(RELATION_TYPES)}
+
+
+def _edge_contract(config) -> str:
+    return str(getattr(config, "edge_contract", None) or EDGE_CONTRACT_LEGACY)
 
 
 # Mirrors ``scenegraph.core.graph_builder``. Duplicated rather than imported so
@@ -564,15 +578,30 @@ class GraphEncoder(nn.Module):
         return GraphEncoding(nodes, token, compact)
 
 
-def _relation_masks(n_rel: int, n_abs: int) -> torch.Tensor:
-    """Legal absolute labels for the fixed ten-relation vocabulary."""
-    if n_rel != 11 or n_abs != 17:
-        raise ValueError("the graph decoder expects relation vocab 11 and absolute vocab 17")
+def _relation_masks(
+    n_rel: int, n_abs: int, contract: str = EDGE_CONTRACT_LEGACY,
+) -> torch.Tensor:
+    """Legal absolute labels per relation, built from the contract's tables.
+
+    Derived rather than hardcoded: the packer's ``abs_valid`` already comes
+    from ``ABS_LABELS``, so a hand-written mask here is a second source of
+    truth. canonical_v2 also makes support/contain non-contiguous in sigma,
+    which no slice expresses.
+    """
+    absolute = build_absolute_vocab(contract)
+    labels = abs_labels_for(contract)
+    want_rel, want_abs = len(RELATION_TYPES) + 1, len(absolute)
+    if n_rel != want_rel or n_abs != want_abs:
+        raise ValueError(
+            f"edge_contract {contract!r} has relation vocab {want_rel} and "
+            f"absolute vocab {want_abs}; config says n_rel={n_rel}, "
+            f"n_abs={n_abs}"
+        )
     mask = torch.zeros(n_rel, n_abs, dtype=torch.bool)
-    mask[1:5, 1:3] = True
-    mask[5, 3:8] = True
-    mask[6, 8:13] = True
-    mask[7:11, 13:17] = True
+    for name in RELATION_TYPES:
+        rid = _RELATION_IDS[name]
+        for label in labels[name]:
+            mask[rid, absolute.encode(label)] = True
     return mask
 
 
@@ -724,7 +753,7 @@ class SimpleGraphDecoder(nn.Module):
         )
         self.register_buffer("progress_relations", relations, persistent=False)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
         )
         # Relation id -> row of the fused progress output, -1 for relations the
         # scorer does not read. Built from the scorer's own relation order,
@@ -1236,7 +1265,7 @@ class SlotGraphDecoder(nn.Module):
         self.abs_head = nn.Linear(self.units, self.n_abs)
         self.temp_head = nn.Linear(self.units, self.n_temp)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
         )
         self.apply(weight_init_)
 
@@ -1431,7 +1460,7 @@ class GraphDecoder(nn.Module):
         self.abs_head = nn.Linear(self.units, self.n_abs)
         self.temp_head = nn.Linear(self.units, self.n_temp)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
         )
         self.apply(weight_init_)
 

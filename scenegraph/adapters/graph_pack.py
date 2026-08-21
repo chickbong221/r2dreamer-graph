@@ -115,6 +115,7 @@ def pack_graph(
     app_dim: int,
     schema: str = SCHEMA_FULL,
     uid_vocab: int = 256,
+    use_target_flag: bool = True,
 ) -> Dict[str, np.ndarray]:
     """Pack one frame under one of the three observation schemas.
 
@@ -135,6 +136,10 @@ def pack_graph(
     # where a node is on a screen; this says where it is in the world, which is
     # what survives a node going invisible.
     want_centroid = schema == SCHEMA_SIMPLE_POOLED
+    # Targetless runs (normal ManiSkill) name no goal object, so row 1 is
+    # not reserved and graph_node_target stays zero. The field remains in
+    # the packed observation so both contracts share one schema.
+    fixed_rows = want_centroid and use_target_flag
     if n_max > 255:
         raise ValueError(
             f"n_max={n_max} exceeds 255; edge endpoints are packed as uint8"
@@ -163,10 +168,11 @@ def pack_graph(
         # float32, not float16: eight rows of three is 96 bytes a frame, and
         # half precision would quantise a table-scale scene to millimetres.
         node_centroid = np.zeros((n_max, 3), dtype=np.float32)
-    target_id = graph.meta.get("active_target_node_id")
+    target_id = (graph.meta.get("active_target_node_id")
+                 if use_target_flag else None)
 
     position: Dict[str, int] = {}
-    assigned, n_dropped = _row_assignment(graph, n_max, target_id, want_centroid)
+    assigned, n_dropped = _row_assignment(graph, n_max, target_id, fixed_rows)
     n_nodes = 0
     for i, node in assigned:
         ent = vocab.entity.encode(entity_key_for(node))

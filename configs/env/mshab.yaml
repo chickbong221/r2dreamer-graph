@@ -69,6 +69,11 @@ graph:
   # 8/168 -- end effector plus seven objects, and 3 * n_max * (n_max - 1)
   # edges, which is truncation-free. They have to match: the packer drops
   # spatial relations first, so a tighter cap upstream is not a neutral loss.
+  edge_contract: ${model.graph.edge_contract}
+  # False: no subtask target. Row 1 is not reserved,
+  # graph_node_target stays zero, and the progress critic must
+  # be disabled with it.
+  use_target_flag: true
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
   k_persist: -1

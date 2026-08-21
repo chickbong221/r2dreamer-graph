@@ -40,6 +40,10 @@ _UID_FIRST_OBJECT = 2
 # supported there -- torchrl's index_put has no uint16 kernel.
 UID_VOCAB_MAX = 256
 
+# Targetless (normal ManiSkill) whitelist: <dir>/task_all.json.
+TASK_LEVEL_SUBTASK = "task"
+TASK_LEVEL_TARGET = "all"
+
 
 class EpisodeUIDs:
     """Episode-scoped object identity, independent of the compact slot.
@@ -114,6 +118,7 @@ class GraphBuilder:
         appearance_enabled: bool = True,
         bbox_enabled: bool = True,
         uids_enabled: bool = True,
+        use_target_flag: bool = True,
     ):
         self.env = env
         self.cfg = cfg
@@ -130,6 +135,10 @@ class GraphBuilder:
         # pooled contract addresses nodes by their box, so nothing assigns or
         # packs a UID there.
         self.uids_enabled = bool(uids_enabled)
+        # False: no subtask target exists, so no whitelist is
+        # bound per target, no row is reserved and nothing is
+        # retained through occlusion.
+        self.use_target_flag = bool(use_target_flag)
         self.uids = EpisodeUIDs(uid_vocab, seed=1000 + int(env_idx))
 
         self.temporal = TemporalBuffer(K=cfg["temporal"]["K"])
@@ -227,6 +236,31 @@ class GraphBuilder:
                 "tools/prepare_assets.py rather than copying files between "
                 "task trees."
             )
+
+    def _bind_task_whitelist(self) -> None:
+        """Targetless binding: one ``task_all.json`` for the whole env.
+
+        Normal ManiSkill names no subtask target, so membership is task-level
+        and the same file supplies the global relation bins.
+        """
+        self._bind_global_bin_edges(TASK_LEVEL_SUBTASK)
+        key = (TASK_LEVEL_SUBTASK, TASK_LEVEL_TARGET)
+        if self._whitelist_key == key and self.selector.whitelist is not None:
+            return
+        path = resolve_whitelist_path(
+            self._whitelist_dir, TASK_LEVEL_SUBTASK, TASK_LEVEL_TARGET,
+        )
+        if path is None:
+            raise FileNotFoundError(
+                f"task-level whitelist not found under "
+                f"{self._whitelist_dir!r}; expected "
+                f"{TASK_LEVEL_SUBTASK}_{TASK_LEVEL_TARGET}.json. Mine it with "
+                "tools/collect_maniskill_interactions.py."
+            )
+        whitelist = load_whitelist(path)
+        self._check_task_group(whitelist, path)
+        self.selector.set_whitelist(whitelist)
+        self._whitelist_key = key
 
     def _resolve_and_bind_whitelist(self, state) -> None:
         """Bind the whitelist for this episode's (subtask, target).
@@ -384,7 +418,10 @@ class GraphBuilder:
 
         state = get_privileged_state(self.env, self.env_idx)
 
-        self._resolve_and_bind_whitelist(state)
+        if self.use_target_flag:
+            self._resolve_and_bind_whitelist(state)
+        else:
+            self._bind_task_whitelist()
 
         nodes, masks, cam, rgb = build_nodes(
             obs, state,
@@ -408,7 +445,7 @@ class GraphBuilder:
         # reinsert a previously seen node; with history disabled, only nodes
         # observed by at least one camera this frame continue below.
         active_target_node_id: Optional[str] = None
-        if state.active_obj is not None:
+        if self.use_target_flag and state.active_obj is not None:
             # Leave the goal unflagged if active-object resolution fell back to
             # the merged MS-HAB handle itself. Its node id is like
             # ``actor:obj_0`` and matches no visible segmentation node, so
