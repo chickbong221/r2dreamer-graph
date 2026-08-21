@@ -606,19 +606,103 @@ def _entity_for_env(entity, env_idx: int):
         return entity
 
 
-def per_env_segmentation_id_map(env, env_idx: int) -> Dict[int, Any]:
+# --------------------------------------------------------------------------- #
+# Merged-view aliasing (normal ManiSkill)
+# --------------------------------------------------------------------------- #
+_ALIAS_FLAG = "_teemo_alias_merged_views"
+_ALIAS_MAP = "_teemo_merged_view_alias"
+
+
+def _scene_of(env_or_scene):
+    if hasattr(env_or_scene, "unwrapped"):
+        return env_or_scene.unwrapped.scene
+    return getattr(env_or_scene, "scene", env_or_scene)
+
+
+def set_merged_view_aliasing(env_or_scene, enabled: bool = True) -> None:
+    """Opt one scene into resolving per-sub-scene actors to their merged view.
+
+    Off by default and not auto-detected: MS-HAB resolves the other way
+    (merged handle -> per-env actual, see ``_resolve_actual_entity``), so a
+    global default would rewrite MS-HAB identities.
+    """
+    scene = _scene_of(env_or_scene)
+    scene.__dict__[_ALIAS_FLAG] = bool(enabled)
+    # Both derived caches are keyed on the old answer.
+    scene.__dict__.pop(_ALIAS_MAP, None)
+    scene.__dict__.pop("_teemo_per_env_seg_maps", None)
+
+
+def merged_view_aliasing_enabled(env_or_scene) -> bool:
+    return bool(_scene_of(env_or_scene).__dict__.get(_ALIAS_FLAG, False))
+
+
+def merged_view_alias_map(scene) -> Dict[int, Any]:
+    """``id(underlying body) -> merged Actor view``, for one scene.
+
+    ``Actor.merge`` registers in ``scene.actor_views``, but
+    ``segmentation_id_map`` iterates ``scene.actors``, so PegInsertionSide's
+    per-env ``peg_0 ... peg_{n-1}`` reach identity resolution instead of the
+    logical ``peg``. ``canonical_actor_key`` strips ``-<i>`` but not ``_<i>``,
+    so num_envs=1 mining records ``actor:peg_0`` and a 126-env run emits keys
+    the entity vocab rejects.
+
+    Widening that regex is not the fix -- ``_\\d+$`` would also collapse
+    ``frl_apartment_table_01`` and ``_02``. Aliasing to the merged view touches
+    no MS-HAB key. Links are not aliased; merge is actor-only.
+    """
+    cached = scene.__dict__.get(_ALIAS_MAP)
+    if cached is not None:
+        return cached
+
+    alias: Dict[int, Any] = {}
+    owner: Dict[int, Any] = {}
+    for view in getattr(scene, "actor_views", {}).values():
+        for obj in getattr(view, "_objs", None) or ():
+            prior = owner.get(id(obj))
+            if prior is not None and prior is not view:
+                raise ValueError(
+                    f"merged-view aliasing is ambiguous: body {id(obj)} belongs "
+                    f"to both {getattr(prior, 'name', '?')!r} and "
+                    f"{getattr(view, 'name', '?')!r}"
+                )
+            owner[id(obj)] = view
+            alias[id(obj)] = view
+
+    scene.__dict__[_ALIAS_MAP] = alias
+    return alias
+
+
+def per_env_segmentation_id_map(
+    env, env_idx: int, *, alias_merged_views: Optional[bool] = None,
+) -> Dict[int, Any]:
     """Segmentation-id -> Actor/Link map valid for one parallel env.
 
     ManiSkill's global ``env.segmentation_id_map`` keys wrappers by
     ``_objs[0].per_scene_id``. MS-HAB can load heterogeneous actors and
     articulations across vector envs, so the same integer id can refer to
     different entities in different sub-scenes.
+
+    ``alias_merged_views`` overrides the scene flag set by
+    ``set_merged_view_aliasing``; it exists for tests, which need both answers
+    from one scene.
     """
     scene = env.unwrapped.scene if hasattr(env, "unwrapped") else env.scene
+    alias_on = (
+        merged_view_aliasing_enabled(scene)
+        if alias_merged_views is None
+        else bool(alias_merged_views)
+    )
     cache = scene.__dict__.setdefault("_teemo_per_env_seg_maps", {})
-    cached = cache.get(env_idx)
+    # Keyed by the flag too: a map built before aliasing was switched on
+    # describes different identities and must not be served afterwards.
+    cache_key = (env_idx, alias_on)
+    cached = cache.get(cache_key)
     if cached is not None:
         return cached
+
+    alias = merged_view_alias_map(scene) if alias_on else {}
+    seen_views: Dict[int, Any] = {}
 
     res: Dict[int, Any] = {}
     for actor in scene.actors.values():
@@ -629,7 +713,19 @@ def per_env_segmentation_id_map(env, env_idx: int) -> Dict[int, Any]:
         objs = getattr(actor, "_objs", None)
         if row is None or not objs or row >= len(objs):
             continue
-        res[int(objs[row].per_scene_id)] = actor
+        resolved = alias.get(id(objs[row]), actor)
+        if resolved is not actor:
+            # Two same-env actors behind one view would share a node. No task
+            # in scope does this, so raise rather than collapse them.
+            prior = seen_views.get(id(resolved))
+            if prior is not None:
+                raise ValueError(
+                    f"merged view {getattr(resolved, 'name', '?')!r} covers "
+                    f"both {getattr(prior, 'name', '?')!r} and "
+                    f"{getattr(actor, 'name', '?')!r} in env {env_idx}"
+                )
+            seen_views[id(resolved)] = actor
+        res[int(objs[row].per_scene_id)] = resolved
 
     for art in scene.articulations.values():
         if getattr(art, "merged", False):
@@ -645,7 +741,7 @@ def per_env_segmentation_id_map(env, env_idx: int) -> Dict[int, Any]:
                 continue
             res[int(objs[row].entity.per_scene_id)] = link
 
-    cache[env_idx] = res
+    cache[cache_key] = res
     return res
 
 
