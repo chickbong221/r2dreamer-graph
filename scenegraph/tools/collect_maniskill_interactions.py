@@ -31,6 +31,12 @@ from scenegraph.adapters.interaction_events import (
     EE_KEY, GROUP_GAP, GROUP_WINDOW, BucketStore, DiscoveryWindow,
     EpisodeEvidence, GroupAccumulator, InteractionEvent, make_bucket,
 )
+from scenegraph.adapters.contact_geometry import (
+    paired_contact_frame, symmetry_of,
+)
+from scenegraph.adapters.maniskill_containment import (
+    containment_features, detect_capability,
+)
 from scenegraph.adapters.maniskill_scene import scene_entities
 from scenegraph.adapters.privileged_state import (
     entity_pose_world_array, get_privileged_state, invalidate_scene_caches,
@@ -82,7 +88,10 @@ class InteractionRecorder:
             "contact": GroupAccumulator("peak", group_gap, group_window),
             "support": GroupAccumulator("peak", group_gap, group_window),
             "grasp": GroupAccumulator("last", group_gap, group_window),
+            "contain": GroupAccumulator("peak", group_gap, group_window),
         }
+        self.capability: Optional[str] = None
+        self.symmetry: Dict[str, Any] = {}
         self.entities: Optional[List[Any]] = None
         self.keys: Dict[int, str] = {}
         self.frame = 0
@@ -116,6 +125,13 @@ class InteractionRecorder:
     def _capture(self) -> None:
         self.entities = scene_entities(self.env, self.env_idx)
         self.keys = {id(e): stable_entity_key(e) for e in self.entities}
+        # Detected after reset: PlugCharger assigns goal_pose during episode
+        # initialization, so it does not exist before one.
+        self.capability = detect_capability(self.env)
+        self.symmetry = {
+            self.keys[id(e)]: symmetry_of(e, self.env_idx)
+            for e in self.entities
+        }
 
     def observe(self, info: Optional[dict] = None, state: Any = None) -> None:
         """Record one control step. Called once per ``env.step``.
@@ -131,10 +147,20 @@ class InteractionRecorder:
             state = get_privileged_state(self.env, self.env_idx)
         self._ee_relations(state)
         self._object_relations(state)
+        self._containment()
         for acc in self.groups.values():
             for event in acc.tick(self.frame):
                 self.episode.add(event)
         self.frame += 1
+
+    @property
+    def scene(self):
+        base = self.env.unwrapped if hasattr(self.env, "unwrapped") else self.env
+        return base.scene
+
+    def _row(self, entity) -> int:
+        from scenegraph.adapters.privileged_state import _obj_index_for_env
+        return _obj_index_for_env(entity, self.env_idx) or 0
 
     def _add(self, relation, src, dst, payload):
         self.groups[relation].observe(
@@ -168,12 +194,18 @@ class InteractionRecorder:
             if force <= self.eps_force:
                 continue
             ka, kb = self.keys[id(a)], self.keys[id(b)]
+            pose_a, pose_b = _pose(a, self.env_idx), _pose(b, self.env_idx)
             payload = {
                 "force": force,
                 "force_vector": vec.tolist(),
-                "pose_a": _pose(a, self.env_idx),
-                "pose_b": _pose(b, self.env_idx),
+                "pose_a": pose_a,
+                "pose_b": pose_b,
             }
+            geometry = paired_contact_frame(
+                self.scene, a, b, pose_a, pose_b,
+                self._row(a), self._row(b))
+            if geometry:
+                payload.update(geometry)
             self._add("contact", ka, kb, payload)
 
             # "force on a due to b": fz < 0 means a carries b.
@@ -183,6 +215,19 @@ class InteractionRecorder:
                 self._add("support", ka, kb, dict(payload))
             else:
                 self._add("support", kb, ka, dict(payload))
+
+
+    def _containment(self) -> None:
+        """The one relation physics cannot find: a hole is not an actor."""
+        if self.capability is None:
+            return
+        feat = containment_features(self.env, self.env_idx, self.capability)
+        if feat is None or not feat.get("holds"):
+            return
+        payload = dict(feat)
+        payload["force"] = 1.0      # peak-mode reducer needs a magnitude
+        self._add("contain", feat["container_key"], feat["containee_key"],
+                  payload)
 
 
 def make_env(env_id: str, recorder_box: list):
@@ -223,7 +268,7 @@ def get_solver(env_id: str):
     return MP_SOLUTIONS[env_id]
 
 
-def collect(args) -> BucketStore:
+def collect(args):
     box: list = []
     env = make_env(args.env_id, box)
     solve = get_solver(args.env_id)
@@ -276,10 +321,18 @@ def collect(args) -> BucketStore:
             print("[prep] every frozen bucket reached target", flush=True)
             break
 
+    # Read before close(): both describe the scene, which close() tears down.
+    symmetry = dict(recorder.symmetry or {})
+    capability = recorder.capability
     env.close()
     print(f"\nattempts={attempts} successes={successes} "
           f"rate={successes / max(attempts, 1):.1%}")
     print(store.report())
+    if capability:
+        print(f"containment capability: {capability}")
+    for key, sym in sorted(symmetry.items()):
+        if sym.get("symmetry") != "none":
+            print(f"symmetry: {key} -> {sym}")
     incidental = store.incidental(args.min_presence)
     if incidental:
         print()
@@ -287,10 +340,11 @@ def collect(args) -> BucketStore:
               "-- likely brushes, not task interactions:")
         for b in incidental:
             print(f"  {store.presence(b):.0%}  {b}")
-    return store
+    return store, symmetry, capability
 
 
-def write_shard(store: BucketStore, args) -> Path:
+def write_shard(store: BucketStore, args, symmetry=None,
+                capability=None) -> Path:
     out = Path(args.out) / args.env_id
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"shard_{args.shard:03d}.pkl"
@@ -308,6 +362,8 @@ def write_shard(store: BucketStore, args) -> Path:
         "presence": {str(b): store.presence(b) for b in store.buckets()},
         "excluded": {str(b): r for b, r in store.excluded.items()},
         "complete": [str(b) for b in store.complete_buckets()],
+        "symmetry": symmetry or {},
+        "capability": capability,
         "late": {str(b): n for b, n in store.late.items()},
     }
     with open(path, "wb") as f:
@@ -346,9 +402,9 @@ def main(argv=None) -> int:
     if args.pilot:
         args.max_attempts = min(args.max_attempts, 25)
         args.patience = 10 ** 6      # never freeze; report what appears
-    store = collect(args)
+    store, symmetry, capability = collect(args)
     if not args.pilot:
-        write_shard(store, args)
+        write_shard(store, args, symmetry, capability)
     return 0
 
 
