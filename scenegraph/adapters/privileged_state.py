@@ -637,6 +637,22 @@ def merged_view_aliasing_enabled(env_or_scene) -> bool:
     return bool(_scene_of(env_or_scene).__dict__.get(_ALIAS_FLAG, False))
 
 
+# Everything derived from the actor set. All of it is invalid once a scene
+# reconfigures, which some tasks do on every reset at num_envs=1.
+_SCENE_CACHES = (
+    _ALIAS_MAP, "_teemo_per_env_seg_maps", "_teemo_sidxs_cache",
+    "_teemo_sliced_views", "_teemo_row_sliced_views", "_teemo_resolve_cache",
+)
+
+
+def invalidate_scene_caches(env_or_scene) -> None:
+    """Drop caches that name actors. The aliasing flag is a setting, not a
+    cache, so it survives."""
+    d = _scene_of(env_or_scene).__dict__
+    for key in _SCENE_CACHES:
+        d.pop(key, None)
+
+
 def merged_view_alias_map(scene) -> Dict[int, Any]:
     """``id(underlying body) -> merged Actor view``, for one scene.
 

@@ -33,7 +33,8 @@ from scenegraph.adapters.interaction_events import (
 )
 from scenegraph.adapters.maniskill_scene import scene_entities
 from scenegraph.adapters.privileged_state import (
-    entity_pose_world_array, get_privileged_state, set_merged_view_aliasing,
+    entity_pose_world_array, get_privileged_state, invalidate_scene_caches,
+    set_merged_view_aliasing,
 )
 from scenegraph.core.entity_identity import stable_entity_key
 
@@ -74,13 +75,28 @@ class InteractionRecorder:
         self.min_vertical_ratio = float(min_vertical_ratio)
         self.grasp_angle = int(grasp_angle)
         self.episode = EpisodeEvidence()
-        self.entities: List[Any] = []
+        self.entities: Optional[List[Any]] = None
         self.keys: Dict[int, str] = {}
         self.frame = 0
 
     def reset_episode(self) -> None:
         self.episode.reset()
         self.frame = 0
+        self.entities = None
+
+    def on_env_reset(self) -> None:
+        """Called after every ``env.reset``, including the one inside solve().
+
+        Tasks that randomize geometry reconfigure on each reset at num_envs=1
+        (PegInsertionSide sets reconfiguration_freq=1), which destroys every
+        actor captured earlier and drops the scene-level aliasing flag. Both
+        have to be re-established here, not once at startup.
+        """
+        set_merged_view_aliasing(self.env, True)
+        invalidate_scene_caches(self.env)
+        self.entities = None
+
+    def _capture(self) -> None:
         self.entities = scene_entities(self.env, self.env_idx)
         self.keys = {id(e): stable_entity_key(e) for e in self.entities}
 
@@ -92,6 +108,8 @@ class InteractionRecorder:
         """
         if info is not None:
             self.episode.observe_success(success_flag(info, self.env_idx))
+        if self.entities is None:
+            self._capture()
         if state is None:
             state = get_privileged_state(self.env, self.env_idx)
         self._ee_relations(state)
@@ -157,6 +175,12 @@ def make_env(env_id: str, recorder_box: list):
     import mani_skill.envs  # noqa: F401
 
     class _Wrapper(gym.Wrapper):
+        def reset(self, **kwargs):
+            out = self.env.reset(**kwargs)
+            if recorder_box:
+                recorder_box[0].on_env_reset()
+            return out
+
         def step(self, action):
             out = self.env.step(action)
             if recorder_box:

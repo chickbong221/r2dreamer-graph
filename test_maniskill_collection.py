@@ -211,10 +211,11 @@ class _FakeState:
             or [0.0, 0.0, 0.0], dtype=float)
 
 
-def _recorder():
-    env = _tabletop()          # ground (filtered), table-workspace, cube
+def _recorder(env=None):
+    env = env or _tabletop()   # ground (filtered), table-workspace, cube
     rec = InteractionRecorder(env)
-    rec.reset_episode()
+    rec.on_env_reset()
+    rec.observe(None, _FakeState())   # warm-up capture, emits nothing
     return rec
 
 
@@ -293,3 +294,51 @@ class RecorderDetectionTest(unittest.TestCase):
         self.assertEqual(len(rec.episode), 0)
         self.assertFalse(rec.episode.success_once)
         self.assertEqual(rec.frame, 0)
+
+
+class ReconfigureTest(unittest.TestCase):
+    """PegInsertionSide sets reconfiguration_freq=1 at num_envs=1, so every
+    reset destroys the actors and drops the scene-level aliasing flag."""
+
+    def _pegs(self, sid):
+        scene = _Scene()
+        ground = _actor(scene, "ground", sid)
+        pegs = [_actor(scene, "peg_0", sid + 1)]
+        env = _env(scene, [ground, *pegs], ground=ground,
+                   views=[_merge("peg", scene, pegs)])
+        return env
+
+    def test_entities_are_recaptured_after_reset(self):
+        env = self._pegs(1)
+        rec = _recorder(env)
+        first = list(rec.entities)
+
+        env.scene = self._pegs(10).scene     # reconfigure: brand-new actors
+        env.table_scene = SimpleNamespace(
+            ground=[a for a in env.scene.actors.values()
+                    if a.name == "ground"][0])
+        rec.on_env_reset()
+        rec.observe(None, _FakeState())
+
+        self.assertEqual(sorted(rec.keys.values()), ["actor:peg"])
+        self.assertFalse(set(map(id, first)) & set(map(id, rec.entities)))
+
+    def test_aliasing_survives_a_rebuilt_scene(self):
+        env = self._pegs(1)
+        rec = _recorder(env)
+        env.scene = self._pegs(10).scene     # fresh scene, no flag on it
+        env.table_scene = SimpleNamespace(
+            ground=[a for a in env.scene.actors.values()
+                    if a.name == "ground"][0])
+        rec.on_env_reset()
+        rec.observe(None, _FakeState())
+        self.assertEqual(list(rec.keys.values()), ["actor:peg"])
+
+    def test_stale_capture_would_have_been_empty(self):
+        """Documents the bug: without recapture the old actors are used."""
+        env = self._pegs(1)
+        rec = _recorder(env)
+        stale = list(rec.entities)
+        env.scene = self._pegs(10).scene
+        self.assertFalse(
+            set(map(id, stale)) & set(map(id, env.scene.actors.values())))
