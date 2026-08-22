@@ -4,6 +4,8 @@ import unittest
 import gymnasium as gym
 import numpy as np
 import torch
+
+import progress
 from hydra import compose, initialize_config_dir
 from tensordict import TensorDict
 
@@ -378,7 +380,8 @@ class PooledGraphSimpleTest(unittest.TestCase):
 
     def test_relation_head_source_keeps_the_old_critic_feature(self):
         model = self._model(source="relation_head")
-        scorer_width = int(model.progress_scorer.relations.numel()) * 17
+        scorer_width = (int(model.progress_scorer.relations.numel())
+                        * progress.N_ABS)
         self.assertEqual(
             model.progress_feat_size, model.rssm.feat_size + scorer_width
         )

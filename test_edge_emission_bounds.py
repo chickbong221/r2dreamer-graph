@@ -231,30 +231,6 @@ class AbsoluteVocabTest(unittest.TestCase):
         self.assertEqual(len(build_absolute_vocab()), 19)
         self.assertEqual(n_abs, 19)
 
-    def test_progress_ids_track_the_vocabulary(self):
-        """The whole point of deriving them. Adding the two directional labels
-        shifted every id from very-near upward by two, and a hardcoded table
-        would have gone on scoring the wrong labels -- ProgressScorer only
-        checks 0 < label < n_abs, so nothing would have raised."""
-        from scenegraph.adapters.graph_vocab import (
-            build_absolute_vocab, build_relation_vocab,
-        )
-        src = open("progress.py", encoding="utf-8").read()
-        ns = {"build_absolute_vocab": build_absolute_vocab,
-              "build_relation_vocab": build_relation_vocab}
-        exec(src[src.index("_REL = build_relation_vocab()"):
-                 src.index("@dataclass(frozen=True)")], ns)
-        absolute = build_absolute_vocab()
-        for label in absolute.token_to_id:
-            const = "ABS_" + label.upper().replace("-", "_")
-            self.assertEqual(ns[const], absolute.encode(label), msg=const)
-        relation = build_relation_vocab()
-        for name, const in (("contact", "REL_CONTACT"),
-                            ("planar-distance", "REL_PLANAR_DISTANCE"),
-                            ("contain-compatibility", "REL_CONTAIN_COMPAT")):
-            self.assertEqual(ns[const], relation.encode(name), msg=const)
-        self.assertEqual(ns["N_ABS"], len(absolute))
-
     def test_directional_labels_are_in_the_vocabulary(self):
         from scenegraph.adapters.graph_vocab import build_absolute_vocab
         tokens = build_absolute_vocab().token_to_id

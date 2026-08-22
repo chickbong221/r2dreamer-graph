@@ -25,7 +25,25 @@ from graph import (
     graph_keys,
     graph_schema,
 )
-from progress import N_ABS, PICK_STAGES, ProgressScorer
+from progress import (
+    ABS_FAR_BELOW,
+    ABS_HOLDS,
+    ABS_LEVEL,
+    ABS_MATCH,
+    ABS_NOT_HOLDS,
+    ABS_UNOBSERVED,
+    ABS_VERY_FAR,
+    ABS_VERY_NEAR,
+    N_ABS,
+    PICK_STAGES,
+    REL_CONTACT,
+    REL_CONTACT_COMPAT,
+    REL_GRASP,
+    REL_GRASP_COMPAT,
+    REL_HEIGHT_OFFSET,
+    REL_PLANAR_DISTANCE,
+    ProgressScorer,
+)
 from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
@@ -1006,21 +1024,41 @@ class PotentialMatrixTest(unittest.TestCase):
         self.assertGreaterEqual(float(phi.min()), 0.0)
         self.assertLessEqual(float(phi.max()), 1.0)
 
-    def test_saturated_state_scores_exactly_one(self):
-        best = torch.zeros(1, 6, N_ABS)
-        satisfying = {5: 3, 6: 10, 8: 13, 7: 13, 1: 2, 2: 2}
+    def _onehot(self, per_relation):
+        """One-hot the named label for each of the scorer's relations.
+
+        Keyed by the shared constants, not by literal ids: this test failed the
+        first time the label vocabulary grew, and a table of integers here is
+        the same second source of truth the scorer itself just stopped being.
+        """
+        probs = torch.zeros(1, len(self.scorer.relations), N_ABS)
         for row, relation in enumerate(self.scorer.relations.tolist()):
-            best[0, row, satisfying[relation]] = 1.0
+            probs[0, row, per_relation[relation]] = 1.0
+        return probs
+
+    def test_saturated_state_scores_exactly_one(self):
+        best = self._onehot({
+            REL_PLANAR_DISTANCE: ABS_VERY_NEAR,
+            REL_HEIGHT_OFFSET: ABS_LEVEL,
+            REL_CONTACT_COMPAT: ABS_MATCH,
+            REL_GRASP_COMPAT: ABS_MATCH,
+            REL_CONTACT: ABS_HOLDS,
+            REL_GRASP: ABS_HOLDS,
+        })
         self.assertAlmostEqual(float(self.scorer.potential(best)), 1.0, places=6)
         self.assertAlmostEqual(
             float(self.scorer.potential(best, hard=True)), 1.0, places=6
         )
 
     def test_worst_state_scores_zero(self):
-        worst = torch.zeros(1, 6, N_ABS)
-        unsatisfying = {5: 7, 6: 8, 8: 16, 7: 16, 1: 1, 2: 1}
-        for row, relation in enumerate(self.scorer.relations.tolist()):
-            worst[0, row, unsatisfying[relation]] = 1.0
+        worst = self._onehot({
+            REL_PLANAR_DISTANCE: ABS_VERY_FAR,
+            REL_HEIGHT_OFFSET: ABS_FAR_BELOW,
+            REL_CONTACT_COMPAT: ABS_UNOBSERVED,
+            REL_GRASP_COMPAT: ABS_UNOBSERVED,
+            REL_CONTACT: ABS_NOT_HOLDS,
+            REL_GRASP: ABS_NOT_HOLDS,
+        })
         self.assertAlmostEqual(float(self.scorer.potential(worst)), 0.0, places=6)
 
 
