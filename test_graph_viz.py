@@ -45,6 +45,9 @@ class GraphDisplayFactsTest(unittest.TestCase):
         # rendering (allow one value for backend rounding).
         np.testing.assert_allclose(image[0, 0], [253, 240, 233], atol=1)
 
+        native = render_graph_array(graph)
+        self.assertEqual(native.shape, (1200, 1200, 3))
+
     def test_two_objects_and_ee_form_a_triangle(self):
         graph = Graph(
             frame=0,

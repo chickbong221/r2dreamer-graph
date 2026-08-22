@@ -139,6 +139,19 @@ class MSHABContractTest(unittest.TestCase):
         self.assertTrue(torch.equal(
             frame[:, 5:], torch.from_numpy(panel)))
 
+    def test_native_graph_resolution_enlarges_the_camera_strip(self):
+        obs = {
+            "image_head": torch.zeros(2, 1, 4, 5, 3, dtype=torch.uint8),
+        }
+        panel = np.full((8, 8, 3), [253, 240, 233], dtype=np.uint8)
+
+        frame = _observation_frame(obs, lambda _height: panel)
+
+        # Camera keeps its 5:4 aspect (10x8) while the graph retains 8x8.
+        self.assertEqual(tuple(frame.shape), (8, 18, 3))
+        self.assertTrue(torch.equal(
+            frame[:, 10:], torch.from_numpy(panel)))
+
     def test_build_config_selection_keeps_whole_groups(self):
         plans = [
             SimpleNamespace(build_config_name="b", marker=1),

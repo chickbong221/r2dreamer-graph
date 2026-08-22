@@ -16,8 +16,14 @@ def _graph_builder(envs):
         return None
 
 
-def _graph_panel(builder, env_idx, height, colormap):
-    """The node-link diagram for one env as an RGB uint8 array, or None."""
+def _graph_panel(builder, env_idx, _height, colormap):
+    """The native-resolution node-link diagram for one env, or ``None``.
+
+    ``_height`` is accepted for compatibility with panel callbacks but is not
+    used: matching the camera height was what made 112px training graphs and
+    512px eval graphs look soft.  The renderer's native 1200px square matches
+    the standalone TEEMO sim-probe output.
+    """
     if builder is None:
         return None
     graph = getattr(builder, "last_graph_by_env", {}).get(env_idx)
@@ -25,42 +31,56 @@ def _graph_panel(builder, env_idx, height, colormap):
         return None
     try:
         from scenegraph.viz.graph_draw import render_graph_array
-        return render_graph_array(graph, colormap=colormap, height=height)
+        return render_graph_array(graph, colormap=colormap)
     except Exception:
         # Rendering is diagnostic; a broken panel must not end an eval run.
         return None
 
 
+def _resize_frame_height(frame, height):
+    """Nearest-neighbour resize of an HWC tensor, preserving its aspect."""
+    old_h, old_w = int(frame.shape[0]), int(frame.shape[1])
+    height = int(height)
+    if old_h == height:
+        return frame
+    width = max(1, int(round(old_w * height / old_h)))
+    rows = torch.arange(height, device=frame.device) * old_h // height
+    cols = torch.arange(width, device=frame.device) * old_w // width
+    return frame.index_select(0, rows.long()).index_select(1, cols.long())
+
+
 def _with_panel(frames, panel_fn):
     """Tile ``frames`` left-to-right and append the graph column, if any.
 
-    The panel is sized from the strip it joins, so the diagram scales with
-    whatever it is beside -- an encoder-resolution camera strip or a much
-    larger render camera -- and the whole thing stays one video rather than
-    two that have to be watched side by side.
+    The graph stays at its native reference resolution.  Camera pixels are
+    enlarged to that height for compositing, rather than rasterizing graph text
+    at the much smaller encoder/eval camera resolution.
     """
     if not frames:
         return None
-    ref = frames[0]
-    panel = panel_fn(int(ref.shape[0])) if panel_fn is not None else None
+    panel = panel_fn(None) if panel_fn is not None else None
+    # Videos are diagnostic output.  Keep the now high-resolution composite on
+    # CPU so an episode cache cannot consume gigabytes of accelerator memory.
+    strip = torch.cat(frames, dim=1).detach().cpu()
     if panel is not None:
         import numpy as np
 
         arr = np.asarray(panel, dtype=np.uint8)
-        tile = torch.from_numpy(arr).to(ref.device)
-        if ref.dtype.is_floating_point:
+        tile = torch.from_numpy(arr)
+        if strip.dtype.is_floating_point:
             # Cameras arrive normalised; match them or the panel saturates.
-            tile = tile.to(ref.dtype) / 255.0
-            if float(ref.max()) <= 0.5:
+            tile = tile.to(strip.dtype) / 255.0
+            if float(strip.max()) <= 0.5:
                 tile = tile - 0.5
         else:
-            tile = tile.to(ref.dtype)
-        if tile.shape[0] == ref.shape[0] and tile.shape[-1] == ref.shape[-1]:
-            frames.append(tile)
-    strip = torch.cat(frames, dim=1)
-    # h264 wants even dimensions, and the panel is scaled to whatever height it
-    # joins, so its width lands wherever it lands. One black column is cheaper
-    # than an eval whose video silently fails to encode.
+            tile = tile.to(strip.dtype)
+        if tile.shape[-1] == strip.shape[-1]:
+            target_height = max(int(strip.shape[0]), int(tile.shape[0]))
+            strip = _resize_frame_height(strip, target_height)
+            tile = _resize_frame_height(tile, target_height)
+            strip = torch.cat([strip, tile], dim=1)
+    # h264 wants even dimensions. Aspect-preserving camera enlargement can land
+    # on an odd width, so pad by one instead of letting encoding fail silently.
     if strip.shape[1] % 2:
         strip = torch.cat([strip, torch.zeros_like(strip[:, :1])], dim=1)
     if strip.shape[0] % 2:
