@@ -732,6 +732,7 @@
         "support"
       ]
     },
+    "spatial_only": [],
     "components": {
       "actor:charger": [
         "bottom_components",

@@ -15,6 +15,13 @@
       ],
       "kind": "actor"
     },
+    "actor:goal_site": {
+      "roles": [
+        "spatial"
+      ],
+      "interaction_types": [],
+      "kind": "actor"
+    },
     "actor:table-workspace": {
       "roles": [
         "interacted",

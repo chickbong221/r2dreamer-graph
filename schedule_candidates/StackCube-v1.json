@@ -992,6 +992,7 @@
         "support"
       ]
     },
+    "spatial_only": [],
     "components": {
       "actor:cubeA": [
         "bottom_components",

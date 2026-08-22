@@ -860,6 +860,7 @@
         "support"
       ]
     },
+    "spatial_only": [],
     "components": {
       "actor:cube": [
         "bottom_components",

@@ -636,6 +636,7 @@
         "support"
       ]
     },
+    "spatial_only": [],
     "components": {
       "actor:box_with_hole": [
         "contact_components",

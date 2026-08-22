@@ -228,7 +228,9 @@
     "movable": [
       "actor:cube"
     ],
-    "destination_candidates": [],
+    "destination_candidates": [
+      "actor:goal_site"
+    ],
     "ambiguous": false
   },
   "environment_predicates": {
@@ -427,17 +429,22 @@
         "grasp",
         "support"
       ],
+      "actor:goal_site": [],
       "actor:table-workspace": [
         "contact",
         "support"
       ]
     },
+    "spatial_only": [
+      "actor:goal_site"
+    ],
     "components": {
       "actor:cube": [
         "bottom_components",
         "contact_components",
         "grasp_components"
       ],
+      "actor:goal_site": [],
       "actor:table-workspace": [
         "contact_components",
         "support_components"
@@ -456,11 +463,29 @@
         "planar-distance": true,
         "height-offset": true
       },
+      "ee / actor:goal_site": {
+        "contact": false,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
       "ee / actor:table-workspace": {
         "contact": true,
         "grasp": false,
         "grasp-compatibility": false,
         "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cube / actor:goal_site": {
+        "contact": false,
+        "support": false,
+        "contain": false,
+        "contact-compatibility": false,
+        "support-compatibility": false,
+        "contain-compatibility": false,
         "planar-distance": true,
         "height-offset": true
       },
@@ -470,6 +495,16 @@
         "contain": false,
         "contact-compatibility": true,
         "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:goal_site / actor:table-workspace": {
+        "contact": false,
+        "support": false,
+        "contain": false,
+        "contact-compatibility": false,
+        "support-compatibility": false,
         "contain-compatibility": false,
         "planar-distance": true,
         "height-offset": true
