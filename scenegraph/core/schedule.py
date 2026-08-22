@@ -1,0 +1,349 @@
+"""Compile a task phase schedule against the mined assets.
+
+A schedule names semantic roles and relation clauses. The runtime speaks
+relation ids, absolute-label ids, entity-vocabulary ids and canonical pair
+orientation. Everything that translates between the two happens here, once,
+before training -- and every way a schedule can be unsatisfiable is an error
+here rather than a silent zero later.
+
+Three translations are easy to get wrong and are the reason this is not done
+inline:
+
+* **Pair orientation.** Object-object edges are stored in ``pair_sort_key``
+  order, so a clause written ``tool -> cube`` is looked up as ``cube -> tool``.
+  End-effector edges are always ``ee -> object`` and are not sorted.
+* **Antisymmetric labels.** Swapping the endpoints of ``height-offset`` turns
+  ``above`` into ``below``. The mirror is applied with the swap.
+* **Directional physical labels.** ``support`` and ``contain`` name the holder
+  by role; whether that is ``src-holds`` or ``dst-holds`` depends on which key
+  sorts first, which is a property of the strings and not of the physics.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from ..adapters.graph_vocab import build_absolute_vocab, build_relation_vocab
+
+SCHEDULE_SCHEMA_VERSION = 1
+EE_ROLE = "ee"
+EE_KEY = "ee"
+
+# Relations whose label flips when the endpoints are swapped.
+_MIRROR: Dict[str, str] = {
+    "far-below": "far-above", "below": "above", "level": "level",
+    "above": "below", "far-above": "far-below",
+}
+ANTISYMMETRIC = frozenset({"height-offset"})
+# Relations whose label names which endpoint holds the other.
+DIRECTIONAL = frozenset({"support", "contain"})
+SRC_HOLDS, DST_HOLDS = "src-holds", "dst-holds"
+
+
+class ScheduleError(ValueError):
+    """A schedule that cannot be scored. Always names task, phase and clause."""
+
+
+@dataclass(frozen=True)
+class Clause:
+    """One rung. ``src_key``/``dst_key`` are already in stored edge order."""
+    relation: str
+    relation_id: int
+    src_key: str
+    dst_key: str
+    labels: Tuple[str, ...]
+    label_ids: Tuple[int, ...]
+    weight: float
+
+
+@dataclass(frozen=True)
+class Phase:
+    name: str
+    weight: float
+    clauses: Tuple[Clause, ...]
+    completion: Clause
+
+
+@dataclass(frozen=True)
+class CompiledSchedule:
+    env_id: str
+    roles: Dict[str, str]
+    role_entity_ids: Dict[str, int]
+    phases: Tuple[Phase, ...]
+
+    @property
+    def entity_ids(self) -> Tuple[int, ...]:
+        """Every entity id a frame must resolve, in stable order."""
+        return tuple(self.role_entity_ids[r] for r in sorted(self.role_entity_ids))
+
+
+# --------------------------------------------------------------------------- #
+# what the mined assets can actually score
+# --------------------------------------------------------------------------- #
+def _types(members: Dict[str, Any], key: str) -> set:
+    return set((members.get(key) or {}).get("interaction_types") or ())
+
+
+def _has(objects: Dict[str, Any], key: str, field: str) -> bool:
+    return bool((objects.get(key) or {}).get(field))
+
+
+def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
+                       bin_edges: Dict[str, Any]) -> Dict[str, Dict[str, bool]]:
+    """Per pair, which relations the runtime can emit with meaning.
+
+    ``contact`` needs both endpoints to carry the token; the compatibility
+    families need the mined components behind them. The distinction matters
+    because a compatibility relation with no components is still *emitted* --
+    labelled ``unobserved``, exactly as a pair too far apart to judge -- so a
+    clause naming it would score zero forever with nothing to show for it.
+    """
+    keys = sorted(members)
+    spatial = {r: bool(bin_edges.get(r))
+               for r in ("planar-distance", "height-offset")}
+    out: Dict[str, Dict[str, bool]] = {}
+    for key in keys:
+        out[f"{EE_KEY} / {key}"] = {
+            "contact": "contact" in _types(members, key),
+            "grasp": "grasp" in _types(members, key),
+            "grasp-compatibility": _has(objects, key, "grasp_components"),
+            "contact-compatibility": _has(objects, key, "contact_components"),
+            **spatial,
+        }
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = keys[i], keys[j]
+            both = _types(members, a) & _types(members, b)
+            out[f"{a} / {b}"] = {
+                "contact": "contact" in both,
+                "support": "support" in both,
+                "contain": "contain" in both,
+                "contact-compatibility": _has(objects, a, "contact_components")
+                                         and _has(objects, b, "contact_components"),
+                "support-compatibility": _pairing(objects, a, b,
+                                                  "support_components",
+                                                  "bottom_components"),
+                "contain-compatibility": _pairing(objects, a, b,
+                                                  "contain_components",
+                                                  "key_components"),
+                **spatial,
+            }
+    return out
+
+
+def _pairing(objects, a: str, b: str, host: str, guest: str) -> bool:
+    return ((_has(objects, a, host) and _has(objects, b, guest))
+            or (_has(objects, b, host) and _has(objects, a, guest)))
+
+
+# --------------------------------------------------------------------------- #
+# compilation
+# --------------------------------------------------------------------------- #
+def load_assets(env_id: str, configs: str) -> Tuple[Dict, Dict, Dict]:
+    """``(objects, members, bin_edges)`` for one task."""
+    aff = os.path.join(configs, "affordances", f"{env_id}.json")
+    wl = os.path.join(configs, "subtask_whitelists", env_id, "task_all.json")
+    for path in (aff, wl):
+        if not os.path.isfile(path):
+            raise ScheduleError(
+                f"{env_id}: {path} is missing. Mine the task's assets first."
+            )
+    with open(aff) as handle:
+        objects = json.load(handle).get("objects", {})
+    with open(wl) as handle:
+        whitelist = json.load(handle)
+    return objects, whitelist.get("members", {}), whitelist.get("bin_edges", {})
+
+
+def _order(a_key: str, b_key: str) -> Tuple[str, str, bool]:
+    """Stored edge order for a pair, and whether that swapped the arguments.
+
+    End-effector edges are emitted ``ee -> object`` and never sorted; object
+    pairs follow ``pair_sort_key``, whose first component is the whitelist key.
+    """
+    if a_key == EE_KEY:
+        return a_key, b_key, False
+    if b_key == EE_KEY:
+        return b_key, a_key, True
+    if b_key < a_key:
+        return b_key, a_key, True
+    return a_key, b_key, False
+
+
+def _resolve_labels(relation: str, labels: Sequence[str], swapped: bool,
+                    where: str) -> Tuple[str, ...]:
+    if relation in ANTISYMMETRIC and swapped:
+        try:
+            return tuple(_MIRROR[label] for label in labels)
+        except KeyError as exc:
+            raise ScheduleError(
+                f"{where}: {relation} has no mirror for label {exc.args[0]!r}"
+            ) from None
+    return tuple(labels)
+
+
+def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
+                     members: Dict[str, Any], bin_edges: Dict[str, Any],
+                     entity_vocab) -> CompiledSchedule:
+    """Validate and translate one schedule. Raises on anything unscorable."""
+    env_id = str(raw.get("env_id") or "?")
+    version = int(raw.get("_schema_version", 0))
+    if version != SCHEDULE_SCHEMA_VERSION:
+        raise ScheduleError(
+            f"{env_id}: schedule schema v{version}, expected "
+            f"v{SCHEDULE_SCHEMA_VERSION}"
+        )
+    roles = dict(raw.get("roles") or {})
+    if not roles:
+        raise ScheduleError(f"{env_id}: schedule names no roles")
+
+    duplicates = [k for k in set(roles.values())
+                  if list(roles.values()).count(k) > 1]
+    if duplicates:
+        raise ScheduleError(
+            f"{env_id}: roles {sorted(duplicates)} share one entity key, so a "
+            "frame cannot tell them apart. Give the task an explicit role "
+            "token rather than letting one row serve two roles."
+        )
+    role_ids: Dict[str, int] = {}
+    for role, key in roles.items():
+        if key not in members:
+            raise ScheduleError(
+                f"{env_id}: role {role!r} names {key!r}, which is not a "
+                f"whitelist member ({sorted(members)})"
+            )
+        try:
+            role_ids[role] = entity_vocab.encode(key)
+        except KeyError:
+            raise ScheduleError(
+                f"{env_id}: role {role!r} names {key!r}, absent from the "
+                "entity vocabulary. Re-mine the task."
+            ) from None
+
+    scorable = scorable_relations(objects, members, bin_edges)
+    relations, absolute = build_relation_vocab(), build_absolute_vocab()
+
+    def key_of(token: str, where: str) -> str:
+        if token == EE_ROLE:
+            return EE_KEY
+        if token not in roles:
+            raise ScheduleError(f"{where}: unknown role {token!r}")
+        return roles[token]
+
+    phases: List[Phase] = []
+    for index, rawphase in enumerate(raw.get("phases") or ()):
+        name = str(rawphase.get("name") or index)
+        where = f"{env_id}/{name}"
+        weight = float(rawphase.get("weight", 0.0))
+        clauses = tuple(
+            _clause(c, key_of, scorable, relations, absolute, where)
+            for c in rawphase.get("clauses") or ()
+        )
+        if not clauses:
+            raise ScheduleError(f"{where}: phase has no clauses")
+        inner = sum(c.weight for c in clauses)
+        if abs(inner - weight) > 1e-6:
+            raise ScheduleError(
+                f"{where}: clause weights sum to {inner:.6f}, phase weight is "
+                f"{weight:.6f}. A phase that cannot reach its own weight can "
+                "never be completed."
+            )
+        completion = dict(rawphase.get("completion") or {})
+        completion.setdefault("src", rawphase.get("src", EE_ROLE))
+        completion.setdefault("dst", rawphase.get("dst", EE_ROLE))
+        completion.setdefault("weight", 0.0)
+        phases.append(Phase(
+            name=name, weight=weight, clauses=clauses,
+            completion=_clause(completion, key_of, scorable, relations,
+                               absolute, f"{where}/completion"),
+        ))
+
+    if not phases:
+        raise ScheduleError(f"{env_id}: schedule has no phases")
+    total = sum(p.weight for p in phases)
+    if abs(total - 1.0) > 1e-6:
+        raise ScheduleError(
+            f"{env_id}: phase weights sum to {total:.6f}, not 1. The potential "
+            "is bounded by construction only when they do."
+        )
+    return CompiledSchedule(env_id=env_id, roles=roles,
+                            role_entity_ids=role_ids, phases=tuple(phases))
+
+
+def _clause(raw: Dict[str, Any], key_of, scorable, relations, absolute,
+            where: str) -> Clause:
+    relation = str(raw.get("relation") or "")
+    if relation not in relations.token_to_id:
+        raise ScheduleError(f"{where}: unknown relation {relation!r}")
+    src_key = key_of(str(raw.get("src", EE_ROLE)), where)
+    dst_key = key_of(str(raw.get("dst", EE_ROLE)), where)
+    if src_key == dst_key:
+        raise ScheduleError(f"{where}: clause relates {src_key!r} to itself")
+
+    a_key, b_key, swapped = _order(src_key, dst_key)
+    pair = f"{a_key} / {b_key}"
+    if pair not in scorable:
+        raise ScheduleError(
+            f"{where}: no pair {pair!r} exists in this task's assets"
+        )
+    if not scorable[pair].get(relation):
+        raise ScheduleError(
+            f"{where}: {relation!r} is not scorable on {pair!r}. The mined "
+            "assets carry no components or bins behind it, so the runtime "
+            "would emit 'unobserved' every frame and this clause would score "
+            "zero for the whole episode."
+        )
+
+    holder = raw.get("holder")
+    if relation in DIRECTIONAL:
+        if not holder:
+            raise ScheduleError(
+                f"{where}: {relation!r} needs a 'holder' role -- the label "
+                "names which endpoint holds the other, and which of "
+                "src-holds/dst-holds that is depends on key order."
+            )
+        holder_key = key_of(str(holder), where)
+        if holder_key not in (a_key, b_key):
+            raise ScheduleError(
+                f"{where}: holder {holder_key!r} is not an endpoint of {pair!r}"
+            )
+        labels: Tuple[str, ...] = (
+            SRC_HOLDS if holder_key == a_key else DST_HOLDS,
+        )
+    else:
+        if holder:
+            raise ScheduleError(
+                f"{where}: {relation!r} is not directional; 'holder' would be "
+                "silently ignored"
+            )
+        labels = _resolve_labels(
+            relation, [str(x) for x in raw.get("labels") or ()], swapped, where)
+    if not labels:
+        raise ScheduleError(f"{where}: clause names no labels")
+
+    try:
+        label_ids = tuple(absolute.encode(label) for label in labels)
+    except KeyError as exc:
+        raise ScheduleError(f"{where}: unknown label {exc.args[0]!r}") from None
+    return Clause(
+        relation=relation, relation_id=relations.encode(relation),
+        src_key=a_key, dst_key=b_key, labels=labels, label_ids=label_ids,
+        weight=float(raw.get("weight", 0.0)),
+    )
+
+
+def compile_from_files(env_id: str, schedule_dir: str, configs: str,
+                       entity_vocab) -> CompiledSchedule:
+    path = os.path.join(schedule_dir, f"{env_id}.json")
+    if not os.path.isfile(path):
+        raise ScheduleError(
+            f"{env_id}: no schedule at {path}. progress.mode=task_schedule "
+            "requires one per task."
+        )
+    with open(path) as handle:
+        raw = json.load(handle)
+    objects, members, bin_edges = load_assets(env_id, configs)
+    return compile_schedule(raw, objects, members, bin_edges, entity_vocab)

@@ -30,6 +30,11 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 
 from scenegraph.adapters.interaction_events import EE_KEY
+from scenegraph.core.schedule import (
+    ScheduleError,
+    load_assets,
+    scorable_relations,
+)
 from scenegraph.tools.build_maniskill_assets import load_shards
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -337,65 +342,22 @@ def _iou(a: Tuple[int, int], b: Tuple[int, int]) -> float:
 def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
     """Which relations the runtime can actually emit, per pair.
 
-    A schedule naming a relation with no mined components behind it scores zero
-    forever, and for the compatibility families the runtime cannot tell that
-    apart from 'too far to judge' -- both read ``unobserved``. So the bundle
-    carries the inventory and compilation rejects anything outside it, rather
-    than the schedule failing silently at training time.
+    Shares one implementation with the compiler: a bundle that advertises a
+    clause the compiler then rejects would send the refinement pass looking for
+    a schedule that cannot exist.
     """
-    aff_path = configs / "affordances" / f"{env_id}.json"
-    wl_path = configs / "subtask_whitelists" / env_id / "task_all.json"
-    for path in (aff_path, wl_path):
-        if not path.exists():
-            raise SystemExit(
-                f"{path} is missing; mine the task's assets before its "
-                "schedule, or the bundle cannot say which clauses are scorable"
-            )
-    with open(aff_path) as handle:
-        objects = json.load(handle).get("objects", {})
-    with open(wl_path) as handle:
-        whitelist = json.load(handle)
-    members = whitelist.get("members", {})
-    bins = whitelist.get("bin_edges", {})
-
-    def has(key: str, field: str) -> bool:
-        return bool((objects.get(key) or {}).get(field))
+    try:
+        objects, members, bins = load_assets(env_id, str(configs))
+    except ScheduleError as exc:
+        raise SystemExit(
+            f"{exc} Without them the bundle cannot say which clauses are "
+            "scorable, and the refinement pass would be guessing."
+        ) from None
 
     def types(key: str) -> set:
         return set((members.get(key) or {}).get("interaction_types") or ())
 
-    pairs: Dict[str, Any] = {}
     keys = sorted(members)
-    for key in keys:
-        pairs[f"{EE_KEY} / {key}"] = {
-            "contact": "contact" in types(key),
-            "grasp": "grasp" in types(key),
-            "grasp-compatibility": has(key, "grasp_components"),
-            "contact-compatibility": has(key, "contact_components"),
-            "planar-distance": bool(bins.get("planar-distance")),
-            "height-offset": bool(bins.get("height-offset")),
-        }
-    for i in range(len(keys)):
-        for j in range(i + 1, len(keys)):
-            a, b = keys[i], keys[j]
-            both = types(a) & types(b)
-            pairs[f"{a} / {b}"] = {
-                "contact": "contact" in both,
-                "support": "support" in both,
-                "contain": "contain" in both,
-                "contact-compatibility": has(a, "contact_components")
-                                         and has(b, "contact_components"),
-                "support-compatibility": (has(a, "support_components")
-                                          and has(b, "bottom_components"))
-                                         or (has(b, "support_components")
-                                             and has(a, "bottom_components")),
-                "contain-compatibility": (has(a, "contain_components")
-                                          and has(b, "key_components"))
-                                         or (has(b, "contain_components")
-                                             and has(a, "key_components")),
-                "planar-distance": bool(bins.get("planar-distance")),
-                "height-offset": bool(bins.get("height-offset")),
-            }
     return {
         "members": {k: sorted(types(k)) for k in keys},
         # Admitted for their position only -- a goal marker has no collision
@@ -406,11 +368,11 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
                       ("grasp_components", "contact_components",
                        "support_components", "bottom_components",
                        "contain_components", "key_components")
-                      if has(k, field))
+                      if (objects.get(k) or {}).get(field))
             for k in keys
         },
         "spatial_bins": {r: bool(bins.get(r)) for r in SPATIAL_RELATIONS},
-        "scorable": pairs,
+        "scorable": scorable_relations(objects, members, bins),
     }
 
 

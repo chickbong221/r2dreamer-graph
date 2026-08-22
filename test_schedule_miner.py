@@ -276,7 +276,7 @@ class ClauseInventoryTest(MinerTestBase):
         shutil.rmtree(self.configs)
         with self.assertRaises(SystemExit) as cm:
             self._bundle([_episode() for _ in range(10)])
-        self.assertIn("mine the task's assets", str(cm.exception))
+        self.assertIn("Mine the task's assets first", str(cm.exception))
 
 
 class BundleTest(MinerTestBase):
