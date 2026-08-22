@@ -52,6 +52,13 @@ _INTRA_FAMILY_ORDER = {
                          "support-compatibility", "contain-compatibility"),
 }
 
+# Predicate states are useful to the model, but they are not relations a
+# person should have to read in a demonstration video.  Negative/unknown
+# physical predicates add a dense web of empty facts, while a positive
+# predicate is much clearer when named by the relation it establishes.
+_HIDDEN_LABELS = {"not-holds", "unobserved"}
+_POSITIVE_PHYSICAL_LABELS = {"holds", "src-holds", "dst-holds"}
+
 # Per-family chip styling. Affordance uses a green palette so it doesn't
 # read as the same family as the (also light+cool) spatial blue.
 _FAMILY_STYLE: Dict[str, Dict[str, str]] = {
@@ -101,6 +108,14 @@ def _radial_layout(
         pos["ee"] = np.array([-radius * 0.55, 0.0])
         pos[objects[0]] = np.array([radius * 0.55, 0.0])
         return pos
+    if has_ee and len(objects) == 2:
+        # A diameter layout makes the object--object edge pass straight through
+        # ee, which is especially messy in the common object + receptacle
+        # scene.  Use a balanced triangle instead.
+        pos["ee"] = np.array([0.0, -radius * 0.45])
+        pos[objects[0]] = np.array([-radius * 0.65, radius * 0.35])
+        pos[objects[1]] = np.array([radius * 0.65, radius * 0.35])
+        return pos
     n = max(len(objects), 1)
     for i, nid in enumerate(objects):
         ang = np.pi / 2 - 2 * np.pi * i / n
@@ -131,22 +146,44 @@ def _family_of(relation: str) -> Optional[str]:
     return _RELATION_FAMILY.get(relation)
 
 
+def _display_text(edge: Edge) -> Optional[str]:
+    """Return the human-facing fact text, or ``None`` when it is noise.
+
+    This only changes diagnostics.  The packed graph and its supervision keep
+    the full absolute-state vocabulary, including negative and unobserved
+    states.
+    """
+    label = str(edge.label)
+    if label in _HIDDEN_LABELS:
+        return None
+    family = _family_of(edge.relation)
+    if family == _FAMILY_PHYSICAL_STATE and label in _POSITIVE_PHYSICAL_LABELS:
+        text = edge.relation
+    else:
+        text = label
+    if edge.temp_label and str(edge.temp_label) not in _HIDDEN_LABELS:
+        text = f"{text} / {edge.temp_label}"
+    return text
+
+
 def _group_by_family(elist: List[Edge]) -> Dict[str, List[str]]:
     """Bucket facts by family in ``_INTRA_FAMILY_ORDER``, one chip line each.
-    A fact with a change label renders as ``sigma / delta``."""
+    Negative and unobserved facts are omitted.  A positive physical predicate
+    renders as its relation name (``contact``, ``support``, ...) rather than
+    the implementation-level label ``holds``."""
     grouped: Dict[str, List[Tuple[int, str]]] = {f: [] for f in _FAMILY_ORDER}
     for e in elist:
         family = _family_of(e.relation)
         if family is None:
+            continue
+        text = _display_text(e)
+        if text is None:
             continue
         order = _INTRA_FAMILY_ORDER.get(family, ())
         try:
             rank = order.index(e.relation)
         except ValueError:
             rank = len(order)
-        text = str(e.label)
-        if e.temp_label:
-            text = f"{text} / {e.temp_label}"
         grouped[family].append((rank, text))
 
     out: Dict[str, List[str]] = {}
@@ -206,6 +243,10 @@ def render_graph(
     by_pair: Dict[Tuple[str, str], List[Edge]] = {}
     for e in graph.edges:
         if e.src not in pos or e.dst not in pos:
+            continue
+        # Do not leave an unlabeled line behind for a pair whose only facts are
+        # negative or unobserved.
+        if _display_text(e) is None:
             continue
         by_pair.setdefault((e.src, e.dst), []).append(e)
 

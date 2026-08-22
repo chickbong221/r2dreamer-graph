@@ -234,8 +234,10 @@ class GraphObsBuilder:
             {} for _ in range(self.num_envs)
         ]
         # Env indices whose latest graph + record-cam masks are cached for
-        # offline rendering. Empty in the hot path.
+        # offline overlays. Graph-only recording is used by trainer videos and
+        # avoids constructing masks that their node-link panel never reads.
         self.record_env_indices: Set[int] = set()
+        self.record_graph_env_indices: Set[int] = set()
         self.last_graph_by_env: Dict[int, Any] = {}
         self.last_masks_by_env: Dict[int, Any] = {}
         self._cams_checked = False
@@ -385,6 +387,7 @@ class GraphObsBuilder:
         seg_by_cam: Dict[str, np.ndarray],
     ):
         need_masks = env_idx in self.record_env_indices
+        need_graph = need_masks or env_idx in self.record_graph_env_indices
         if episode_boundary:
             self._frames[env_idx] = 0
             clear_resolve_cache(self.env, env_idx)
@@ -398,8 +401,9 @@ class GraphObsBuilder:
             need_masks=need_masks,
             patch_grid=self.patch_grid,
         )
-        if need_masks:
+        if need_graph:
             self.last_graph_by_env[env_idx] = graph
+        if need_masks:
             self.last_masks_by_env[env_idx] = masks
         self._frames[env_idx] += 1
         return graph

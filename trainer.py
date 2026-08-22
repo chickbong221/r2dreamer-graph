@@ -176,7 +176,7 @@ class OnlineTrainer:
             try:
                 from scenegraph.viz.palette import ColorMap
                 colormap = ColorMap()      # shared, so colours stay stable
-                graph_builder.record_env_indices = {0}
+                graph_builder.record_graph_env_indices = {0}
             except Exception:
                 graph_builder = None
         agent_state = agent.get_initial_state(envs.env_num)
@@ -227,7 +227,7 @@ class OnlineTrainer:
                     log_maxima[key] = torch.maximum(log_maxima[key], frame)
             once_done |= done
         if graph_builder is not None:
-            graph_builder.record_env_indices = set()
+            graph_builder.record_graph_env_indices = set()
             graph_builder.last_graph_by_env.clear()
             graph_builder.last_masks_by_env.clear()
         # dict of (B, T, *)
@@ -275,6 +275,18 @@ class OnlineTrainer:
         """
         envs = self.train_envs
         video_cache = []
+        # Keep the same graph panel beside the observation cameras in training
+        # videos that evaluation already uses.  Only env 0 is cached because
+        # that is the environment selected by ``_observation_frame``.
+        graph_builder = _graph_builder(envs)
+        colormap = None
+        if graph_builder is not None:
+            try:
+                from scenegraph.viz.palette import ColorMap
+                colormap = ColorMap()
+                graph_builder.record_graph_env_indices = {0}
+            except Exception:
+                graph_builder = None
         step = self.replay_buffer.count() * self._action_repeat
         update_count = 0
         policy_fps = tools.FPS()
@@ -354,7 +366,11 @@ class OnlineTrainer:
                 if key in agent_state:
                     trans[key] = agent_state[key]
             trans["episode"] = episode_ids  # Don't lift dim
-            frame = _observation_frame(trans)
+            panel_fn = (
+                (lambda h: _graph_panel(graph_builder, 0, h, colormap))
+                if graph_builder is not None else None
+            )
+            frame = _observation_frame(trans, panel_fn)
             if frame is not None:
                 video_cache.append(frame)
             self.replay_buffer.add_transition(trans.detach())
@@ -401,3 +417,7 @@ class OnlineTrainer:
                     for name, value in tools.process_memory_stats().items():
                         self.logger.scalar(name, value)
                     self.logger.write(step)
+        if graph_builder is not None:
+            graph_builder.record_graph_env_indices = set()
+            graph_builder.last_graph_by_env.clear()
+            graph_builder.last_masks_by_env.clear()

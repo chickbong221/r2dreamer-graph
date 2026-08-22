@@ -569,8 +569,9 @@ def task_schedule_source(envs):
 def graph_panel_source(envs):
     """The graph builder behind an env stack, or None.
 
-    Eval video only. Returns the object holding ``last_graph_by_env``, which
-    is populated only for envs listed in ``record_env_indices``.
+    Diagnostic videos only. Returns the object holding ``last_graph_by_env``,
+    which is populated for envs listed in ``record_graph_env_indices`` (or the
+    mask-producing ``record_env_indices`` used by offline overlays).
     """
     for attr in ("_graph", "graph"):
         builder = getattr(envs, attr, None)
