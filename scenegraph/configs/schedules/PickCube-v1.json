@@ -1,0 +1,208 @@
+{
+  "_schema_version": 1,
+  "env_id": "PickCube-v1",
+  "roles": {
+    "movable": "actor:cube",
+    "destination": "actor:goal_site"
+  },
+  "notes": [
+    "destination is a non-colliding goal marker: spatial clauses only, since no contact, support or contain can ever hold against it"
+  ],
+  "phases": [
+    {
+      "name": "approach",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.25,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.033334
+        }
+      ],
+      "completion": {
+        "relation": "contact",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "grasp",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.15,
+      "clauses": [
+        {
+          "relation": "grasp",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.15
+        }
+      ],
+      "completion": {
+        "relation": "grasp",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "carry_to_goal",
+      "src": "movable",
+      "dst": "destination",
+      "weight": 0.6,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.1
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.1
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.1
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.1
+        },
+        {
+          "relation": "height-offset",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "far-below",
+            "below",
+            "level"
+          ],
+          "weight": 0.066667
+        },
+        {
+          "relation": "height-offset",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "below",
+            "level"
+          ],
+          "weight": 0.066667
+        },
+        {
+          "relation": "height-offset",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "level"
+          ],
+          "weight": 0.066666
+        }
+      ],
+      "completion": {
+        "relation": "planar-distance",
+        "labels": [
+          "very-near"
+        ]
+      }
+    }
+  ]
+}

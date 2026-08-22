@@ -436,6 +436,16 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         if key in objects and sym.get("symmetry") != "none":
             objects[key]["symmetry"] = sym
 
+    # Scene entities that never interacted. A goal marker has no collision
+    # geometry, so it produces no contact, grasp, support or contain bucket and
+    # would be dropped -- but a task whose success is "the object reaches
+    # *there*" has nowhere to point without it. Admitted spatially only: no
+    # components, no interaction types, so the physical and affordance families
+    # skip it and only planar-distance and height-offset are emitted.
+    for key in sorted(symmetry):
+        if key not in members:
+            members[key]["roles"].add("spatial")
+
     affordances = {
         "_schema_version": AFFORDANCE_SCHEMA_VERSION,
         "env_id": env_id,

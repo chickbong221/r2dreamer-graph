@@ -1,0 +1,227 @@
+{
+  "_schema_version": 1,
+  "env_id": "PlugCharger-v1",
+  "roles": {
+    "movable": "actor:charger",
+    "destination": "actor:receptacle"
+  },
+  "phases": [
+    {
+      "name": "approach",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.25,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.033334
+        }
+      ],
+      "completion": {
+        "relation": "contact",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "grasp",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.1,
+      "clauses": [
+        {
+          "relation": "grasp",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.1
+        }
+      ],
+      "completion": {
+        "relation": "grasp",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "transport",
+      "src": "movable",
+      "dst": "destination",
+      "weight": 0.3,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.05
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.05
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.05
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.05
+        },
+        {
+          "relation": "contain-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "contain-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.033333
+        },
+        {
+          "relation": "contain-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.033334
+        }
+      ],
+      "completion": {
+        "relation": "contact",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "settle",
+      "src": "movable",
+      "dst": "destination",
+      "weight": 0.35,
+      "clauses": [
+        {
+          "relation": "contain",
+          "src": "movable",
+          "dst": "destination",
+          "holder": "destination",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.35
+        }
+      ],
+      "completion": {
+        "relation": "contain",
+        "holder": "destination"
+      }
+    }
+  ]
+}

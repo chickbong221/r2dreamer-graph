@@ -1,0 +1,225 @@
+{
+  "_schema_version": 1,
+  "env_id": "PullCubeTool-v1",
+  "roles": {
+    "movable": "actor:l_shape_tool",
+    "destination": "actor:cube",
+    "reference": "actor:table-workspace"
+  },
+  "notes": [
+    "No goal entity exists; success is the cube's coordinate passing a threshold. planar-distance(cube, table-workspace) is a proxy: the table origin sits at XY ~(-0.12, 0), essentially the robot base, so the cube closing on it is the pull making progress. Dense signal only, never a success detector -- the environment's dense reward remains responsible for completion. If TableSceneBuilder moves the table origin this clause silently stops meaning anything.",
+    "support-compatibility(cube, l_shape_tool) is deliberately absent: the support bucket was excluded at 15.7% presence, so no components back it and it would score unobserved forever.",
+    "height-offset is not used for the pull: the cube slides along the table, so its height never changes."
+  ],
+  "phases": [
+    {
+      "name": "approach_tool",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.2,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.026667
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.026667
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.026666
+        }
+      ],
+      "completion": {
+        "relation": "contact",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "grasp_tool",
+      "src": "ee",
+      "dst": "movable",
+      "weight": 0.1,
+      "clauses": [
+        {
+          "relation": "grasp",
+          "src": "ee",
+          "dst": "movable",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.1
+        }
+      ],
+      "completion": {
+        "relation": "grasp",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "reach_cube",
+      "src": "movable",
+      "dst": "destination",
+      "weight": 0.25,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.0625
+        }
+      ],
+      "completion": {
+        "relation": "contact",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "pull",
+      "src": "destination",
+      "dst": "reference",
+      "weight": 0.45,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "destination",
+          "dst": "reference",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.15
+        },
+        {
+          "relation": "planar-distance",
+          "src": "destination",
+          "dst": "reference",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.15
+        },
+        {
+          "relation": "planar-distance",
+          "src": "destination",
+          "dst": "reference",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.15
+        }
+      ],
+      "completion": {
+        "relation": "planar-distance",
+        "labels": [
+          "very-near"
+        ]
+      }
+    }
+  ]
+}

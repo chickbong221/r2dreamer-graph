@@ -498,3 +498,45 @@ class EpisodeAlignmentTest(MinerTestBase):
             on = rec["interactions"][0][3]
             self.assertAlmostEqual(rec["predicates"]["is_grasped"][0][0], on,
                                    delta=1)
+
+
+class SpatialOnlyMemberTest(MinerTestBase):
+    """A goal marker has no collision geometry, so it produces no bucket at
+    all -- but a task whose success is "the object reaches *there*" has nowhere
+    to point without it."""
+
+    def _mine_with_goal(self, symmetry):
+        self.write_shard("PickCube-v1", {
+            f"grasp / {EE_KEY} / actor:cube": _grasp(),
+            "support / actor:table / actor:cube": _support(),
+        }, symmetry=symmetry)
+        return self.mine("PickCube-v1")
+
+    def test_a_non_interacting_entity_becomes_a_member(self):
+        _, wl = self._mine_with_goal({"actor:goal_site": {"symmetry": "none"}})
+        self.assertIn("actor:goal_site", wl["members"])
+
+    def test_it_carries_no_interaction_types(self):
+        """Empty types keep the physical and affordance families away from it;
+        only planar-distance and height-offset reach a spatial member."""
+        _, wl = self._mine_with_goal({"actor:goal_site": {"symmetry": "none"}})
+        entry = wl["members"]["actor:goal_site"]
+        self.assertEqual(entry["interaction_types"], [])
+        self.assertEqual(entry["roles"], ["spatial"])
+
+    def test_it_gets_no_affordance_components(self):
+        aff, _ = self._mine_with_goal({"actor:goal_site": {"symmetry": "none"}})
+        self.assertNotIn("actor:goal_site", aff["objects"])
+
+    def test_interacting_entities_keep_their_own_roles(self):
+        """The pass only fills gaps; it must not overwrite a real member."""
+        _, wl = self._mine_with_goal({
+            "actor:goal_site": {"symmetry": "none"},
+            "actor:cube": {"symmetry": "none"},
+        })
+        self.assertNotIn("spatial", wl["members"]["actor:cube"]["roles"])
+        self.assertIn("grasp", wl["members"]["actor:cube"]["interaction_types"])
+
+    def test_a_task_with_no_extra_entities_is_unchanged(self):
+        _, wl = self._mine_with_goal({"actor:cube": {"symmetry": "none"}})
+        self.assertEqual(sorted(wl["members"]), ["actor:cube", "actor:table"])
