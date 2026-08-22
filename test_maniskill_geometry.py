@@ -238,3 +238,54 @@ class SymmetryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from scenegraph.core.affordance import ContactComponent
+from scenegraph.core.containment import (
+    obj_contact_compatibility, select_paired_components,
+)
+
+
+def _cc(x, partner=None):
+    return ContactComponent(np.array([float(x), 0.0, 0.0]),
+                            np.array([1.0, 0.0, 0.0]), partner)
+
+
+class PairedContactSelectionTest(unittest.TestCase):
+    def test_only_components_for_this_pair_are_compared(self):
+        a = [_cc(0, "actor:box"), _cc(9, "actor:table")]
+        b = [_cc(0, "actor:peg")]
+        sel_a, sel_b, paired = select_paired_components(
+            a, b, "actor:peg", "actor:box")
+        self.assertEqual(len(sel_a), 1)
+        self.assertTrue(paired)
+
+    def test_legacy_components_without_partners_fall_back(self):
+        a, b = [_cc(0), _cc(1)], [_cc(0)]
+        sel_a, sel_b, paired = select_paired_components(a, b, "x", "y")
+        self.assertFalse(paired)
+        self.assertEqual(len(sel_a), 2)
+
+    def test_mismatched_lengths_fall_back_rather_than_misalign(self):
+        a = [_cc(0, "y"), _cc(1, "y")]
+        b = [_cc(0, "x")]
+        _, _, paired = select_paired_components(a, b, "x", "y")
+        self.assertFalse(paired)
+
+    def test_paired_scoring_uses_index_alignment(self):
+        pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        a = [_cc(0.0, "b"), _cc(5.0, "b")]
+        b = [_cc(0.1, "a"), _cc(5.0, "a")]
+        meas = obj_contact_compatibility(pose, a, pose, b, "a", "b")
+        # Index-aligned: pair 1 is exact, so it wins over the 0.1 gap of pair 0.
+        self.assertEqual((meas.a_index, meas.b_index), (1, 1))
+
+    def test_cross_pair_match_is_prevented(self):
+        pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        # cubeA's table anchor sits exactly on cubeB's anchor; without partner
+        # filtering the product would match them.
+        a = [_cc(3.0, "actor:cubeB"), _cc(0.0, "actor:table")]
+        b = [_cc(0.0, "actor:cubeA")]
+        meas = obj_contact_compatibility(pose, a, pose, b,
+                                         "actor:cubeA", "actor:cubeB")
+        self.assertAlmostEqual(meas.pos_mismatch, 3.0)

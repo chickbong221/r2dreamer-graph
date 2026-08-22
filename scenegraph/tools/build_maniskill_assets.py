@@ -166,7 +166,8 @@ def _rot(pose) -> np.ndarray:
     ], dtype=float)
 
 
-def _paired_contact(samples) -> Tuple[List[Dict], List[Dict]]:
+def _paired_contact(samples, a_key: str, b_key: str
+                    ) -> Tuple[List[Dict], List[Dict]]:
     """Index-aligned contact components for both endpoints of one pair.
 
     Both sides come from the same physical event, so the runtime compares
@@ -177,12 +178,16 @@ def _paired_contact(samples) -> Tuple[List[Dict], List[Dict]]:
         p = s["payload"]
         if "anchor_a_local" not in p or "anchor_b_local" not in p:
             continue
+        # ``partner`` is what keeps the two lists index-aligned once an
+        # object touches more than one thing.
         a_comps.append({"anchor": _round(p["anchor_a_local"]),
                         "outward_normal": _unit(p.get("normal_a_local")
-                                                or [0, 0, 1])})
+                                                or [0, 0, 1]),
+                        "partner": b_key})
         b_comps.append({"anchor": _round(p["anchor_b_local"]),
                         "outward_normal": _unit(p.get("normal_b_local")
-                                                or [0, 0, -1])})
+                                                or [0, 0, -1]),
+                        "partner": a_key})
     return a_comps, b_comps
 
 
@@ -343,7 +348,7 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
             members[dst]["interaction_types"].add("contact")
             members[dst]["roles"].add("interacted")
         elif rel == "contact":
-            a_comps, b_comps = _paired_contact(samples)
+            a_comps, b_comps = _paired_contact(samples, src, dst)
             if not a_comps:
                 empty.append(f"{bucket} (no anchor_a_local in payload)")
             objects[src]["contact_components"].extend(a_comps)

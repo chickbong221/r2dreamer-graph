@@ -74,6 +74,10 @@ class ContactComponent:
     """
     anchor_obj_frame: np.ndarray
     outward_normal_obj_frame: Optional[np.ndarray] = None
+    # Which object this anchor was observed against. A flat per-object list
+    # cannot say which components belong to which pair, so an object touching
+    # two things would let one pair's anchor match the other's.
+    partner_key: Optional[str] = None
 
 
 @dataclass
@@ -221,9 +225,11 @@ def _parse_contact_components(comps_raw) -> List[ContactComponent]:
         anchor = _parse_vec3(c.get("anchor"))
         if anchor is None:
             continue
+        partner = c.get("partner")
         out.append(ContactComponent(
             anchor_obj_frame=anchor,
             outward_normal_obj_frame=_parse_unit_vec3(c.get("outward_normal")),
+            partner_key=str(partner) if partner else None,
         ))
     return out
 

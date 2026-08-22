@@ -337,3 +337,19 @@ class SilentLossTest(MinerTestBase):
         })
         with self.assertRaises(SystemExit):
             self.mine("PegInsertionSide-v1")
+
+
+class PairedComparisonTest(MinerTestBase):
+    """An object touching two things must not match one pair's anchors
+    against the other's."""
+
+    def test_components_carry_their_partner(self):
+        self.write_shard("StackCube-v1", {
+            f"grasp / {EE_KEY} / actor:cubeA": _grasp(),
+            "contact / actor:cubeA / actor:cubeB": _obj_contact(),
+        })
+        aff, _ = self.mine("StackCube-v1")
+        a = aff["objects"]["actor:cubeA"]["contact_components"]
+        self.assertTrue(all(c["partner"] == "actor:cubeB" for c in a))
+        b = aff["objects"]["actor:cubeB"]["contact_components"]
+        self.assertTrue(all(c["partner"] == "actor:cubeA" for c in b))

@@ -82,12 +82,38 @@ class ObjContactMeasurement:
 
 def _pick_closest_pair(
     a_anchors_world: np.ndarray, b_anchors_world: np.ndarray,
+    paired: bool = False,
 ) -> Tuple[int, int, float]:
-    """Indices ``(i, j)`` whose world anchors are closest and the distance."""
+    """Indices ``(i, j)`` whose world anchors are closest and the distance.
+
+    ``paired`` compares index against index -- N distances -- which is valid
+    only when both sides were mined from the same events, in order. Legacy
+    assets carry no pairing, so they still take the full N-by-M product.
+    """
+    if paired:
+        dists = np.linalg.norm(a_anchors_world - b_anchors_world, axis=1)
+        i = int(np.argmin(dists))
+        return i, i, float(dists[i])
     diffs = a_anchors_world[:, None, :] - b_anchors_world[None, :, :]
     dists = np.linalg.norm(diffs, axis=2)
     i, j = np.unravel_index(int(np.argmin(dists)), dists.shape)
     return int(i), int(j), float(dists[i, j])
+
+
+def select_paired_components(a_components, b_components, a_key, b_key):
+    """Restrict both sides to the components mined against each other.
+
+    Returns ``(a, b, paired)``. ``paired`` is False when either side lacks
+    partner tags (legacy assets) or the two sides do not line up, in which case
+    the caller falls back to the product.
+    """
+    if not a_key or not b_key:
+        return a_components, b_components, False
+    a_sel = [c for c in a_components if c.partner_key == b_key]
+    b_sel = [c for c in b_components if c.partner_key == a_key]
+    if not a_sel or not b_sel or len(a_sel) != len(b_sel):
+        return a_components, b_components, False
+    return a_sel, b_sel, True
 
 
 def obj_contact_compatibility(
@@ -95,6 +121,8 @@ def obj_contact_compatibility(
     a_components: List[ContactComponent],
     b_pose_world: List[float],
     b_components: List[ContactComponent],
+    a_key: Optional[str] = None,
+    b_key: Optional[str] = None,
 ) -> Optional[ObjContactMeasurement]:
     """Score the closest contact-anchor pair between two objects.
 
@@ -105,6 +133,8 @@ def obj_contact_compatibility(
     """
     if not a_components or not b_components:
         return None
+    a_components, b_components, paired = select_paired_components(
+        a_components, b_components, a_key, b_key)
     a_anchors = []
     for c in a_components:
         p = transform_point(a_pose_world, c.anchor_obj_frame)
@@ -119,7 +149,7 @@ def obj_contact_compatibility(
         b_anchors.append(p)
     a_arr = np.asarray(a_anchors, dtype=float)
     b_arr = np.asarray(b_anchors, dtype=float)
-    i, j, dist = _pick_closest_pair(a_arr, b_arr)
+    i, j, dist = _pick_closest_pair(a_arr, b_arr, paired)
 
     orient: Optional[float] = None
     n_a = a_components[i].outward_normal_obj_frame

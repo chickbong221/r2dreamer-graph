@@ -792,6 +792,8 @@ def object_object_affordance_edges(
                 if scored:
                     meas = obj_contact_compatibility(
                         a.pose_world, a_comps, b.pose_world, b_comps,
+                        a.attributes.get("whitelist_key"),
+                        b.attributes.get("whitelist_key"),
                     )
                     if meas is not None:
                         parts = [meas.pos_mismatch / norm["pos"]]
