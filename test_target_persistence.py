@@ -331,10 +331,13 @@ class ObjectObjectSpatialTest(unittest.TestCase):
 # Builder-side retention
 # --------------------------------------------------------------------------- #
 class _State:
-    """The two privileged lookups retention needs. ``step`` wants a live env;
-    these methods do not."""
+    """The privileged lookups retention and seeding need. ``step`` wants a live
+    env; these methods do not."""
 
     active_subtask_type = "pick"
+    env_idx = 0
+    robot_links = frozenset()
+    robot_link_names = frozenset()
 
     def __init__(self, seg_id_map=None):
         self.seg_id_map = dict(seg_id_map or {})
@@ -426,6 +429,80 @@ class VisibilityPolicyTest(unittest.TestCase):
             GraphBuilder(None, {"selection": {"n_max": 8},
                                 "temporal": {"K": 5}},
                          visibility_policy="sometimes")
+
+
+class SceneSeedingTest(unittest.TestCase):
+    """A whitelisted actor that renders no pixels must still be a vertex.
+
+    PickCube's goal marker is the case: hidden before sensor capture and
+    collisionless, so it produces neither pixels nor contacts. Mining admits it
+    from poses, so without seeding the whitelist declares an object the runtime
+    graph can never produce, and the schedule role bound to it never resolves.
+    """
+
+    def _seed(self, nodes, entities, admit=None):
+        from scenegraph.core.node_builder import seed_scene_nodes
+        state = _State({i: e for i, e in enumerate(entities, start=1)})
+        seed_scene_nodes(nodes, state, admit=admit)
+        return nodes
+
+    def test_an_unrendered_actor_becomes_a_vertex(self):
+        nodes = self._seed({"ee": _node("ee", "end_effector")},
+                           [_Entity("goal_site")])
+        self.assertIn("object:goal_site", nodes)
+        node = nodes["object:goal_site"]
+        self.assertFalse(node.visible)
+        self.assertEqual(node.pixel_area, 0)
+        self.assertEqual(node.segmentation_ids, [])
+        self.assertEqual(node.source, "scene")
+
+    def test_a_rendered_actor_is_left_alone(self):
+        """Seeding must not clobber the pixels a camera did capture."""
+        seen = _node("object:cube", "cube", seg=(5,))
+        seen.pixel_area = 41
+        nodes = self._seed({"object:cube": seen}, [_Entity("cube")])
+        self.assertEqual(len(nodes), 1)
+        self.assertTrue(nodes["object:cube"].visible)
+        self.assertEqual(nodes["object:cube"].pixel_area, 41)
+
+    def test_the_gate_keeps_the_scenery_out(self):
+        """Without a whitelist gate this would admit the ground and the walls,
+        and capacity would fail on scenery."""
+        nodes = self._seed(
+            {}, [_Entity("goal_site"), _Entity("ground")],
+            admit=lambda e: e.name != "ground",
+        )
+        self.assertEqual(sorted(nodes), ["object:goal_site"])
+
+    def test_a_seeded_node_carries_no_box(self):
+        """bbox all-zero is the agreed signal for no pixels this frame; the
+        centroid still comes from the simulator."""
+        import numpy as np
+        from scenegraph.core.node_builder import fill_bboxes
+        nodes = self._seed({}, [_Entity("goal_site")])
+        fill_bboxes(nodes, [np.zeros((4, 4), np.int64)])
+        self.assertTrue((nodes["object:goal_site"].bbox == 0).all())
+
+    def test_a_seeded_node_resolves_to_its_entity(self):
+        """Otherwise every force query on it reads zero, which is emitted as a
+        confident not-holds rather than as nothing."""
+        builder = _builder()
+        goal = _Entity("goal_site")
+        nodes = self._seed({}, [goal])
+        state = _State({1: goal})
+        self.assertIs(builder._entity_for(nodes["object:goal_site"], state), goal)
+
+
+class SeedGateTest(unittest.TestCase):
+    def test_tabletop_seeds_from_the_scene(self):
+        builder = _builder(VISIBILITY_KEEP)
+        self.assertEqual(builder._seed_gate, builder._entity_admitted)
+
+    def test_projected_camera_does_not(self):
+        """MS-HAB's scene is a whole apartment: admissibility is not the
+        question there, camera coverage is."""
+        builder = _builder(VISIBILITY_PROJECTED)
+        self.assertIsNone(builder._seed_gate)
 
 
 if __name__ == "__main__":

@@ -237,6 +237,9 @@ def _ingest_camera(
     ``admit`` is an optional early whitelist gate: entities it rejects are
     skipped before node construction. It must admit a superset of what the
     downstream ``apply_whitelist`` keeps so the final graph is unchanged.
+
+    ``seed_scene``, when given, is the gate for :func:`seed_scene_nodes`: every
+    actor it admits becomes a vertex whether or not it rendered.
     """
     flat = seg.reshape(-1)
     counts_by_id = np.bincount(flat)
@@ -275,6 +278,45 @@ def _ingest_camera(
         nodes[key].pixel_area = area_by_key[key]
 
 
+def seed_scene_nodes(
+    nodes: Dict[str, Node],
+    state: PrivilegedState,
+    *,
+    admit: Optional[Callable[[Any], bool]] = None,
+) -> None:
+    """Add a pixel-less node for every admissible actor no camera rendered.
+
+    Segmentation is the only way an entity becomes a vertex, so an actor that
+    renders nothing -- a goal marker the task hides before sensor capture, an
+    object fully inside a container -- is never one, and a schedule role bound
+    to it can never resolve. Mining does not have that blind spot: it admits
+    spatial-only members from poses, so the whitelist declares objects the
+    runtime graph then cannot produce.
+
+    ``seg_id_map`` covers ``scene.actors`` rather than the pixels of any frame,
+    so it lists them all. The seeded node carries no segmentation ids, which
+    leaves its box zero -- the agreed signal for "no pixels this frame" -- while
+    the caller refreshes its centroid from the simulator like any other.
+
+    Tabletop scenes only. Under ``projected_camera`` the scene is a whole
+    apartment and admissibility is not the question; camera coverage is.
+    """
+    for entity in state.seg_id_map.values():
+        if entity is None or _is_robot_link(
+            entity, state.robot_links, state.robot_link_names
+        ):
+            continue
+        key = canonical_object_key(entity)
+        if key in nodes:
+            continue
+        if admit is not None and not admit(entity):
+            continue
+        node = make_object_node(entity, state)
+        node.visible = False
+        node.source = "scene"
+        nodes[key] = node
+
+
 def build_nodes(
     obs: dict,
     state: PrivilegedState,
@@ -291,6 +333,7 @@ def build_nodes(
     patch_grid: int = 8,
     appearance: bool = True,
     bbox: bool = True,
+    seed_scene: Optional[Callable[[Any], bool]] = None,
 ) -> Tuple[Dict[str, Node], MaskAccumulator, str, np.ndarray]:
     """Return (nodes_by_id, masks, record_camera_name, rgb).
 
@@ -339,6 +382,11 @@ def build_nodes(
         )
 
     nodes["ee"].pixel_area = area_by_key["ee"]
+    if seed_scene is not None:
+        # Its own gate, not ``admit``: that one is relaxed on recording paths
+        # so overlays keep every visible entity, and seeding without a
+        # whitelist would add the ground and the walls.
+        seed_scene_nodes(nodes, state, admit=seed_scene)
     # Patch coverage exists only to feed the appearance encoder, and computing
     # it is the expensive half. Boxes are wanted on their own by the pooled
     # relation contract, which reads no RGB and builds no DINO, so the two are

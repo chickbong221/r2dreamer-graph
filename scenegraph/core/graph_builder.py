@@ -342,6 +342,19 @@ class GraphBuilder:
             self._match_key_cache[id(entity)] = (entity, key)
         return wl.contains(key)
 
+    @property
+    def _seed_gate(self):
+        """Whitelist gate for scene seeding, or None where seeding is wrong.
+
+        Tabletop only: a whitelisted actor is a vertex whether or not it
+        rendered, so a role bound to a marker the task hides before sensor
+        capture still resolves. Under ``projected_camera`` the scene is a whole
+        apartment and coverage, not admissibility, is the question.
+        """
+        if self.visibility_policy != VISIBILITY_KEEP:
+            return None
+        return self._entity_admitted
+
     def _check_capacity(self, nodes: Dict[str, Node], frame: int, state) -> None:
         """Retention makes capacity a configuration fact, not a runtime choice.
 
@@ -367,10 +380,11 @@ class GraphBuilder:
     def _entity_for(self, node: Node, state):
         """Cached simulator entity for one node, resolved on first sight.
 
-        Segmentation ids are the only way in, so the association has to be made
-        while the node is still visible and kept afterwards. Without it a
-        retained node's force queries read zero, which would be emitted as a
-        confident ``not-holds``.
+        For a rendered node the association is made while it is still visible
+        and kept afterwards; a node seeded from the scene has no pixels ever and
+        falls back to matching on its node id. Either way it has to be found:
+        without an entity a node's force queries read zero, which would be
+        emitted as a confident ``not-holds``.
         """
         ent = self._entities.get(node.node_id)
         if ent is not None:
@@ -386,7 +400,18 @@ class GraphBuilder:
             named = named or candidate
         if named is not None:
             self._entities[node.node_id] = named
-        return named
+            return named
+        # A node seeded from the scene never rendered, so it has no
+        # segmentation ids to look one up with. Its node id is derived from the
+        # entity, so match on that instead. One scan per node per episode: the
+        # result is cached, and a node that was seen resolved above.
+        for candidate in state.seg_id_map.values():
+            if candidate is None:
+                continue
+            if stable_node_id(candidate) == node.node_id:
+                self._entities[node.node_id] = candidate
+                return candidate
+        return None
 
     def _refresh_live_state(self, nodes: Dict[str, Node], state) -> None:
         """Current simulator pose for every object node, seen or not.
@@ -466,6 +491,7 @@ class GraphBuilder:
             # Recording paths keep full masks/nodes for overlays; the training
             # hot path skips node construction for never-admissible entities.
             admit=None if need_masks else self._entity_admitted,
+            seed_scene=self._seed_gate,
         )
 
         # Whitelist admission comes first. Optional episode history can then
