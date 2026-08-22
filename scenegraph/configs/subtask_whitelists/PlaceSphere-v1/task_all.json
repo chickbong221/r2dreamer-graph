@@ -1,0 +1,84 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "PlaceSphere-v1",
+  "target": "all",
+  "members": {
+    "actor:bin": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:sphere": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.035148096829652795,
+      0.08267559856176376,
+      0.12465059757232666,
+      0.16911262273788452
+    ],
+    "height-offset": [
+      -0.1372931599617004,
+      -0.051104959845542905,
+      -0.0012438550591468815,
+      0.9221429228782654
+    ],
+    "planar-distance-change": [
+      -0.00023407631088048216,
+      -2.7346229103386544e-08,
+      0.0,
+      6.976466102059936e-05
+    ],
+    "height-offset-change": [
+      -4.023313522338867e-07,
+      0.0,
+      7.821619510650562e-06,
+      0.002350932359695435
+    ]
+  },
+  "episodes": 300
+}

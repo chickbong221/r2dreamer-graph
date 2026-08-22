@@ -1,0 +1,998 @@
+{
+  "_schema_version": 1,
+  "env_id": "PlugCharger-v1",
+  "successful_episodes": 1048,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:charger / actor:receptacle": {
+      "relation": "contact",
+      "src": "actor:charger",
+      "dst": "actor:receptacle",
+      "episodes": 504,
+      "of": 1048,
+      "rate": 0.48091603053435117,
+      "is_candidate": false,
+      "missing_episodes": [
+        2,
+        4,
+        5,
+        8,
+        12,
+        13,
+        17,
+        19,
+        20,
+        21,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        30,
+        31,
+        32,
+        34,
+        36,
+        37,
+        38,
+        39,
+        41,
+        42,
+        43,
+        45,
+        46,
+        47,
+        48,
+        49
+      ],
+      "n_missing": 544,
+      "onset": {
+        "median": 170.0,
+        "p10": 144.0,
+        "p90": 216.0,
+        "min": 134.0,
+        "max": 243.0
+      },
+      "release": {
+        "median": 176.0,
+        "p10": 150.0,
+        "p90": 220.0,
+        "min": 139.0,
+        "max": 251.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / actor:charger / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:charger",
+      "dst": "actor:table-workspace",
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 94.0,
+        "p10": 82.0,
+        "p90": 113.0,
+        "min": 60.0,
+        "max": 127.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / ee / actor:charger": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:charger",
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 88.0,
+        "p10": 77.0,
+        "p90": 109.0,
+        "min": 55.0,
+        "max": 122.0
+      },
+      "release": {
+        "median": 180.0,
+        "p10": 152.0,
+        "p90": 223.0,
+        "min": 142.0,
+        "max": 251.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / ee / actor:receptacle": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:receptacle",
+      "episodes": 8,
+      "of": 1048,
+      "rate": 0.007633587786259542,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "n_missing": 1040,
+      "onset": {
+        "median": 6.5,
+        "p10": 0.0,
+        "p90": 29.699999999999992,
+        "min": 0.0,
+        "max": 57.0
+      },
+      "release": {
+        "median": 11.5,
+        "p10": 3.4000000000000004,
+        "p90": 33.89999999999999,
+        "min": 2.0,
+        "max": 64.0
+      },
+      "starts_at_frame_zero_rate": 0.375,
+      "initial_condition": false
+    },
+    "contact / ee / actor:table-workspace": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "episodes": 934,
+      "of": 1048,
+      "rate": 0.8912213740458015,
+      "is_candidate": false,
+      "missing_episodes": [
+        15,
+        21,
+        24,
+        38,
+        47,
+        66,
+        75,
+        80,
+        97,
+        98,
+        99,
+        119,
+        120,
+        122,
+        132,
+        137,
+        166,
+        169,
+        183,
+        192,
+        209,
+        221,
+        225,
+        228,
+        237,
+        246,
+        249,
+        256,
+        287,
+        288,
+        299,
+        302
+      ],
+      "n_missing": 114,
+      "onset": {
+        "median": 81.0,
+        "p10": 71.0,
+        "p90": 99.70000000000005,
+        "min": 65.0,
+        "max": 114.0
+      },
+      "release": {
+        "median": 85.0,
+        "p10": 75.0,
+        "p90": 106.0,
+        "min": 70.0,
+        "max": 126.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contain / actor:receptacle / actor:charger": {
+      "relation": "contain",
+      "src": "actor:receptacle",
+      "dst": "actor:charger",
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 175.5,
+        "p10": 147.0,
+        "p90": 218.0,
+        "min": 138.0,
+        "max": 248.0
+      },
+      "release": {
+        "median": 180.0,
+        "p10": 152.0,
+        "p90": 223.0,
+        "min": 142.0,
+        "max": 251.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:charger": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:charger",
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 88.0,
+        "p10": 77.0,
+        "p90": 109.30000000000007,
+        "min": 55.0,
+        "max": 122.0
+      },
+      "release": {
+        "median": 180.0,
+        "p10": 152.0,
+        "p90": 223.0,
+        "min": 142.0,
+        "max": 251.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:charger / actor:receptacle": {
+      "relation": "support",
+      "src": "actor:charger",
+      "dst": "actor:receptacle",
+      "episodes": 37,
+      "of": 1048,
+      "rate": 0.035305343511450385,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "n_missing": 1011,
+      "onset": {
+        "median": 154.0,
+        "p10": 144.6,
+        "p90": 173.2,
+        "min": 138.0,
+        "max": 188.0
+      },
+      "release": {
+        "median": 158.0,
+        "p10": 149.8,
+        "p90": 176.6,
+        "min": 142.0,
+        "max": 192.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:receptacle / actor:charger": {
+      "relation": "support",
+      "src": "actor:receptacle",
+      "dst": "actor:charger",
+      "episodes": 286,
+      "of": 1048,
+      "rate": 0.2729007633587786,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        12,
+        13,
+        15,
+        17,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+      ],
+      "n_missing": 762,
+      "onset": {
+        "median": 167.0,
+        "p10": 145.0,
+        "p90": 218.0,
+        "min": 134.0,
+        "max": 251.0
+      },
+      "release": {
+        "median": 170.0,
+        "p10": 148.5,
+        "p90": 222.0,
+        "min": 140.0,
+        "max": 251.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:charger": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:charger",
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 94.0,
+        "p10": 82.0,
+        "p90": 113.0,
+        "min": 60.0,
+        "max": 127.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:charger / actor:table-workspace",
+    "support / actor:table-workspace / actor:charger",
+    "contact / ee / actor:charger",
+    "grasp / ee / actor:charger",
+    "contain / actor:receptacle / actor:charger"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:charger / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:charger",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 1048,
+      "comparable": 1048,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:charger / actor:table-workspace",
+      "b": "contact / ee / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:charger / actor:table-workspace",
+      "b": "grasp / ee / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:charger / actor:table-workspace",
+      "b": "contain / actor:receptacle / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:charger",
+      "b": "contact / ee / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:charger",
+      "b": "grasp / ee / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:charger",
+      "b": "contain / actor:receptacle / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:charger",
+      "b": "grasp / ee / actor:charger",
+      "a_before_b": 4,
+      "b_before_a": 0,
+      "same_frame": 1044,
+      "comparable": 1048,
+      "rate_a_before_b": 0.003816793893129771,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9961832061068703,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / ee / actor:charger",
+      "b": "contain / actor:receptacle / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:charger",
+      "b": "contain / actor:receptacle / actor:charger",
+      "a_before_b": 1048,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1048,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:charger",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:charger / actor:table-workspace",
+        "support / actor:table-workspace / actor:charger"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:charger"
+      ],
+      "milestones": [
+        "contact / ee / actor:charger",
+        "grasp / ee / actor:charger"
+      ],
+      "median_onset": 88.0,
+      "all_initial_conditions": false,
+      "index": 1
+    },
+    {
+      "pair": [
+        "actor:charger",
+        "actor:receptacle"
+      ],
+      "milestones": [
+        "contain / actor:receptacle / actor:charger"
+      ],
+      "median_onset": 175.5,
+      "all_initial_conditions": false,
+      "index": 2
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:charger"
+    ],
+    "destination_candidates": [
+      "actor:receptacle"
+    ],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "success": {
+      "episodes": 1048,
+      "of": 1048,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 175.5,
+        "p10": 147.0,
+        "p90": 218.0,
+        "min": 138.0,
+        "max": 248.0
+      },
+      "last_release": {
+        "median": 180.0,
+        "p10": 152.0,
+        "p90": 223.0,
+        "min": 142.0,
+        "max": 251.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    }
+  },
+  "environment_scalars": {
+    "elapsed_steps": {
+      "episodes": 1048,
+      "of": 1048,
+      "median_first": 1.0,
+      "median_last": 181.0,
+      "decreases": false
+    },
+    "obj_to_goal_angle": {
+      "episodes": 1048,
+      "of": 1048,
+      "median_first": 0.5913287699222565,
+      "median_last": 0.0018869093619287014,
+      "decreases": true
+    },
+    "obj_to_goal_dist": {
+      "episodes": 1048,
+      "of": 1048,
+      "median_first": 0.181526780128479,
+      "median_last": 0.0011942203273065388,
+      "decreases": true
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:charger / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 1048,
+        "median_onset_delta": 175.5,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "support / actor:table-workspace / actor:charger": [
+      {
+        "predicate": "success",
+        "episodes": 1048,
+        "median_onset_delta": 175.5,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / ee / actor:charger": [
+      {
+        "predicate": "success",
+        "episodes": 1048,
+        "median_onset_delta": 87.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0594059405940594
+      }
+    ],
+    "grasp / ee / actor:charger": [
+      {
+        "predicate": "success",
+        "episodes": 1048,
+        "median_onset_delta": 87.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0594059405940594
+      }
+    ],
+    "contain / actor:receptacle / actor:charger": [
+      {
+        "predicate": "success",
+        "episodes": 1048,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:charger": [
+        "contact",
+        "contain",
+        "grasp",
+        "support"
+      ],
+      "actor:receptacle": [
+        "contact",
+        "contain",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "components": {
+      "actor:charger": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components",
+        "key_components"
+      ],
+      "actor:receptacle": [
+        "contact_components",
+        "contain_components",
+        "support_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:charger": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:receptacle": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:charger / actor:receptacle": {
+        "contact": true,
+        "support": true,
+        "contain": true,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:charger / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:receptacle / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": false,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:charger",
+          "actor:table-workspace",
+          0,
+          87
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:charger",
+          0,
+          87
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:table-workspace",
+          74,
+          80
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:charger",
+          82,
+          155
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:charger",
+          82,
+          155
+        ],
+        [
+          "contact",
+          "actor:charger",
+          "actor:receptacle",
+          149,
+          153
+        ],
+        [
+          "contain",
+          "actor:receptacle",
+          "actor:charger",
+          151,
+          155
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            151,
+            155
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:charger",
+          "actor:table-workspace",
+          0,
+          82
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:charger",
+          0,
+          82
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:table-workspace",
+          74,
+          75
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:charger",
+          77,
+          151
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:charger",
+          77,
+          151
+        ],
+        [
+          "contact",
+          "actor:charger",
+          "actor:receptacle",
+          142,
+          151
+        ],
+        [
+          "support",
+          "actor:receptacle",
+          "actor:charger",
+          142,
+          151
+        ],
+        [
+          "contain",
+          "actor:receptacle",
+          "actor:charger",
+          146,
+          151
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            146,
+            151
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:charger",
+          "actor:table-workspace",
+          0,
+          87
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:charger",
+          0,
+          87
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:table-workspace",
+          78,
+          79
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:charger",
+          81,
+          158
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:charger",
+          81,
+          158
+        ],
+        [
+          "contain",
+          "actor:receptacle",
+          "actor:charger",
+          154,
+          158
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            154,
+            158
+          ]
+        ]
+      }
+    }
+  ]
+}

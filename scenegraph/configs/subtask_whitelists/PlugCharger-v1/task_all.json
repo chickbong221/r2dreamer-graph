@@ -1,0 +1,86 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "PlugCharger-v1",
+  "target": "all",
+  "members": {
+    "actor:charger": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "contain",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:receptacle": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "contain",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.049336655437946325,
+      0.09874001890420914,
+      0.1424066722393036,
+      0.18193311989307406
+    ],
+    "height-offset": [
+      -0.10326657891273495,
+      -0.007368268072605112,
+      0.019841839373111722,
+      1.0190398216247558
+    ],
+    "planar-distance-change": [
+      -0.0007283465354703366,
+      -1.4033612139030538e-08,
+      0.0,
+      0.00011993252846878044
+    ],
+    "height-offset-change": [
+      -1.1414289474487291e-06,
+      0.0,
+      5.573406815528861e-06,
+      0.0014498099684715278
+    ]
+  },
+  "episodes": 1048
+}

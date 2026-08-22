@@ -1,0 +1,902 @@
+{
+  "_schema_version": 1,
+  "env_id": "PegInsertionSide-v1",
+  "successful_episodes": 331,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:box_with_hole / actor:peg": {
+      "relation": "contact",
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 131.0,
+        "p10": 104.0,
+        "p90": 182.0,
+        "min": 0.0,
+        "max": 410.0
+      },
+      "release": {
+        "median": 145.0,
+        "p10": 117.0,
+        "p90": 197.0,
+        "min": 104.0,
+        "max": 422.0
+      },
+      "starts_at_frame_zero_rate": 0.006042296072507553,
+      "initial_condition": false
+    },
+    "contact / actor:peg / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:peg",
+      "dst": "actor:table-workspace",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 63.0,
+        "p10": 51.0,
+        "p90": 85.0,
+        "min": 45.0,
+        "max": 300.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / ee / actor:peg": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:peg",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 53.0,
+        "p10": 41.0,
+        "p90": 72.0,
+        "min": 34.0,
+        "max": 276.0
+      },
+      "release": {
+        "median": 145.0,
+        "p10": 117.0,
+        "p90": 197.0,
+        "min": 104.0,
+        "max": 422.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contain / actor:box_with_hole / actor:peg": {
+      "relation": "contain",
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 134.0,
+        "p10": 106.0,
+        "p90": 187.0,
+        "min": 95.0,
+        "max": 411.0
+      },
+      "release": {
+        "median": 145.0,
+        "p10": 117.0,
+        "p90": 197.0,
+        "min": 104.0,
+        "max": 422.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:peg": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:peg",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 53.0,
+        "p10": 42.0,
+        "p90": 72.0,
+        "min": 35.0,
+        "max": 277.0
+      },
+      "release": {
+        "median": 145.0,
+        "p10": 117.0,
+        "p90": 197.0,
+        "min": 104.0,
+        "max": 422.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:box_with_hole / actor:peg": {
+      "relation": "support",
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "episodes": 275,
+      "of": 331,
+      "rate": 0.8308157099697885,
+      "is_candidate": false,
+      "missing_episodes": [
+        12,
+        17,
+        24,
+        32,
+        34,
+        35,
+        41,
+        46,
+        56,
+        59,
+        60,
+        67,
+        83,
+        90,
+        92,
+        95,
+        102,
+        105,
+        109,
+        112,
+        118,
+        128,
+        136,
+        141,
+        142,
+        148,
+        165,
+        170,
+        172,
+        176,
+        178,
+        193
+      ],
+      "n_missing": 56,
+      "onset": {
+        "median": 136.0,
+        "p10": 109.0,
+        "p90": 188.2,
+        "min": 93.0,
+        "max": 220.0
+      },
+      "release": {
+        "median": 145.0,
+        "p10": 115.4,
+        "p90": 196.6,
+        "min": 103.0,
+        "max": 222.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:peg / actor:box_with_hole": {
+      "relation": "support",
+      "src": "actor:peg",
+      "dst": "actor:box_with_hole",
+      "episodes": 5,
+      "of": 331,
+      "rate": 0.015105740181268883,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "n_missing": 326,
+      "onset": {
+        "median": 126.0,
+        "p10": 101.8,
+        "p90": 153.2,
+        "min": 95.0,
+        "max": 160.0
+      },
+      "release": {
+        "median": 136.0,
+        "p10": 108.2,
+        "p90": 162.6,
+        "min": 95.0,
+        "max": 169.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:peg": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:peg",
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 63.0,
+        "p10": 51.0,
+        "p90": 85.0,
+        "min": 45.0,
+        "max": 300.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:peg / actor:table-workspace",
+    "support / actor:table-workspace / actor:peg",
+    "contact / ee / actor:peg",
+    "grasp / ee / actor:peg",
+    "contact / actor:box_with_hole / actor:peg",
+    "contain / actor:box_with_hole / actor:peg"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:peg / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:peg",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 331,
+      "comparable": 331,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:peg / actor:table-workspace",
+      "b": "contact / ee / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:peg / actor:table-workspace",
+      "b": "grasp / ee / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:peg / actor:table-workspace",
+      "b": "contact / actor:box_with_hole / actor:peg",
+      "a_before_b": 329,
+      "b_before_a": 0,
+      "same_frame": 2,
+      "comparable": 331,
+      "rate_a_before_b": 0.9939577039274925,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.006042296072507553,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:peg / actor:table-workspace",
+      "b": "contain / actor:box_with_hole / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:peg",
+      "b": "contact / ee / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:peg",
+      "b": "grasp / ee / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:peg",
+      "b": "contact / actor:box_with_hole / actor:peg",
+      "a_before_b": 329,
+      "b_before_a": 0,
+      "same_frame": 2,
+      "comparable": 331,
+      "rate_a_before_b": 0.9939577039274925,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.006042296072507553,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:peg",
+      "b": "contain / actor:box_with_hole / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:peg",
+      "b": "grasp / ee / actor:peg",
+      "a_before_b": 113,
+      "b_before_a": 0,
+      "same_frame": 218,
+      "comparable": 331,
+      "rate_a_before_b": 0.3413897280966767,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.6586102719033232,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "contact / ee / actor:peg",
+      "b": "contact / actor:box_with_hole / actor:peg",
+      "a_before_b": 329,
+      "b_before_a": 2,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 0.9939577039274925,
+      "rate_b_before_a": 0.006042296072507553,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:peg",
+      "b": "contain / actor:box_with_hole / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:peg",
+      "b": "contact / actor:box_with_hole / actor:peg",
+      "a_before_b": 329,
+      "b_before_a": 2,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 0.9939577039274925,
+      "rate_b_before_a": 0.006042296072507553,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:peg",
+      "b": "contain / actor:box_with_hole / actor:peg",
+      "a_before_b": 331,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 331,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:box_with_hole / actor:peg",
+      "b": "contain / actor:box_with_hole / actor:peg",
+      "a_before_b": 287,
+      "b_before_a": 7,
+      "same_frame": 37,
+      "comparable": 331,
+      "rate_a_before_b": 0.8670694864048338,
+      "rate_b_before_a": 0.021148036253776436,
+      "rate_same_frame": 0.11178247734138973,
+      "verdict": "ambiguous"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:peg",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:peg / actor:table-workspace",
+        "support / actor:table-workspace / actor:peg"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:peg"
+      ],
+      "milestones": [
+        "contact / ee / actor:peg",
+        "grasp / ee / actor:peg"
+      ],
+      "median_onset": 53.0,
+      "all_initial_conditions": false,
+      "index": 1
+    },
+    {
+      "pair": [
+        "actor:box_with_hole",
+        "actor:peg"
+      ],
+      "milestones": [
+        "contact / actor:box_with_hole / actor:peg",
+        "contain / actor:box_with_hole / actor:peg"
+      ],
+      "median_onset": 132.5,
+      "all_initial_conditions": false,
+      "index": 2
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:peg"
+    ],
+    "destination_candidates": [
+      "actor:box_with_hole"
+    ],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "success": {
+      "episodes": 331,
+      "of": 331,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 134.0,
+        "p10": 106.0,
+        "p90": 187.0,
+        "min": 95.0,
+        "max": 411.0
+      },
+      "last_release": {
+        "median": 145.0,
+        "p10": 117.0,
+        "p90": 197.0,
+        "min": 104.0,
+        "max": 422.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    }
+  },
+  "environment_scalars": {
+    "elapsed_steps": {
+      "episodes": 331,
+      "of": 331,
+      "median_first": 1.0,
+      "median_last": 146.0,
+      "decreases": false
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:peg / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 134.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "support / actor:table-workspace / actor:peg": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 134.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / ee / actor:peg": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 81.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.11607142857142858
+      }
+    ],
+    "grasp / ee / actor:peg": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 80.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.11538461538461539
+      }
+    ],
+    "contact / actor:box_with_hole / actor:peg": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 2.0,
+        "onset_within_1_frame": 0.38368580060422963,
+        "median_span_iou": 0.8333333333333334
+      }
+    ],
+    "contain / actor:box_with_hole / actor:peg": [
+      {
+        "predicate": "success",
+        "episodes": 331,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:box_with_hole": [
+        "contact",
+        "contain",
+        "support"
+      ],
+      "actor:peg": [
+        "contact",
+        "contain",
+        "grasp",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "components": {
+      "actor:box_with_hole": [
+        "contact_components",
+        "contain_components",
+        "support_components"
+      ],
+      "actor:peg": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components",
+        "key_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:box_with_hole": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:peg": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:box_with_hole / actor:peg": {
+        "contact": true,
+        "support": true,
+        "contain": true,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:box_with_hole / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": false,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:peg / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:peg",
+          "actor:table-workspace",
+          0,
+          70
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:peg",
+          0,
+          70
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:peg",
+          59,
+          177
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:peg",
+          59,
+          177
+        ],
+        [
+          "contact",
+          "actor:box_with_hole",
+          "actor:peg",
+          164,
+          177
+        ],
+        [
+          "contain",
+          "actor:box_with_hole",
+          "actor:peg",
+          165,
+          177
+        ],
+        [
+          "support",
+          "actor:box_with_hole",
+          "actor:peg",
+          168,
+          177
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            165,
+            177
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:peg",
+          "actor:table-workspace",
+          0,
+          63
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:peg",
+          0,
+          63
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:peg",
+          52,
+          155
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:peg",
+          53,
+          155
+        ],
+        [
+          "support",
+          "actor:box_with_hole",
+          "actor:peg",
+          136,
+          139
+        ],
+        [
+          "contact",
+          "actor:box_with_hole",
+          "actor:peg",
+          136,
+          155
+        ],
+        [
+          "contain",
+          "actor:box_with_hole",
+          "actor:peg",
+          144,
+          155
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            144,
+            155
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:peg",
+          "actor:table-workspace",
+          0,
+          46
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:peg",
+          0,
+          46
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:peg",
+          34,
+          116
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:peg",
+          35,
+          116
+        ],
+        [
+          "contact",
+          "actor:box_with_hole",
+          "actor:peg",
+          104,
+          116
+        ],
+        [
+          "contain",
+          "actor:box_with_hole",
+          "actor:peg",
+          106,
+          116
+        ],
+        [
+          "support",
+          "actor:box_with_hole",
+          "actor:peg",
+          110,
+          116
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            106,
+            116
+          ]
+        ]
+      }
+    }
+  ]
+}

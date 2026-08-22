@@ -1,0 +1,687 @@
+{
+  "_schema_version": 1,
+  "env_id": "PickCube-v1",
+  "successful_episodes": 300,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:cube / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:cube",
+      "dst": "actor:table-workspace",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 42.0,
+        "p10": 35.0,
+        "p90": 51.0,
+        "min": 31.0,
+        "max": 89.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / ee / actor:cube": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:cube",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 42.0,
+        "p10": 35.0,
+        "p90": 49.0,
+        "min": 27.0,
+        "max": 57.0
+      },
+      "release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:cube": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:cube",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 43.0,
+        "p10": 36.0,
+        "p90": 50.0,
+        "min": 28.0,
+        "max": 58.0
+      },
+      "release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:cube": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:cube",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 42.0,
+        "p10": 35.0,
+        "p90": 51.0,
+        "min": 31.0,
+        "max": 89.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:cube / actor:table-workspace",
+    "support / actor:table-workspace / actor:cube",
+    "contact / ee / actor:cube",
+    "grasp / ee / actor:cube"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cube",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 300,
+      "comparable": 300,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "contact / ee / actor:cube",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "grasp / ee / actor:cube",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "contact / ee / actor:cube",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "grasp / ee / actor:cube",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:cube",
+      "b": "grasp / ee / actor:cube",
+      "a_before_b": 283,
+      "b_before_a": 0,
+      "same_frame": 17,
+      "comparable": 300,
+      "rate_a_before_b": 0.9433333333333334,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.056666666666666664,
+      "verdict": "ambiguous"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:cube",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:cube / actor:table-workspace",
+        "support / actor:table-workspace / actor:cube"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:cube"
+      ],
+      "milestones": [
+        "contact / ee / actor:cube",
+        "grasp / ee / actor:cube"
+      ],
+      "median_onset": 42.5,
+      "all_initial_conditions": false,
+      "index": 1
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:cube"
+    ],
+    "destination_candidates": [],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "is_grasped": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 43.0,
+        "p10": 36.0,
+        "p90": 50.0,
+        "min": 28.0,
+        "max": 58.0
+      },
+      "last_release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "is_obj_placed": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 70.0,
+        "p10": 59.0,
+        "p90": 81.0,
+        "min": 0.0,
+        "max": 90.0
+      },
+      "last_release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "is_robot_static": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "last_release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "median_runs": 4.0,
+      "toggles": true
+    },
+    "success": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 72.0,
+        "p10": 60.900000000000006,
+        "p90": 84.0,
+        "min": 0.0,
+        "max": 93.0
+      },
+      "last_release": {
+        "median": 77.0,
+        "p10": 65.0,
+        "p90": 88.0,
+        "min": 48.0,
+        "max": 98.0
+      },
+      "median_runs": 1.0,
+      "toggles": true
+    }
+  },
+  "environment_scalars": {
+    "elapsed_steps": {
+      "episodes": 300,
+      "of": 300,
+      "median_first": 1.0,
+      "median_last": 78.0,
+      "decreases": false
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:cube / actor:table-workspace": [
+      {
+        "predicate": "is_robot_static",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.5649616368286445
+      },
+      {
+        "predicate": "is_grasped",
+        "episodes": 300,
+        "median_onset_delta": 43.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      },
+      {
+        "predicate": "is_obj_placed",
+        "episodes": 300,
+        "median_onset_delta": 70.0,
+        "onset_within_1_frame": 0.006666666666666667,
+        "median_span_iou": 0.0
+      }
+    ],
+    "support / actor:table-workspace / actor:cube": [
+      {
+        "predicate": "is_robot_static",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.5649616368286445
+      },
+      {
+        "predicate": "is_grasped",
+        "episodes": 300,
+        "median_onset_delta": 43.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      },
+      {
+        "predicate": "is_obj_placed",
+        "episodes": 300,
+        "median_onset_delta": 70.0,
+        "onset_within_1_frame": 0.006666666666666667,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / ee / actor:cube": [
+      {
+        "predicate": "is_grasped",
+        "episodes": 300,
+        "median_onset_delta": 1.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.9722222222222222
+      },
+      {
+        "predicate": "is_robot_static",
+        "episodes": 300,
+        "median_onset_delta": -42.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.455789277736411
+      },
+      {
+        "predicate": "is_obj_placed",
+        "episodes": 300,
+        "median_onset_delta": 28.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.1935483870967742
+      }
+    ],
+    "grasp / ee / actor:cube": [
+      {
+        "predicate": "is_grasped",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      },
+      {
+        "predicate": "is_robot_static",
+        "episodes": 300,
+        "median_onset_delta": -43.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.44285714285714284
+      },
+      {
+        "predicate": "is_obj_placed",
+        "episodes": 300,
+        "median_onset_delta": 27.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.2
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:cube": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "components": {
+      "actor:cube": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:cube": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cube / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          35
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          35
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cube",
+          35,
+          73
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cube",
+          36,
+          73
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            69,
+            73
+          ]
+        ],
+        "is_obj_placed": [
+          [
+            68,
+            73
+          ]
+        ],
+        "is_robot_static": [
+          [
+            0,
+            6
+          ],
+          [
+            17,
+            26
+          ],
+          [
+            32,
+            47
+          ],
+          [
+            69,
+            73
+          ]
+        ],
+        "is_grasped": [
+          [
+            36,
+            73
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          40
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          40
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cube",
+          40,
+          73
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cube",
+          41,
+          73
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            70,
+            73
+          ]
+        ],
+        "is_obj_placed": [
+          [
+            69,
+            73
+          ]
+        ],
+        "is_robot_static": [
+          [
+            0,
+            6
+          ],
+          [
+            20,
+            32
+          ],
+          [
+            37,
+            52
+          ],
+          [
+            70,
+            73
+          ]
+        ],
+        "is_grasped": [
+          [
+            41,
+            73
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          35
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          35
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cube",
+          35,
+          49
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cube",
+          36,
+          49
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            45,
+            49
+          ]
+        ],
+        "is_obj_placed": [
+          [
+            45,
+            49
+          ]
+        ],
+        "is_robot_static": [
+          [
+            0,
+            6
+          ],
+          [
+            17,
+            26
+          ],
+          [
+            32,
+            49
+          ]
+        ],
+        "is_grasped": [
+          [
+            36,
+            49
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1066 @@
+{
+  "_schema_version": 1,
+  "env_id": "PlaceSphere-v1",
+  "successful_episodes": 300,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:bin / actor:sphere": {
+      "relation": "contact",
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 110.0,
+        "p10": 98.0,
+        "p90": 128.0,
+        "min": 79.0,
+        "max": 143.0
+      },
+      "release": {
+        "median": 114.0,
+        "p10": 102.0,
+        "p90": 132.0,
+        "min": 81.0,
+        "max": 147.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / actor:sphere / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:sphere",
+      "dst": "actor:table-workspace",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 46.0,
+        "p10": 39.0,
+        "p90": 67.0,
+        "min": 27.0,
+        "max": 82.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / ee / actor:bin": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:bin",
+      "episodes": 5,
+      "of": 300,
+      "rate": 0.016666666666666666,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "n_missing": 295,
+      "onset": {
+        "median": 54.0,
+        "p10": 51.8,
+        "p90": 57.6,
+        "min": 51.0,
+        "max": 58.0
+      },
+      "release": {
+        "median": 55.0,
+        "p10": 52.8,
+        "p90": 58.6,
+        "min": 52.0,
+        "max": 59.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / ee / actor:sphere": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:sphere",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 46.0,
+        "p10": 39.0,
+        "p90": 67.0,
+        "min": 27.0,
+        "max": 76.0
+      },
+      "release": {
+        "median": 108.0,
+        "p10": 96.0,
+        "p90": 126.0,
+        "min": 75.0,
+        "max": 141.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:sphere": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:sphere",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 47.0,
+        "p10": 40.0,
+        "p90": 68.0,
+        "min": 28.0,
+        "max": 77.0
+      },
+      "release": {
+        "median": 108.0,
+        "p10": 96.0,
+        "p90": 126.0,
+        "min": 75.0,
+        "max": 141.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:bin / actor:sphere": {
+      "relation": "support",
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 110.0,
+        "p10": 98.9,
+        "p90": 128.0,
+        "min": 79.0,
+        "max": 143.0
+      },
+      "release": {
+        "median": 114.0,
+        "p10": 102.0,
+        "p90": 132.0,
+        "min": 81.0,
+        "max": 147.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:sphere": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:sphere",
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 46.0,
+        "p10": 39.0,
+        "p90": 67.0,
+        "min": 27.0,
+        "max": 82.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:sphere / actor:table-workspace",
+    "support / actor:table-workspace / actor:sphere",
+    "contact / ee / actor:sphere",
+    "grasp / ee / actor:sphere",
+    "contact / actor:bin / actor:sphere",
+    "support / actor:bin / actor:sphere"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:sphere / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:sphere",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 300,
+      "comparable": 300,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:sphere / actor:table-workspace",
+      "b": "contact / ee / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:sphere / actor:table-workspace",
+      "b": "grasp / ee / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:sphere / actor:table-workspace",
+      "b": "contact / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:sphere / actor:table-workspace",
+      "b": "support / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:sphere",
+      "b": "contact / ee / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:sphere",
+      "b": "grasp / ee / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:sphere",
+      "b": "contact / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:sphere",
+      "b": "support / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:sphere",
+      "b": "grasp / ee / actor:sphere",
+      "a_before_b": 290,
+      "b_before_a": 0,
+      "same_frame": 10,
+      "comparable": 300,
+      "rate_a_before_b": 0.9666666666666667,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.03333333333333333,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:sphere",
+      "b": "contact / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:sphere",
+      "b": "support / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:sphere",
+      "b": "contact / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:sphere",
+      "b": "support / actor:bin / actor:sphere",
+      "a_before_b": 300,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 300,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:bin / actor:sphere",
+      "b": "support / actor:bin / actor:sphere",
+      "a_before_b": 46,
+      "b_before_a": 0,
+      "same_frame": 254,
+      "comparable": 300,
+      "rate_a_before_b": 0.15333333333333332,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.8466666666666667,
+      "verdict": "ambiguous"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:sphere",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:sphere / actor:table-workspace",
+        "support / actor:table-workspace / actor:sphere"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:sphere"
+      ],
+      "milestones": [
+        "contact / ee / actor:sphere",
+        "grasp / ee / actor:sphere"
+      ],
+      "median_onset": 46.5,
+      "all_initial_conditions": false,
+      "index": 1
+    },
+    {
+      "pair": [
+        "actor:bin",
+        "actor:sphere"
+      ],
+      "milestones": [
+        "contact / actor:bin / actor:sphere",
+        "support / actor:bin / actor:sphere"
+      ],
+      "median_onset": 110.0,
+      "all_initial_conditions": false,
+      "index": 2
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:sphere"
+    ],
+    "destination_candidates": [
+      "actor:bin"
+    ],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "is_obj_grasped": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 47.0,
+        "p10": 40.0,
+        "p90": 68.0,
+        "min": 28.0,
+        "max": 77.0
+      },
+      "last_release": {
+        "median": 108.0,
+        "p10": 96.0,
+        "p90": 126.0,
+        "min": 75.0,
+        "max": 141.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "is_obj_on_bin": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 110.0,
+        "p10": 98.0,
+        "p90": 128.0,
+        "min": 79.0,
+        "max": 143.0
+      },
+      "last_release": {
+        "median": 114.0,
+        "p10": 102.0,
+        "p90": 132.0,
+        "min": 81.0,
+        "max": 147.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "is_obj_static": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "last_release": {
+        "median": 114.0,
+        "p10": 102.0,
+        "p90": 132.0,
+        "min": 81.0,
+        "max": 147.0
+      },
+      "median_runs": 5.0,
+      "toggles": true
+    },
+    "success": {
+      "episodes": 300,
+      "of": 300,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 111.0,
+        "p10": 100.0,
+        "p90": 130.0,
+        "min": 79.0,
+        "max": 143.0
+      },
+      "last_release": {
+        "median": 114.0,
+        "p10": 102.0,
+        "p90": 132.0,
+        "min": 81.0,
+        "max": 147.0
+      },
+      "median_runs": 1.0,
+      "toggles": true
+    }
+  },
+  "environment_scalars": {
+    "elapsed_steps": {
+      "episodes": 300,
+      "of": 300,
+      "median_first": 1.0,
+      "median_last": 115.0,
+      "decreases": false
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:sphere / actor:table-workspace": [
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.4272285966460724
+      },
+      {
+        "predicate": "is_obj_grasped",
+        "episodes": 300,
+        "median_onset_delta": 47.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      },
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 110.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "support / actor:table-workspace / actor:sphere": [
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.4272285966460724
+      },
+      {
+        "predicate": "is_obj_grasped",
+        "episodes": 300,
+        "median_onset_delta": 47.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      },
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 110.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / ee / actor:sphere": [
+      {
+        "predicate": "is_obj_grasped",
+        "episodes": 300,
+        "median_onset_delta": 1.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 0.9836065573770492
+      },
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": -46.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.5275252525252525
+      },
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 62.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "grasp / ee / actor:sphere": [
+      {
+        "predicate": "is_obj_grasped",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      },
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": -47.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.5188746438746439
+      },
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 61.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / actor:bin / actor:sphere": [
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      },
+      {
+        "predicate": "success",
+        "episodes": 300,
+        "median_onset_delta": 1.0,
+        "onset_within_1_frame": 0.5466666666666666,
+        "median_span_iou": 0.8
+      },
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": -110.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.043478260869565216
+      }
+    ],
+    "support / actor:bin / actor:sphere": [
+      {
+        "predicate": "is_obj_on_bin",
+        "episodes": 300,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 1.0,
+        "median_span_iou": 1.0
+      },
+      {
+        "predicate": "success",
+        "episodes": 300,
+        "median_onset_delta": 1.0,
+        "onset_within_1_frame": 0.5933333333333334,
+        "median_span_iou": 0.8
+      },
+      {
+        "predicate": "is_obj_static",
+        "episodes": 300,
+        "median_onset_delta": -110.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.04201680672268908
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:bin": [
+        "contact",
+        "support"
+      ],
+      "actor:sphere": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "components": {
+      "actor:bin": [
+        "contact_components",
+        "support_components"
+      ],
+      "actor:sphere": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:bin": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:sphere": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:bin / actor:sphere": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:bin / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": false,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:sphere / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:sphere",
+          "actor:table-workspace",
+          0,
+          42
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:sphere",
+          0,
+          42
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:sphere",
+          42,
+          109
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:sphere",
+          43,
+          109
+        ],
+        [
+          "contact",
+          "actor:bin",
+          "actor:sphere",
+          111,
+          115
+        ],
+        [
+          "support",
+          "actor:bin",
+          "actor:sphere",
+          111,
+          115
+        ]
+      ],
+      "predicates": {
+        "is_obj_grasped": [
+          [
+            43,
+            109
+          ]
+        ],
+        "is_obj_on_bin": [
+          [
+            111,
+            115
+          ]
+        ],
+        "is_obj_static": [
+          [
+            0,
+            41
+          ],
+          [
+            43,
+            49
+          ],
+          [
+            70,
+            70
+          ],
+          [
+            73,
+            75
+          ],
+          [
+            114,
+            115
+          ]
+        ],
+        "success": [
+          [
+            114,
+            115
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:sphere",
+          "actor:table-workspace",
+          0,
+          39
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:sphere",
+          0,
+          39
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:sphere",
+          39,
+          101
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:sphere",
+          40,
+          101
+        ],
+        [
+          "contact",
+          "actor:bin",
+          "actor:sphere",
+          103,
+          107
+        ],
+        [
+          "support",
+          "actor:bin",
+          "actor:sphere",
+          104,
+          107
+        ]
+      ],
+      "predicates": {
+        "is_obj_grasped": [
+          [
+            40,
+            101
+          ]
+        ],
+        "is_obj_on_bin": [
+          [
+            103,
+            107
+          ]
+        ],
+        "is_obj_static": [
+          [
+            0,
+            38
+          ],
+          [
+            40,
+            46
+          ],
+          [
+            67,
+            67
+          ],
+          [
+            70,
+            71
+          ],
+          [
+            104,
+            107
+          ]
+        ],
+        "success": [
+          [
+            104,
+            107
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:sphere",
+          "actor:table-workspace",
+          0,
+          38
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:sphere",
+          0,
+          38
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:sphere",
+          38,
+          97
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:sphere",
+          39,
+          97
+        ],
+        [
+          "contact",
+          "actor:bin",
+          "actor:sphere",
+          99,
+          103
+        ],
+        [
+          "support",
+          "actor:bin",
+          "actor:sphere",
+          100,
+          103
+        ]
+      ],
+      "predicates": {
+        "is_obj_grasped": [
+          [
+            39,
+            97
+          ]
+        ],
+        "is_obj_on_bin": [
+          [
+            99,
+            103
+          ]
+        ],
+        "is_obj_static": [
+          [
+            0,
+            37
+          ],
+          [
+            39,
+            45
+          ],
+          [
+            66,
+            66
+          ],
+          [
+            69,
+            70
+          ],
+          [
+            100,
+            103
+          ]
+        ],
+        "success": [
+          [
+            100,
+            103
+          ]
+        ]
+      }
+    }
+  ]
+}

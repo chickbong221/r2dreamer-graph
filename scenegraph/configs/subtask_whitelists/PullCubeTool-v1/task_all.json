@@ -1,0 +1,83 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "PullCubeTool-v1",
+  "target": "all",
+  "members": {
+    "actor:cube": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:l_shape_tool": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.10942105203866959,
+      0.1741062879562378,
+      0.26226910948753357,
+      0.3471182703971863
+    ],
+    "height-offset": [
+      -0.3511989414691925,
+      -0.019508225470781324,
+      0.0006660331040620803,
+      0.9396429061889648
+    ],
+    "planar-distance-change": [
+      -0.00022432163823395964,
+      -2.5575875639560763e-08,
+      9.610213957955673e-09,
+      0.00014355368330143408
+    ],
+    "height-offset-change": [
+      -4.343688488006592e-06,
+      0.0,
+      1.5012919902801514e-06,
+      0.0010821700096130377
+    ]
+  },
+  "episodes": 1900
+}

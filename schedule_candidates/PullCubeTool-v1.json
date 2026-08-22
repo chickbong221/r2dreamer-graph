@@ -1,0 +1,1160 @@
+{
+  "_schema_version": 1,
+  "env_id": "PullCubeTool-v1",
+  "successful_episodes": 1900,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:cube / actor:l_shape_tool": {
+      "relation": "contact",
+      "src": "actor:cube",
+      "dst": "actor:l_shape_tool",
+      "episodes": 1899,
+      "of": 1900,
+      "rate": 0.9994736842105263,
+      "is_candidate": true,
+      "missing_episodes": [
+        1127
+      ],
+      "n_missing": 1,
+      "onset": {
+        "median": 201.0,
+        "p10": 176.0,
+        "p90": 227.0,
+        "min": 0.0,
+        "max": 801.0
+      },
+      "release": {
+        "median": 245.0,
+        "p10": 221.0,
+        "p90": 271.0,
+        "min": 197.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.000526592943654555,
+      "initial_condition": false
+    },
+    "contact / actor:cube / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:cube",
+      "dst": "actor:table-workspace",
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 2.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.9994736842105263,
+      "initial_condition": true
+    },
+    "contact / actor:l_shape_tool / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:l_shape_tool",
+      "dst": "actor:table-workspace",
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 5.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.9994736842105263,
+      "initial_condition": true
+    },
+    "contact / ee / actor:l_shape_tool": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:l_shape_tool",
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 60.0,
+        "p10": 49.0,
+        "p90": 68.0,
+        "min": 41.0,
+        "max": 76.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 55.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:l_shape_tool": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:l_shape_tool",
+      "episodes": 1899,
+      "of": 1900,
+      "rate": 0.9994736842105263,
+      "is_candidate": true,
+      "missing_episodes": [
+        1127
+      ],
+      "n_missing": 1,
+      "onset": {
+        "median": 60.0,
+        "p10": 49.0,
+        "p90": 68.0,
+        "min": 42.0,
+        "max": 76.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 197.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:cube / actor:l_shape_tool": {
+      "relation": "support",
+      "src": "actor:cube",
+      "dst": "actor:l_shape_tool",
+      "episodes": 299,
+      "of": 1900,
+      "rate": 0.15736842105263157,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        14,
+        15,
+        16,
+        17,
+        19,
+        20,
+        22,
+        23,
+        24,
+        27,
+        28,
+        29,
+        30,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38
+      ],
+      "n_missing": 1601,
+      "onset": {
+        "median": 182.0,
+        "p10": 159.0,
+        "p90": 199.0,
+        "min": 139.0,
+        "max": 427.0
+      },
+      "release": {
+        "median": 182.0,
+        "p10": 161.8,
+        "p90": 199.0,
+        "min": 143.0,
+        "max": 512.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:cube": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:cube",
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 2.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.9994736842105263,
+      "initial_condition": true
+    },
+    "support / actor:table-workspace / actor:l_shape_tool": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:l_shape_tool",
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 5.0
+      },
+      "release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "starts_at_frame_zero_rate": 0.9994736842105263,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:cube / actor:table-workspace",
+    "contact / actor:l_shape_tool / actor:table-workspace",
+    "support / actor:table-workspace / actor:cube",
+    "support / actor:table-workspace / actor:l_shape_tool",
+    "contact / ee / actor:l_shape_tool",
+    "grasp / ee / actor:l_shape_tool",
+    "contact / actor:cube / actor:l_shape_tool"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "contact / actor:l_shape_tool / actor:table-workspace",
+      "a_before_b": 1,
+      "b_before_a": 0,
+      "same_frame": 1899,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0005263157894736842,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9994736842105263,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cube",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 1900,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:l_shape_tool",
+      "a_before_b": 1,
+      "b_before_a": 0,
+      "same_frame": 1899,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0005263157894736842,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9994736842105263,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "contact / ee / actor:l_shape_tool",
+      "a_before_b": 1900,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1900,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "grasp / ee / actor:l_shape_tool",
+      "a_before_b": 1899,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1899,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cube / actor:table-workspace",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1898,
+      "b_before_a": 0,
+      "same_frame": 1,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9994734070563455,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.000526592943654555,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:l_shape_tool / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cube",
+      "a_before_b": 0,
+      "b_before_a": 1,
+      "same_frame": 1899,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0005263157894736842,
+      "rate_same_frame": 0.9994736842105263,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:l_shape_tool / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:l_shape_tool",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 1900,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:l_shape_tool / actor:table-workspace",
+      "b": "contact / ee / actor:l_shape_tool",
+      "a_before_b": 1900,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1900,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:l_shape_tool / actor:table-workspace",
+      "b": "grasp / ee / actor:l_shape_tool",
+      "a_before_b": 1899,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1899,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:l_shape_tool / actor:table-workspace",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1898,
+      "b_before_a": 0,
+      "same_frame": 1,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9994734070563455,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.000526592943654555,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "support / actor:table-workspace / actor:l_shape_tool",
+      "a_before_b": 1,
+      "b_before_a": 0,
+      "same_frame": 1899,
+      "comparable": 1900,
+      "rate_a_before_b": 0.0005263157894736842,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9994736842105263,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "contact / ee / actor:l_shape_tool",
+      "a_before_b": 1900,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1900,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "grasp / ee / actor:l_shape_tool",
+      "a_before_b": 1899,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1899,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cube",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1898,
+      "b_before_a": 0,
+      "same_frame": 1,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9994734070563455,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.000526592943654555,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:l_shape_tool",
+      "b": "contact / ee / actor:l_shape_tool",
+      "a_before_b": 1900,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1900,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:l_shape_tool",
+      "b": "grasp / ee / actor:l_shape_tool",
+      "a_before_b": 1899,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 1899,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:l_shape_tool",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1898,
+      "b_before_a": 0,
+      "same_frame": 1,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9994734070563455,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.000526592943654555,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:l_shape_tool",
+      "b": "grasp / ee / actor:l_shape_tool",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 1899,
+      "comparable": 1899,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / ee / actor:l_shape_tool",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1895,
+      "b_before_a": 1,
+      "same_frame": 3,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9978936282253817,
+      "rate_b_before_a": 0.000526592943654555,
+      "rate_same_frame": 0.001579778830963665,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:l_shape_tool",
+      "b": "contact / actor:cube / actor:l_shape_tool",
+      "a_before_b": 1895,
+      "b_before_a": 1,
+      "same_frame": 3,
+      "comparable": 1899,
+      "rate_a_before_b": 0.9978936282253817,
+      "rate_b_before_a": 0.000526592943654555,
+      "rate_same_frame": 0.001579778830963665,
+      "verdict": "before"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:cube",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:cube / actor:table-workspace",
+        "support / actor:table-workspace / actor:cube"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "actor:l_shape_tool",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:l_shape_tool / actor:table-workspace",
+        "support / actor:table-workspace / actor:l_shape_tool"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 1
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:l_shape_tool"
+      ],
+      "milestones": [
+        "contact / ee / actor:l_shape_tool",
+        "grasp / ee / actor:l_shape_tool"
+      ],
+      "median_onset": 60.0,
+      "all_initial_conditions": false,
+      "index": 2
+    },
+    {
+      "pair": [
+        "actor:cube",
+        "actor:l_shape_tool"
+      ],
+      "milestones": [
+        "contact / actor:cube / actor:l_shape_tool"
+      ],
+      "median_onset": 201.0,
+      "all_initial_conditions": false,
+      "index": 3
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:l_shape_tool"
+    ],
+    "destination_candidates": [
+      "actor:cube"
+    ],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "success": {
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 226.0,
+        "p10": 200.0,
+        "p90": 257.0,
+        "min": 4.0,
+        "max": 1067.0
+      },
+      "last_release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "success_at_end": {
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 226.0,
+        "p10": 200.0,
+        "p90": 257.0,
+        "min": 4.0,
+        "max": 1067.0
+      },
+      "last_release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    },
+    "success_once": {
+      "episodes": 1900,
+      "of": 1900,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 226.0,
+        "p10": 200.0,
+        "p90": 257.0,
+        "min": 4.0,
+        "max": 1067.0
+      },
+      "last_release": {
+        "median": 246.0,
+        "p10": 221.0,
+        "p90": 272.0,
+        "min": 189.0,
+        "max": 1069.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    }
+  },
+  "environment_scalars": {
+    "cube_distance": {
+      "episodes": 1900,
+      "of": 1900,
+      "median_first": 0.7390141785144806,
+      "median_last": 0.44138047099113464,
+      "decreases": true
+    },
+    "cube_progress": {
+      "episodes": 1900,
+      "of": 1900,
+      "median_first": 0.02345353364944458,
+      "median_last": 0.13218984007835388,
+      "decreases": false
+    },
+    "elapsed_steps": {
+      "episodes": 1900,
+      "of": 1900,
+      "median_first": 1.0,
+      "median_last": 247.0,
+      "decreases": false
+    },
+    "reward": {
+      "episodes": 1900,
+      "of": 1900,
+      "median_first": 0.03308354690670967,
+      "median_last": 2.03991436958313,
+      "decreases": false
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:cube / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      }
+    ],
+    "contact / actor:l_shape_tool / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      }
+    ],
+    "support / actor:table-workspace / actor:cube": [
+      {
+        "predicate": "success",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.08365019011406843
+      }
+    ],
+    "support / actor:table-workspace / actor:l_shape_tool": [
+      {
+        "predicate": "success",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1900,
+        "median_onset_delta": 226.0,
+        "onset_within_1_frame": 0.0005263157894736842,
+        "median_span_iou": 0.08365019011406843
+      }
+    ],
+    "contact / ee / actor:l_shape_tool": [
+      {
+        "predicate": "success",
+        "episodes": 1900,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1900,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1900,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      }
+    ],
+    "grasp / ee / actor:l_shape_tool": [
+      {
+        "predicate": "success",
+        "episodes": 1899,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1899,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1899,
+        "median_onset_delta": 166.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.10989010989010989
+      }
+    ],
+    "contact / actor:cube / actor:l_shape_tool": [
+      {
+        "predicate": "success",
+        "episodes": 1899,
+        "median_onset_delta": 22.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.45
+      },
+      {
+        "predicate": "success_at_end",
+        "episodes": 1899,
+        "median_onset_delta": 22.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.45
+      },
+      {
+        "predicate": "success_once",
+        "episodes": 1899,
+        "median_onset_delta": 22.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.45
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:cube": [
+        "contact",
+        "support"
+      ],
+      "actor:l_shape_tool": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "components": {
+      "actor:cube": [
+        "bottom_components",
+        "contact_components"
+      ],
+      "actor:l_shape_tool": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:cube": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:l_shape_tool": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cube / actor:l_shape_tool": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": false,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cube / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:l_shape_tool / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          233
+        ],
+        [
+          "contact",
+          "actor:l_shape_tool",
+          "actor:table-workspace",
+          0,
+          233
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          233
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:l_shape_tool",
+          0,
+          233
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:l_shape_tool",
+          63,
+          233
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:l_shape_tool",
+          63,
+          233
+        ],
+        [
+          "contact",
+          "actor:cube",
+          "actor:l_shape_tool",
+          197,
+          231
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            209,
+            233
+          ]
+        ],
+        "success_once": [
+          [
+            209,
+            233
+          ]
+        ],
+        "success_at_end": [
+          [
+            209,
+            233
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          253
+        ],
+        [
+          "contact",
+          "actor:l_shape_tool",
+          "actor:table-workspace",
+          0,
+          253
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          253
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:l_shape_tool",
+          0,
+          253
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:l_shape_tool",
+          67,
+          253
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:l_shape_tool",
+          67,
+          253
+        ],
+        [
+          "contact",
+          "actor:cube",
+          "actor:l_shape_tool",
+          216,
+          253
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            232,
+            253
+          ]
+        ],
+        "success_once": [
+          [
+            232,
+            253
+          ]
+        ],
+        "success_at_end": [
+          [
+            232,
+            253
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cube",
+          "actor:table-workspace",
+          0,
+          256
+        ],
+        [
+          "contact",
+          "actor:l_shape_tool",
+          "actor:table-workspace",
+          0,
+          256
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cube",
+          0,
+          256
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:l_shape_tool",
+          0,
+          256
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:l_shape_tool",
+          64,
+          256
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:l_shape_tool",
+          64,
+          256
+        ],
+        [
+          "contact",
+          "actor:cube",
+          "actor:l_shape_tool",
+          218,
+          256
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            240,
+            256
+          ]
+        ],
+        "success_once": [
+          [
+            240,
+            256
+          ]
+        ],
+        "success_at_end": [
+          [
+            240,
+            256
+          ]
+        ]
+      }
+    }
+  ]
+}

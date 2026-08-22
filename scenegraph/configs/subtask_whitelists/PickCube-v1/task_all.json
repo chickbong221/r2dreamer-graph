@@ -1,0 +1,73 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "PickCube-v1",
+  "target": "all",
+  "members": {
+    "actor:cube": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.026663830503821373,
+      0.07797892391681673,
+      0.11687433570623397,
+      0.1595873087644577
+    ],
+    "height-offset": [
+      -0.2163935184478759,
+      -0.02215709015727043,
+      0.09747906029224394,
+      0.952056109905243
+    ],
+    "planar-distance-change": [
+      -0.0008356327656656502,
+      -9.630460908738304e-08,
+      0.0,
+      2.4240905622718894e-05
+    ],
+    "height-offset-change": [
+      -2.2351741790771484e-08,
+      0.0,
+      6.292760372161865e-05,
+      0.0035914361476898195
+    ]
+  },
+  "episodes": 300
+}

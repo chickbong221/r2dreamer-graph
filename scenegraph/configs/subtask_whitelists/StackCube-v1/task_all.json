@@ -1,0 +1,84 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "StackCube-v1",
+  "target": "all",
+  "members": {
+    "actor:cubeA": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:cubeB": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.04043140411376953,
+      0.11568005383014679,
+      0.1672772854566574,
+      0.22845566570758818
+    ],
+    "height-offset": [
+      -0.12483011782169341,
+      -0.0013733312487602227,
+      0.033173365890979745,
+      0.9396428465843201
+    ],
+    "planar-distance-change": [
+      -0.0003530477872118354,
+      -8.638467789978676e-08,
+      0.0,
+      4.061863583046951e-05
+    ],
+    "height-offset-change": [
+      -2.5779008865356445e-06,
+      0.0,
+      9.238719940185547e-07,
+      0.002395036816596985
+    ]
+  },
+  "episodes": 300
+}
