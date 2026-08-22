@@ -3,13 +3,12 @@
 Pipeline per frame:
 
     apply_whitelist(candidates)   # hard eligibility gate
-    -> merge_persistent(...)      # re-inject nodes that left the view
-    -> EntityRegistry.retain(...) # history off: slots track the current frame
+    -> merge_retained(...)        # re-inject every node seen this episode
     -> EntityRegistry.assign(...) # stable index, diversity-aware overflow
 
-No scoring or secondary contact-based admission path exists. When the registry
-is at capacity, eviction comes from the most represented object type; age only
-breaks ties and selects the instance within that type.
+No scoring or secondary contact-based admission path exists. Capacity is a hard
+ceiling: a scene that needs more rows than ``n_max`` raises rather than choosing
+a vertex to lose.
 """
 
 from __future__ import annotations
@@ -21,38 +20,28 @@ from .schema import Node
 from .whitelist import Whitelist, match_key
 
 class EntityRegistry:
-    """Bounded, diversity-preserving vertex index. One instance per episode.
+    """Bounded vertex index. One instance per episode.
 
     ``ee`` always holds index 0. Object indices are handed out on first sight
-    and remain stable until capacity is reached. A genuinely new instance then
-    displaces the oldest resident belonging to the most numerous canonical
-    object type. First-seen order is retained after eviction, preventing an old
-    instance from returning on the next frame and rotating the slots. Appearance
-    retention is separate and lives in the adapter-level cache.
+    and held until reset -- nothing displaces a resident, and no slot is
+    reclaimed inside an episode. A scene needing more rows than ``n_max`` is a
+    configuration error and raises.
     """
 
     def __init__(self, n_max: int):
         self.n_max = int(n_max)
         self._index: Dict[str, int] = {}
-        self._free: List[int] = []
         self._first_seen: Dict[str, int] = {}
-        self._type: Dict[str, str] = {}
         self._ever_seen: Set[str] = set()
         self._seen_clock = 0
         self._next = 1  # 0 is reserved for the end effector
-        self.evicted_ids: List[str] = []
-        self.overflow_drops = 0
 
     def reset_episode(self) -> None:
         self._index.clear()
-        self._free.clear()
         self._first_seen.clear()
-        self._type.clear()
         self._ever_seen.clear()
         self._seen_clock = 0
         self._next = 1
-        self.evicted_ids.clear()
-        self.overflow_drops = 0
 
     def __len__(self) -> int:
         return len(self._index)
@@ -64,53 +53,20 @@ class EntityRegistry:
     def episode_entities(self) -> int:
         """Distinct object instances presented to ``assign`` this episode.
 
-        Independent of ``retain``, so it still reports the episode's true
-        instance count. Reaching ``n_max - 1`` is exactly the condition under
-        which a registry that never released absent residents would have
-        saturated, which is what makes a zero ``overflow_drops`` readable.
-
-        Live occupancy can exceed what the cameras see: the builder retains the
-        subtask target's index while it is absent, so one of the ``n_max - 1``
-        object positions may be held by a vertex that is not in the frame.
+        Under retention this equals live occupancy: every instance admitted
+        this episode still holds its row.
         """
         return len(self._ever_seen)
 
-    def retain(self, entity_ids: Iterable[str]) -> None:
-        """Drop every entity outside ``entity_ids`` from the slot bookkeeping.
+    def assign(self, nodes: Dict[str, Node]) -> Dict[str, Node]:
+        """Index every object. Overflow raises; nothing is ever displaced.
 
-        History-off graphs hand ``assign`` only what a camera sees this frame,
-        so an index held for an absent object is a slot no vertex can occupy.
-        Nothing else frees it: ``NodeSelector.commit`` is skipped in that mode,
-        leaving ``evict_expired`` with nothing to expire.
-
-        Ages are dropped too. ``_first_seen`` also carries instances that
-        overflow rejected, and a retained age keeps re-rejecting them every
-        time they return.
-
-        This is not an eviction: ``evicted_ids`` and ``overflow_drops`` are
-        left alone so they keep meaning "capacity was genuinely exceeded".
+        Under unconditional retention a slot is held for the whole episode, so
+        there is no resident whose eviction would be correct -- dropping one
+        deletes facts the progress target reads. The graph builder checks
+        capacity first and raises with scene detail; this is the backstop for
+        callers that do not.
         """
-        keep = set(entity_ids)
-        tracked = set(self._index) | set(self._first_seen)
-        for entity_id in tracked - keep:
-            self.release(entity_id, forget=True)
-
-    def assign(
-        self,
-        nodes: Dict[str, Node],
-        protected_id: Optional[str] = None,
-    ) -> Dict[str, Node]:
-        """Index objects, evicting an old duplicate type on overflow.
-
-        Returns the admitted subset. ``evicted_ids`` reports residents displaced
-        by this call so the graph builder can purge their persistence and edge
-        history. An already-seen overflow instance remains older than the
-        current residents and is rejected instead of causing frame-to-frame
-        slot rotation. ``protected_id`` names the exact active target instance:
-        it cannot be evicted, and if it is pending it bypasses the age rejection
-        so a visible target is always admitted when a non-target slot exists.
-        """
-        self.evicted_ids.clear()
         admitted: Dict[str, Node] = {}
         pending: List[str] = []
         for ent_id, node in nodes.items():
@@ -123,7 +79,6 @@ class EntityRegistry:
             if idx is None:
                 pending.append(ent_id)
                 continue
-            self._type[ent_id] = self._type_key(node)
             node.index = idx
             admitted[ent_id] = node
 
@@ -136,77 +91,17 @@ class EntityRegistry:
         for ent_id in sorted(pending, key=lambda k: self._first_seen[k]):
             node = nodes[ent_id]
             if len(self._index) >= capacity:
-                victim = self._eviction_candidate(node, protected_id)
-                force_target = ent_id == protected_id
-                if victim is None or (
-                    not force_target
-                    and self._first_seen[ent_id] < self._first_seen[victim]
-                ):
-                    self.overflow_drops += 1
-                    continue
-                self.release(victim, forget=False)
-                admitted.pop(victim, None)
-                self.evicted_ids.append(victim)
-                self.overflow_drops += 1
-            idx = self._free.pop(0) if self._free else self._next
-            if idx == self._next:
-                self._next += 1
+                raise RuntimeError(
+                    f"entity registry full: {ent_id!r} needs a row but all "
+                    f"{capacity} object slots are held "
+                    f"({sorted(self._index)}). Retention never evicts."
+                )
+            idx = self._next
+            self._next += 1
             self._index[ent_id] = idx
-            self._type[ent_id] = self._type_key(node)
             node.index = idx
             admitted[ent_id] = node
         return admitted
-
-    @staticmethod
-    def _type_key(node: Node) -> str:
-        """Canonical category shared by duplicate instances."""
-        return str(
-            node.attributes.get("whitelist_key")
-            or node.attributes.get("entity_type")
-            or node.name
-            or node.node_id
-        )
-
-    def _eviction_candidate(
-        self,
-        incoming: Node,
-        protected_id: Optional[str] = None,
-    ) -> Optional[str]:
-        """Oldest non-target resident from the most represented type."""
-        if not self._index:
-            return None
-        counts: Dict[str, int] = {}
-        for kind in self._type.values():
-            counts[kind] = counts.get(kind, 0) + 1
-        incoming_type = self._type_key(incoming)
-        counts[incoming_type] = counts.get(incoming_type, 0) + 1
-        largest = max(counts.values())
-        candidates = [
-            ent_id for ent_id in self._index
-            if ent_id != protected_id and counts[self._type[ent_id]] == largest
-        ]
-        # If the globally largest type contains only the protected target,
-        # evict from the next most represented non-target type instead.
-        if not candidates:
-            unprotected = [ent_id for ent_id in self._index if ent_id != protected_id]
-            if not unprotected:
-                return None
-            largest = max(counts[self._type[ent_id]] for ent_id in unprotected)
-            candidates = [
-                ent_id for ent_id in unprotected
-                if counts[self._type[ent_id]] == largest
-            ]
-        return min(candidates, key=lambda key: self._first_seen[key])
-
-    def release(self, entity_id: str, *, forget: bool = True) -> None:
-        idx = self._index.pop(entity_id, None)
-        self._type.pop(entity_id, None)
-        if idx is not None:
-            self._free.append(idx)
-            self._free.sort()
-        if forget:
-            self._first_seen.pop(entity_id, None)
-
 
 class NodeSelector:
     """Stateful selector. One instance per episode.
@@ -219,7 +114,6 @@ class NodeSelector:
         self.cfg = cfg
         sel = cfg["selection"]
         self.n_max = int(sel["n_max"])
-        self.k_persist = int(sel["k_persist"])
 
         # Active whitelist; set by GraphBuilder before selection. None
         # means "no asset loaded yet" and triggers a fail-loud error in the
@@ -236,25 +130,22 @@ class NodeSelector:
         self._last_seen.clear()
 
     # ---------------------------------------------------------------- persistence
-    def merge_persistent(
+    def merge_retained(
         self, fresh: Dict[str, Node], frame: int
     ) -> Dict[str, Node]:
-        """Re-inject nodes seen within ``k_persist`` frames that are missing
-        from the current frame's visible set.
+        """Re-inject every node admitted earlier this episode and absent now.
 
-        ``k_persist == 0`` disables persistence entirely; ``k_persist < 0``
-        means "never evict" when the adapter's history switch is enabled.
+        Retention is unconditional: once a camera has seen a whitelisted
+        object, it stays a vertex until reset. A re-injected node carries no
+        pixels, so its box is zero; its pose is refreshed from the simulator
+        before relations are built, not taken from this snapshot.
         """
-        if self.k_persist == 0:
-            return fresh
         merged = dict(fresh)
         for ent_id, snap in self._history.items():
             if ent_id in merged:
                 continue
             last = self._last_seen.get(ent_id)
             if last is None:
-                continue
-            if self.k_persist >= 0 and (frame - last) > self.k_persist:
                 continue
             merged[ent_id] = Node(
                 node_id=snap.node_id,
@@ -265,7 +156,6 @@ class NodeSelector:
                 pixel_area=0,
                 pose_world=list(snap.pose_world) if snap.pose_world else None,
                 index=snap.index,
-                steps_since_seen=frame - last,
                 source=snap.source,
                 attributes=dict(snap.attributes),
             )
@@ -323,22 +213,4 @@ class NodeSelector:
                 self._last_seen[ent_id] = frame
                 self._history[ent_id] = _snapshot(n)
 
-    def evict(self, evicted_ids: Iterable[str]) -> None:
-        for ent_id in evicted_ids:
-            self._history.pop(ent_id, None)
-            self._last_seen.pop(ent_id, None)
 
-    def evict_expired(self, frame: int) -> List[str]:
-        """Drop history entries whose age exceeds ``k_persist`` frames.
-
-        ``k_persist < 0`` means "never evict within an episode"; ``k_persist
-        == 0`` disables persistence and nothing is retained to evict.
-        """
-        if self.k_persist <= 0:
-            return []
-        expired: List[str] = []
-        for ent_id, last in list(self._last_seen.items()):
-            if (frame - last) > self.k_persist:
-                expired.append(ent_id)
-        self.evict(expired)
-        return expired

@@ -45,7 +45,7 @@ from scenegraph.adapters.privileged_state import (
 )
 from scenegraph.core.entity_identity import stable_entity_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3  # 2 adds interaction traces, 3 adds info predicates
 
 
 def _pose(entity, env_idx=0):
@@ -82,7 +82,7 @@ class InteractionRecorder:
         self.eps_force = float(eps_force)
         self.min_vertical_ratio = float(min_vertical_ratio)
         self.grasp_angle = int(grasp_angle)
-        self.episode = EpisodeEvidence()
+        self.episode = EpisodeEvidence(self.env_idx)
         # Contact and support reduce around peak force; a grasp interval keeps
         # its last positive frame, which is the pose at release.
         self.groups = {
@@ -144,6 +144,9 @@ class InteractionRecorder:
         """
         if info is not None:
             self.episode.observe_success(success_flag(info, self.env_idx))
+            # The env's own predicate decomposition. Collection-time only --
+            # nothing downstream can reconstruct it.
+            self.episode.observe_info(info, self.frame)
         if self.entities is None:
             self._capture()
         if state is None:
@@ -393,6 +396,8 @@ def write_shard(store: BucketStore, args, symmetry=None,
         },
         "incomplete": [str(b) for b in store.incomplete()],
         "presence": {str(b): store.presence(b) for b in store.buckets()},
+        "episode_presence": {str(b): n
+                             for b, n in store.episode_presence.items()},
         "excluded": {str(b): r for b, r in store.excluded.items()},
         "complete": [str(b) for b in store.complete_buckets()],
         "symmetry": symmetry or {},
@@ -400,6 +405,7 @@ def write_shard(store: BucketStore, args, symmetry=None,
         "bin_samples": bin_samples or {},
         "capability": capability,
         "late": {str(b): n for b, n in store.late.items()},
+        "traces": [r.to_dict() for r in store.traces],
     }
     with open(path, "wb") as f:
         pickle.dump(payload, f)

@@ -13,7 +13,8 @@ temporal buffer.
   picks the label, emitting ``unobserved`` when far. Scoring outside the gate
   is what keeps the temporal change continuous across it.
 
-Admissible = both endpoints visible and both carrying the whitelist
+Admissible = both endpoints in frame (or one is the protected
+target) and both carrying the whitelist
 ``interaction_types`` token; affordance also needs the mined components. The
 one exception is the active subtask target, which the builder replays while it
 is occluded and which therefore keeps all six of its end-effector facts. Other
@@ -74,14 +75,6 @@ UNOBSERVED = "unobserved"
 SRC_HOLDS = "src-holds"
 DST_HOLDS = "dst-holds"
 
-# Edge contracts. ``legacy_v1`` is MS-HAB as shipped: support and contain emit
-# both orderings, and object pairs follow registry order. ``canonical_v2`` emits
-# one edge per unordered pair in stable key order and moves the role into the
-# label, so a pair's direction never depends on whether the predicate holds.
-EDGE_CONTRACT_LEGACY = "legacy_v1"
-EDGE_CONTRACT_CANONICAL = "canonical_v2"
-EDGE_CONTRACTS = (EDGE_CONTRACT_LEGACY, EDGE_CONTRACT_CANONICAL)
-
 # Physical relations whose direction carries meaning.
 DIRECTED_RELATIONS: Tuple[str, ...] = ("support", "contain")
 # Their affordance twins. Role orientation comes from mined components, which
@@ -106,28 +99,21 @@ CHANGE_LABELS: List[str] = [
 ]
 
 # Absolute-state vocabulary per relation, used by the encoder and the decoder.
-def abs_labels_for(contract: str = EDGE_CONTRACT_LEGACY) -> Dict[str, List[str]]:
-    """Legal absolute labels per relation, for one edge contract."""
-    if contract not in EDGE_CONTRACTS:
-        raise ValueError(
-            f"unknown edge_contract {contract!r}; have {list(EDGE_CONTRACTS)}"
-        )
+# One edge per unordered pair in stable key order, with the role in the label,
+# so a pair's direction never depends on whether the predicate holds.
+def abs_labels_for() -> Dict[str, List[str]]:
+    """Legal absolute labels per relation."""
     labels: Dict[str, List[str]] = {
         **{r: PHYSICAL_LABELS for r in PHYSICAL_RELATIONS},
         **SPATIAL_LABELS,
         **{r: COMPAT_LABELS for r in AFFORDANCE_RELATIONS},
     }
-    if contract == EDGE_CONTRACT_CANONICAL:
-        for relation in DIRECTED_RELATIONS:
-            labels[relation] = DIRECTIONAL_PHYSICAL_LABELS
+    for relation in DIRECTED_RELATIONS:
+        labels[relation] = DIRECTIONAL_PHYSICAL_LABELS
     return labels
 
 
-def edge_contract(cfg: dict) -> str:
-    return str(cfg.get("edge_contract") or EDGE_CONTRACT_LEGACY)
-
-
-ABS_LABELS: Dict[str, List[str]] = abs_labels_for(EDGE_CONTRACT_LEGACY)
+ABS_LABELS: Dict[str, List[str]] = abs_labels_for()
 
 # Label sets that pair with binned edges. Compatibility bins only cover the
 # three scored labels; ``unobserved`` is assigned outside the binning path.
@@ -245,16 +231,26 @@ def height_offset(a: Node, b: Node) -> Optional[float]:
     return height_offset_xyz(pa, pb)
 
 
-def _resolve_entity(node: Node, state: PrivilegedState, graph: Optional[Graph] = None):
+def _resolve_entity(
+    node: Node, state: PrivilegedState, graph: Optional[Graph] = None,
+    cfg: Optional[dict] = None,
+):
     """Node -> live simulator entity (for force queries).
 
-    A retained target carries no segmentation ids -- nothing saw it this frame
-    -- so the usual seg-id lookup returns nothing and its contact and grasp
-    facts would vanish exactly when they matter most, with the object in the
-    gripper hiding itself. ``state.active_obj`` is the handle for that one
-    node, so it is used as a fallback and only ever for the node whose id the
-    builder named as the active target.
+    A retained node carries no segmentation ids -- nothing saw it this frame --
+    so the seg-id lookup finds nothing exactly when it matters most, with the
+    object in the gripper hiding itself. The builder's cache holds the
+    association made when the node was first seen and is consulted first;
+    ``state.active_obj`` remains the fallback for the active target alone.
+
+    Returning None here is not benign: a force query on None reads zero, which
+    would be emitted as a confident ``not-holds``. Callers must not reach this
+    for a node the builder never resolved.
     """
+    if cfg is not None:
+        cached = (cfg.get("_entity_cache") or {}).get(node.node_id)
+        if cached is not None:
+            return cached
     name = node.name
     for seg_id in node.segmentation_ids:
         ent = state.seg_id_map.get(seg_id)
@@ -377,36 +373,46 @@ def _compat_edge(
     )
 
 
-def _visible_objects(graph: Graph) -> List[Node]:
+def _eligible_objects(graph: Graph) -> List[Node]:
+    """Objects a camera covers this frame, whether or not pixels survived.
+
+    ``in_frame``, not ``visible``: an object the robot arm hides is still one
+    the cameras cover, and its facts are still derivable from the view. What is
+    excluded is an object outside every frustum, where emitting a fact would
+    supervise something no observation contains.
+    """
     return [
         n for n in graph.nodes
-        if n.node_type == "object" and n.visible and n.pose_world is not None
+        if n.node_type == "object" and n.in_frame and n.pose_world is not None
     ]
 
 
-def _retained_target(graph: Graph) -> Optional[Node]:
-    """The active target when the builder is replaying it through occlusion."""
+def _protected_target(graph: Graph) -> Optional[Node]:
+    """The active target when it is out of frame, or None.
+
+    The one node whose facts continue regardless: the progress ladder reads
+    them every step, and the subtask does not pause because a camera turned
+    away.
+    """
     target_id = graph.meta.get("active_target_node_id")
     if not target_id:
         return None
     node = graph.get_node(target_id)
     if node is None or node.node_type != "object" or node.pose_world is None:
         return None
-    return None if node.visible else node
+    return None if node.in_frame else node
 
 
 def _ee_object_nodes(graph: Graph) -> List[Node]:
     """Objects the end-effector relations are computed against.
 
-    Every visible object, plus the retained active target whether or not a
-    camera saw it this frame. Occlusion must not punch a hole in the target's
-    relation history: the six facts the progress ladder reads are all defined
-    from the current end-effector pose against the target's current pose, and
-    both are known while it is hidden. Object--object facts keep the ordinary
-    visible-only rule -- there is no second retained endpoint to pair with.
+    Every eligible object, plus the protected target whether or not a camera
+    covers it. The facts the progress ladder reads are all defined from the
+    current end-effector pose against the target's current pose, and both are
+    known while it is hidden.
     """
-    nodes = _visible_objects(graph)
-    retained = _retained_target(graph)
+    nodes = _eligible_objects(graph)
+    retained = _protected_target(graph)
     return nodes if retained is None else nodes + [retained]
 
 
@@ -472,7 +478,7 @@ def ee_object_physical_edges(
         emit_grasp = "grasp" in types
         if not emit_contact and not emit_grasp:
             continue
-        ent = _resolve_entity(node, state, graph)
+        ent = _resolve_entity(node, state, graph, cfg)
         if emit_contact:
             force = state.ee_object_contact_force(ent)
             edges.append(Edge(
@@ -567,23 +573,28 @@ def pair_sort_key(node: Node) -> Tuple[str, str]:
     return (str(attrs.get("whitelist_key") or ""), str(node.node_id))
 
 
-def _object_pairs(
-    graph: Graph, contract: str = EDGE_CONTRACT_LEGACY,
-) -> List[Tuple[Node, Node]]:
-    """Unordered object pairs.
+def _object_pairs(graph: Graph) -> List[Tuple[Node, Node]]:
+    """Unordered object pairs in stable key order.
 
-    Legacy inherits registry order, which shifts as nodes arrive, are evicted
-    and reuse slots -- so a pair's ``(a, b)`` orientation is not stable across
-    frames. Canonical sorts by ``pair_sort_key`` instead, which is what lets a
-    single stored edge mean the same thing every frame.
+    Sorted by ``pair_sort_key`` rather than by registry position, which shifts
+    as nodes arrive. A pair's ``(a, b)`` orientation has to mean the same thing
+    every frame for a single stored edge to be readable.
     """
-    objs = [n for n in _visible_objects(graph) if n.segmentation_ids]
-    if contract == EDGE_CONTRACT_CANONICAL:
-        objs = sorted(objs, key=pair_sort_key)
+    objs = sorted(_eligible_objects(graph), key=pair_sort_key)
     out: List[Tuple[Node, Node]] = []
     for i in range(len(objs)):
         for j in range(i + 1, len(objs)):
             out.append((objs[i], objs[j]))
+    # The protected target pairs with anything in frame even when it is not.
+    # A place subtask's defining fact is target-to-receptacle, and losing it
+    # whenever the camera turns away would delete the evidence mid-subtask.
+    # Two out-of-frame endpoints stay unpaired: nothing observed either.
+    target = _protected_target(graph)
+    if target is not None:
+        for other in objs:
+            out.append((other, target)
+                       if pair_sort_key(other) < pair_sort_key(target)
+                       else (target, other))
     return out
 
 
@@ -607,10 +618,9 @@ def object_object_physical_edges(
     """Binary ``contact`` / ``support`` / ``contain`` facts for visible pairs.
 
     All three are evaluated independently -- a supported object in contact with
-    its supporter reports both. ``contact`` is undirected and emitted once per
-    pair. Under legacy, ``support`` and ``contain`` emit both orderings with at
-    most one labelled ``holds``; under canonical they emit once in stable key
-    order and name the role in the label.
+    its supporter reports both. Each emits once per pair in stable key order;
+    ``support`` and ``contain`` name the role in the label, so a pair's
+    direction never depends on whether the predicate holds.
 
     Pairs whose centers exceed the maximum plausible contact distance skip the
     SAPIEN force query and report ``not-holds`` directly: two rigid bodies
@@ -620,11 +630,8 @@ def object_object_physical_edges(
     min_vertical_ratio = cfg["support"].get("min_vertical_force_ratio", 0.5)
     pair_force_max_distance = float(cfg.get("pair_force_max_distance", 2.0))
     aff_set = cfg.get("affordance_set")
-    contract = edge_contract(cfg)
-    canonical = contract == EDGE_CONTRACT_CANONICAL
-
     edges: List[Edge] = []
-    for a, b in _object_pairs(graph, contract):
+    for a, b in _object_pairs(graph):
         ta, tb = interaction_types(a), interaction_types(b)
         want_contact = _both(ta, tb, "contact")
         want_support = _both(ta, tb, "support")
@@ -646,31 +653,23 @@ def object_object_physical_edges(
                     for cc in container_comps for kc in key_comps
                 )
                 oriented.append((container, containee, held))
-            if canonical:
-                if len(oriented) > 1:
-                    raise ValueError(
-                        f"contain role is ambiguous for "
-                        f"{a.node_id!r}/{b.node_id!r}: both orientations have "
-                        "mined components. Extend the schema rather than "
-                        "emitting two edges."
-                    )
-                if oriented:
-                    container, _, held = oriented[0]
-                    label = NOT_HOLDS
-                    if held:
-                        label = SRC_HOLDS if container is a else DST_HOLDS
-                    edges.append(Edge(
-                        a.node_id, b.node_id, "contain", label,
-                        raw_value=float(held),
-                        attributes={"contain_role": "container"},
-                    ))
-            else:
-                for container, containee, held in oriented:
-                    edges.append(Edge(
-                        container.node_id, containee.node_id, "contain",
-                        HOLDS if held else NOT_HOLDS, raw_value=float(held),
-                        attributes={"contain_role": "container"},
-                    ))
+            if len(oriented) > 1:
+                raise ValueError(
+                    f"contain role is ambiguous for "
+                    f"{a.node_id!r}/{b.node_id!r}: both orientations have "
+                    "mined components. Extend the schema rather than "
+                    "emitting two edges."
+                )
+            if oriented:
+                container, _, held = oriented[0]
+                label = NOT_HOLDS
+                if held:
+                    label = SRC_HOLDS if container is a else DST_HOLDS
+                edges.append(Edge(
+                    a.node_id, b.node_id, "contain", label,
+                    raw_value=float(held),
+                    attributes={"contain_role": "container"},
+                ))
 
         if not (want_contact or want_support):
             continue
@@ -685,7 +684,8 @@ def object_object_physical_edges(
         else:
             force_vector = np.asarray(
                 state.pairwise_force_vector(
-                    _resolve_entity(a, state), _resolve_entity(b, state)
+                    _resolve_entity(a, state, graph, cfg),
+                    _resolve_entity(b, state, graph, cfg),
                 ), dtype=float,
             )
             force = float(np.linalg.norm(force_vector))
@@ -711,26 +711,16 @@ def object_object_physical_edges(
             if in_contact and force > 0.0:
                 if abs(float(force_vector[2])) / force >= min_vertical_ratio:
                     supporter = a if float(force_vector[2]) < 0.0 else b
-            if canonical:
-                label = NOT_HOLDS
-                if supporter is a:
-                    label = SRC_HOLDS
-                elif supporter is b:
-                    label = DST_HOLDS
-                edges.append(Edge(
-                    a.node_id, b.node_id, "support", label,
-                    raw_value=force if supporter is not None else 0.0,
-                    attributes={"support_role": "supporter"},
-                ))
-            else:
-                for src, dst in ((a, b), (b, a)):
-                    holds = supporter is src
-                    edges.append(Edge(
-                        src.node_id, dst.node_id, "support",
-                        HOLDS if holds else NOT_HOLDS,
-                        raw_value=force if holds else 0.0,
-                        attributes={"support_role": "supporter"},
-                    ))
+            label = NOT_HOLDS
+            if supporter is a:
+                label = SRC_HOLDS
+            elif supporter is b:
+                label = DST_HOLDS
+            edges.append(Edge(
+                a.node_id, b.node_id, "support", label,
+                raw_value=force if supporter is not None else 0.0,
+                attributes={"support_role": "supporter"},
+            ))
     return edges
 
 
@@ -775,9 +765,7 @@ def object_object_affordance_edges(
     norm = _compat_norm(cfg)
 
     edges: List[Edge] = []
-    contract = edge_contract(cfg)
-    canonical = contract == EDGE_CONTRACT_CANONICAL
-    for a, b in _object_pairs(graph, contract):
+    for a, b in _object_pairs(graph):
         a_xyz, b_xyz = _xyz(a), _xyz(b)
         ta, tb = interaction_types(a), interaction_types(b)
         d = planar_distance_xyz(a_xyz, b_xyz)
@@ -812,7 +800,7 @@ def object_object_affordance_edges(
                 bot_comps = lookup_bottom_components(aff_set, supported)
                 if sup_comps and bot_comps:
                     oriented.append((supporter, supported, sup_comps, bot_comps))
-            if canonical and len(oriented) > 1:
+            if len(oriented) > 1:
                 raise ValueError(
                     f"support-compatibility role is ambiguous for "
                     f"{a.node_id!r}/{b.node_id!r}: both orientations have "
@@ -847,7 +835,7 @@ def object_object_affordance_edges(
                 key_comps = lookup_key_components(aff_set, containee)
                 if con_comps and key_comps:
                     oriented.append((container, containee, con_comps, key_comps))
-            if canonical and len(oriented) > 1:
+            if len(oriented) > 1:
                 raise ValueError(
                     f"contain-compatibility role is ambiguous for "
                     f"{a.node_id!r}/{b.node_id!r}: both orientations have "
@@ -877,6 +865,43 @@ def object_object_affordance_edges(
     return edges
 
 
+def object_object_spatial_edges(
+    graph: Graph, state: PrivilegedState, cfg: dict
+) -> List[Edge]:
+    """Object-center spatial facts for every eligible object pair.
+
+    The carry phase of a place task is ``cubeA`` approaching ``cubeB``, and
+    without these the only distance in the graph is end-effector-to-something.
+    A schedule would have to substitute the gripper's distance for the object's,
+    which stops being the same quantity the moment the object is released.
+
+    Direction is carried by the label, not the endpoints: ``height-offset`` is
+    antisymmetric and its ``above``/``below`` bins already say which way round
+    the pair is, so one edge per pair says everything two would.
+    """
+    pd_spec = _get_bin_spec(cfg, "planar-distance")
+    ho_spec = _get_bin_spec(cfg, "height-offset")
+    if pd_spec is None and ho_spec is None:
+        return []
+
+    edges: List[Edge] = []
+    for a, b in _object_pairs(graph):
+        a_xyz, b_xyz = _xyz(a), _xyz(b)
+        if pd_spec is not None:
+            d = planar_distance_xyz(a_xyz, b_xyz)
+            edges.append(Edge(
+                a.node_id, b.node_id, "planar-distance",
+                bin_label(d, pd_spec[0], pd_spec[1]), raw_value=d,
+            ))
+        if ho_spec is not None:
+            dz = height_offset_xyz(a_xyz, b_xyz)
+            edges.append(Edge(
+                a.node_id, b.node_id, "height-offset",
+                bin_label(dz, ho_spec[0], ho_spec[1]), raw_value=dz,
+            ))
+    return edges
+
+
 def build_absolute_edges(
     graph: Graph, state: PrivilegedState, cfg: dict
 ) -> None:
@@ -884,6 +909,12 @@ def build_absolute_edges(
     graph.edges.extend(ee_object_spatial_edges(graph, state, cfg))
     graph.edges.extend(ee_object_physical_edges(graph, state, cfg))
     graph.edges.extend(ee_object_affordance_edges(graph, state, cfg))
+    # Off for MS-HAB: its progress ladder is end-effector-to-target and these
+    # would be new facts in an environment nothing asked to change. Named
+    # explicitly rather than inferred from the edge contract, which is a
+    # separate axis.
+    if bool(cfg.get("object_object_spatial", False)):
+        graph.edges.extend(object_object_spatial_edges(graph, state, cfg))
     graph.edges.extend(object_object_physical_edges(graph, state, cfg))
     if bool(cfg.get("affordances", {}).get("object_object_compatibility", True)):
         graph.edges.extend(object_object_affordance_edges(graph, state, cfg))

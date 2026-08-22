@@ -57,7 +57,7 @@ def graph_config(
         app_dim=8,
         entity_vocab=14,
         n_rel=11,
-        n_abs=17,
+        n_abs=19,
         n_temp=6,
         embed=8,
         app=4,
@@ -818,12 +818,12 @@ class SlotDecoderTest(unittest.TestCase):
 
 class ProgressTest(unittest.TestCase):
     def scorer(self):
-        return ProgressScorer(progress_module.PICK_STAGES, 17)
+        return ProgressScorer(progress_module.PICK_STAGES, progress_module.N_ABS)
 
     def probs(self, labels):
         """One-hot relation distributions in the scorer's relation order."""
         scorer = self.scorer()
-        out = torch.zeros(1, int(scorer.relations.numel()), 17)
+        out = torch.zeros(1, int(scorer.relations.numel()), progress_module.N_ABS)
         for index, relation in enumerate(scorer.relations.tolist()):
             out[0, index, labels[relation]] = 1.0
         return out
@@ -860,7 +860,7 @@ class ProgressTest(unittest.TestCase):
     def test_potential_is_always_in_the_unit_interval(self):
         scorer = self.scorer()
         torch.manual_seed(0)
-        random = torch.softmax(torch.randn(64, int(scorer.relations.numel()), 17), -1)
+        random = torch.softmax(torch.randn(64, int(scorer.relations.numel()), progress_module.N_ABS), -1)
         for hard in (True, False):
             value = scorer.potential(random, hard=hard)
             self.assertGreaterEqual(float(value.min()), 0.0)
@@ -1007,7 +1007,7 @@ class ProgressTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(probs).all())
         self.assertEqual(float(potential.abs().max()), 0.0)
         self.assertEqual(float(shaped.abs().max()), 0.0)
-        self.assertEqual(tuple(probs.shape), (2, 6, 17))
+        self.assertEqual(tuple(probs.shape), (2, 6, progress_module.N_ABS))
         # An entirely empty table is finite too, end effector included.
         with torch.no_grad():
             shaped, potential, _ = reward(

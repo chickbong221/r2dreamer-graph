@@ -30,6 +30,10 @@ class Node:
     name: str
 
     visible: bool = True
+    # Whether relations may be emitted for this node. Set by the environment's
+    # visibility policy, never by segmentation: a node the robot hides is still
+    # in frame, and its facts are still derivable from what the cameras cover.
+    in_frame: bool = True
     segmentation_ids: List[int] = field(default_factory=list)
     pixel_area: int = 0
 
@@ -48,7 +52,6 @@ class Node:
     # Append-only vertex index, assigned by EntityRegistry on first sight.
     index: Optional[int] = None
 
-    steps_since_seen: int = 0
     source: str = "segmentation"
 
     attributes: Dict[str, Any] = field(default_factory=dict)
@@ -75,12 +78,6 @@ class Edge:
     label: str                          # absolute state sigma
     temp_label: Optional[str] = None    # temporal change delta, None when absent
     raw_value: Optional[float] = None
-    # A stale fact is the last observed object--object physical state touching a
-    # node that is no longer visible. It is never recomputed from mixed-time
-    # poses and never carries a temporal label.
-    stale: bool = False
-    observed_frame: Optional[int] = None
-    age: int = 0
     attributes: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

@@ -55,7 +55,7 @@ def graph_config(n_max, slot_dim, embed=16):
         simple=True, state_mode="slots", slot_births=True,
         n_max=n_max, slot_dim=slot_dim, slot_heads=4, slot_mixer_layers=1,
         units=slot_dim, simple_units=slot_dim, semantic_dim=slot_dim,
-        layers=1, n_cams=2, app_dim=8, entity_vocab=14, n_rel=11, n_abs=17,
+        layers=1, n_cams=2, app_dim=8, entity_vocab=14, n_rel=11, n_abs=19,
         n_temp=6, embed=embed, app=4, bbox=4, bbox_beta=0.1,
         uid_vocab=32, uid_embed=8, reverse_edges=True, act="SiLU",
     )

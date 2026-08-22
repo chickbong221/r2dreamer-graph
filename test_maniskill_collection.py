@@ -3,6 +3,8 @@
 import unittest
 from types import SimpleNamespace
 
+import numpy as np
+
 from scenegraph.adapters.interaction_events import (
     EE_KEY, BucketStore, DiscoveryWindow, EpisodeEvidence, InteractionEvent,
     make_bucket,
@@ -593,3 +595,166 @@ class LatePresenceTest(unittest.TestCase):
     def test_late_presence_is_counted_per_episode_not_per_event(self):
         store, late = self._store(late_every=50)
         self.assertEqual(store.late_presence[late], 2)
+
+
+class EpisodeTraceTest(unittest.TestCase):
+    """Ordering evidence: what a phase schedule is mined from."""
+
+    @staticmethod
+    def _ev(relation, src, dst, on, off):
+        return InteractionEvent(
+            make_bucket(relation, src, dst), on, {"last_frame": off})
+
+    def _commit(self, events, success=True):
+        store = BucketStore(target=300)
+        ep = EpisodeEvidence()
+        for e in events:
+            ep.add(e)
+        ep.observe_success(success)
+        ep.commit(store)
+        return store
+
+    def test_failed_episode_leaves_no_trace(self):
+        store = self._commit([self._ev("grasp", "ee", "cubeA", 5, 9)],
+                             success=False)
+        self.assertEqual(store.traces, [])
+
+    def test_trace_is_ordered_by_onset(self):
+        store = self._commit([
+            self._ev("support", "cubeB", "cubeA", 40, 60),
+            self._ev("contact", "ee", "cubeA", 5, 30),
+            self._ev("grasp", "ee", "cubeA", 8, 35),
+        ])
+        self.assertEqual(
+            [(r, s, d) for r, s, d, _, _ in store.traces[0].interactions],
+            [("contact", "ee", "cubeA"),
+             ("grasp", "ee", "cubeA"),
+             ("support", "cubeB", "cubeA")],
+        )
+
+    def test_regrasp_is_one_span_not_two_milestones(self):
+        store = self._commit([
+            self._ev("grasp", "ee", "cubeA", 8, 12),
+            self._ev("grasp", "ee", "cubeA", 20, 35),
+        ])
+        self.assertEqual(store.traces[0].interactions,
+                         (("grasp", "ee", "cubeA", 8, 35),))
+
+    def test_release_frame_survives(self):
+        """The plan's 'EE releases A' milestone is the span end, not a
+        separate event -- it has to reach the shard."""
+        store = self._commit([self._ev("grasp", "ee", "cubeA", 8, 35)])
+        self.assertEqual(store.traces[0].interactions[0][4], 35)
+
+    def test_capped_bucket_still_contributes_ordering(self):
+        store = BucketStore(target=1)
+        for i in range(3):
+            ep = EpisodeEvidence()
+            ep.add(self._ev("contact", "ee", "cubeA", i, i + 2))
+            ep.observe_success(True)
+            ep.commit(store)
+        self.assertEqual(len(store.samples[make_bucket("contact", "ee", "cubeA")]), 1)
+        self.assertEqual(len(store.traces), 3)
+
+    def test_excluded_bucket_still_contributes_ordering(self):
+        """Incidental for calibration is not incidental for ordering: the
+        bucket carries no samples but its position is still evidence."""
+        store = BucketStore(target=300)
+        brush = make_bucket("contact", "ee", "table")
+        store.excluded[brush] = 0.01
+        ep = EpisodeEvidence()
+        ep.add(self._ev("contact", "ee", "table", 2, 3))
+        ep.add(self._ev("grasp", "ee", "cubeA", 8, 35))
+        ep.observe_success(True)
+        ep.commit(store)
+        self.assertEqual(len(store.traces[0].interactions), 2)
+        self.assertEqual(store.samples.get(brush, []), [])
+
+    def test_trace_is_deterministic_under_simultaneous_onsets(self):
+        pair = [self._ev("contact", "ee", "cubeA", 5, 9),
+                self._ev("grasp", "ee", "cubeA", 5, 9)]
+        a = self._commit(pair).traces[0].interactions
+        b = self._commit(list(reversed(pair))).traces[0].interactions
+        self.assertEqual(a, b)
+
+
+class ShardTraceTest(unittest.TestCase):
+    def test_traces_reach_the_shard_payload(self):
+        import inspect
+        from scenegraph.tools import collect_maniskill_interactions as mod
+        self.assertIn("r.to_dict() for r in store.traces",
+                      inspect.getsource(mod.write_shard))
+        self.assertGreaterEqual(mod.SCHEMA_VERSION, 3)
+
+
+class InfoTraceTest(unittest.TestCase):
+    """The environment's own predicate decomposition. Collection-time only."""
+
+    def _record(self, frames, success_from=0):
+        ep = EpisodeEvidence()
+        ep.observe_success(True)
+        for f, info in enumerate(frames):
+            ep.observe_info(info, f)
+        store = BucketStore()
+        ep.commit(store)
+        return store.traces[0]
+
+    def test_boolean_keys_become_spans(self):
+        r = self._record([{"is_grasped": f in (2, 3, 4)} for f in range(6)])
+        self.assertEqual(r.predicates["is_grasped"], ((2, 4),))
+        self.assertEqual(r.kinds["is_grasped"], "predicate")
+
+    def test_a_predicate_that_turns_off_keeps_both_runs(self):
+        """Unlike interaction milestones: a predicate going false and true
+        again is the evidence that a phase was undone."""
+        r = self._record([{"ok": f in (1, 2, 5, 6)} for f in range(8)])
+        self.assertEqual(r.predicates["ok"], ((1, 2), (5, 6)))
+
+    def test_continuous_keys_stay_frame_aligned(self):
+        r = self._record([{"tcp_dist": 0.5 - 0.1 * f} for f in range(5)])
+        frames, values = r.scalars["tcp_dist"]
+        self.assertEqual(frames.tolist(), [0, 1, 2, 3, 4])
+        self.assertAlmostEqual(float(values[-1]), 0.1, places=5)
+        self.assertEqual(r.kinds["tcp_dist"], "scalar")
+
+    def test_batched_values_select_the_env_row(self):
+        ep = EpisodeEvidence(env_idx=1)
+        ep.observe_success(True)
+        ep.observe_info({"success": np.array([0.0, 1.0])}, 0)
+        store = BucketStore()
+        ep.commit(store)
+        self.assertEqual(store.traces[0].predicates["success"], ((0, 0),))
+
+    def test_nested_and_non_numeric_are_reported_not_dropped(self):
+        r = self._record([{"obs": {"x": 1}, "note": "hi"} for _ in range(2)])
+        self.assertEqual(r.kinds["obs"], "ignored:dict")
+        self.assertEqual(r.kinds["note"], "ignored:str")
+
+    def test_failed_episode_records_no_predicates(self):
+        ep = EpisodeEvidence()
+        ep.observe_info({"is_grasped": True}, 0)
+        store = BucketStore()
+        ep.commit(store)
+        self.assertEqual(store.traces, [])
+
+    def test_predicate_span_lines_up_with_the_mined_milestone(self):
+        """The whole point: the env says grasped on 2-4 and so do we."""
+        ep = EpisodeEvidence()
+        ep.observe_success(True)
+        for f in range(6):
+            ep.observe_info({"is_grasped": 2 <= f <= 4}, f)
+        ep.add(InteractionEvent(make_bucket("grasp", "ee", "cubeA"), 2,
+                                {"last_frame": 4}))
+        store = BucketStore()
+        ep.commit(store)
+        r = store.traces[0]
+        self.assertEqual(r.predicates["is_grasped"], ((2, 4),))
+        self.assertEqual(r.interactions[0][3:], (2, 4))
+
+    def test_record_serialises_to_plain_types(self):
+        r = self._record([{"is_grasped": True, "d": 0.5 - 0.1 * f}
+                          for f in range(3)])
+        d = r.to_dict()
+        self.assertEqual(set(d), {"interactions", "predicates", "scalars",
+                                  "kinds", "frames"})
+        self.assertEqual(d["frames"], 3)

@@ -25,7 +25,7 @@ from graph import (
     graph_keys,
     graph_schema,
 )
-from progress import PICK_STAGES, ProgressScorer
+from progress import N_ABS, PICK_STAGES, ProgressScorer
 from envs.maniskill import _GRAPH_CONFIG_KEYS, graph_observation_config
 from networks import MultiDecoder
 from rssm import RSSM
@@ -72,7 +72,7 @@ def graph_config(simple=True, units=32, state_mode="pooled"):
         app_dim=8,
         entity_vocab=14,
         n_rel=11,
-        n_abs=17,
+        n_abs=19,
         n_temp=6,
         embed=8,
         app=4,
@@ -371,7 +371,7 @@ class AdapterConstructionTest(unittest.TestCase):
 
     CFG = {
         "temporal": {"K": 2},
-        "selection": {"n_max": N_MAX, "k_persist": -1},
+        "selection": {"n_max": N_MAX},
         "whitelist_dir": "",
     }
 
@@ -762,7 +762,7 @@ class PooledDecoderTest(unittest.TestCase):
 
     def _decoder(self):
         torch.manual_seed(0)
-        scorer = ProgressScorer(PICK_STAGES, 17)
+        scorer = ProgressScorer(PICK_STAGES, N_ABS)
         decoder = SimpleGraphDecoder(
             graph_config(simple=True), semantic_dim=32,
             progress_relations=scorer.relations,
@@ -840,6 +840,51 @@ class PooledDecoderTest(unittest.TestCase):
                 sem, compact_graph(moved, SCHEMA_SIMPLE_POOLED))
         self.assertTrue(torch.equal(a, b))
 
+    def test_boxless_nodes_are_separated_by_their_centroids(self):
+        """Retention puts several nodes without pixels in one frame. Their
+        boxes and visibility bits are all zero, so a box-only query would be
+        byte-identical for each and the decoder would be asked for two
+        different entities from one input."""
+        decoder, _ = self._decoder()
+        graph = pooled_graph(batch=1, time=1, n_valid=3)
+        # Nodes 1 and 2 keep their rows and centroids but lose every pixel.
+        graph["graph_node_bbox"][..., 1, :, :] = 0.0
+        graph["graph_node_bbox"][..., 2, :, :] = 0.0
+        graph["graph_node_centroid"][..., 1, :] = torch.tensor([0.4, 0.1, 0.9])
+        graph["graph_node_centroid"][..., 2, :] = torch.tensor([-0.3, 0.7, 0.2])
+        compact = compact_graph(graph, SCHEMA_SIMPLE_POOLED)
+        self.assertTrue(bool(compact.node_valid[0, 1]))
+        self.assertTrue(bool(compact.node_valid[0, 2]))
+        box = compact.bbox_feature(torch.float32)
+        self.assertTrue(torch.equal(box[0, 1], box[0, 2]))   # the ambiguity
+        with torch.no_grad():
+            nodes = decoder.node_features(torch.randn(1, 1, 32), compact)
+        self.assertFalse(torch.allclose(nodes[0, 1], nodes[0, 2], atol=1e-5))
+
+    def test_two_boxless_nodes_in_the_same_place_stay_ambiguous(self):
+        """The converse, so the test above is not passing on noise: identical
+        geometry gives identical queries, which is the honest answer."""
+        decoder, _ = self._decoder()
+        graph = pooled_graph(batch=1, time=1, n_valid=3)
+        for row in (1, 2):
+            graph["graph_node_bbox"][..., row, :, :] = 0.0
+            graph["graph_node_centroid"][..., row, :] = torch.tensor([0.4, 0.1, 0.9])
+        with torch.no_grad():
+            nodes = decoder.node_features(
+                torch.randn(1, 1, 32),
+                compact_graph(graph, SCHEMA_SIMPLE_POOLED))
+        self.assertTrue(torch.allclose(nodes[0, 1], nodes[0, 2], atol=1e-6))
+
+    def test_the_decoder_query_uses_the_encoder_centroid_bounds(self):
+        """They address the same node; disagreeing bounds would mean the
+        decoder is querying a position the encoder never encoded."""
+        decoder, _ = self._decoder()
+        encoder = GraphEncoder(graph_config(simple=True))
+        self.assertTrue(torch.equal(decoder.centroid_origin,
+                                    encoder.centroid_origin))
+        self.assertTrue(torch.equal(decoder.centroid_scale,
+                                    encoder.centroid_scale))
+
     def test_node_count_may_vary_between_frames(self):
         for n_valid in (1, 3, 7):
             with self.subTest(nodes=n_valid):
@@ -852,7 +897,7 @@ class PooledProgressHeadTest(unittest.TestCase):
 
     def _decoder(self):
         torch.manual_seed(0)
-        scorer = ProgressScorer(PICK_STAGES, 17)
+        scorer = ProgressScorer(PICK_STAGES, N_ABS)
         decoder = SimpleGraphDecoder(
             graph_config(simple=True), semantic_dim=32,
             progress_relations=scorer.relations,
@@ -873,7 +918,7 @@ class PooledProgressHeadTest(unittest.TestCase):
     def test_head_emits_one_legal_simplex_per_relation(self):
         decoder, scorer = self._decoder()
         probs = decoder.progress_probs(torch.randn(2, 3, 32))
-        self.assertEqual(tuple(probs.shape), (2, 3, int(scorer.relations.numel()), 17))
+        self.assertEqual(tuple(probs.shape), (2, 3, int(scorer.relations.numel()), N_ABS))
         self.assertTrue(torch.allclose(probs.sum(-1), torch.ones(2, 3, 6), atol=1e-5))
         illegal = ~decoder.progress_valid.expand_as(probs)
         self.assertLess(float(probs.masked_select(illegal).abs().max()), 1e-6)
@@ -942,27 +987,27 @@ class PotentialMatrixTest(unittest.TestCase):
     """The soft potential is linear, so it is one contraction, not 14 stages."""
 
     def setUp(self):
-        self.scorer = ProgressScorer(PICK_STAGES, 17)
+        self.scorer = ProgressScorer(PICK_STAGES, N_ABS)
 
     def _stagewise(self, probs):
         return (self.scorer.satisfaction(probs, False) * self.scorer.weights).sum(-1)
 
     def test_matrix_matches_the_cumulative_stage_sum(self):
         torch.manual_seed(0)
-        probs = torch.softmax(torch.randn(5, 6, 17), -1)
+        probs = torch.softmax(torch.randn(5, 6, N_ABS), -1)
         self.assertTrue(torch.allclose(
             self.scorer.potential(probs), self._stagewise(probs), atol=1e-6
         ))
 
     def test_potential_stays_bounded(self):
         torch.manual_seed(1)
-        probs = torch.softmax(torch.randn(64, 6, 17) * 4.0, -1)
+        probs = torch.softmax(torch.randn(64, 6, N_ABS) * 4.0, -1)
         phi = self.scorer.potential(probs)
         self.assertGreaterEqual(float(phi.min()), 0.0)
         self.assertLessEqual(float(phi.max()), 1.0)
 
     def test_saturated_state_scores_exactly_one(self):
-        best = torch.zeros(1, 6, 17)
+        best = torch.zeros(1, 6, N_ABS)
         satisfying = {5: 3, 6: 10, 8: 13, 7: 13, 1: 2, 2: 2}
         for row, relation in enumerate(self.scorer.relations.tolist()):
             best[0, row, satisfying[relation]] = 1.0
@@ -972,7 +1017,7 @@ class PotentialMatrixTest(unittest.TestCase):
         )
 
     def test_worst_state_scores_zero(self):
-        worst = torch.zeros(1, 6, 17)
+        worst = torch.zeros(1, 6, N_ABS)
         unsatisfying = {5: 7, 6: 8, 8: 16, 7: 16, 1: 1, 2: 1}
         for row, relation in enumerate(self.scorer.relations.tolist()):
             worst[0, row, unsatisfying[relation]] = 1.0
@@ -1200,11 +1245,11 @@ class EnvConfigPlumbingTest(unittest.TestCase):
             "enabled": True, "simple": True, "uid_vocab": 64,
             "mshab_task": "set_table", "entity_vocab": 14,
             "thresholds_path": "", "whitelist_dir": "",
-            "n_max": 8, "e_max": 168, "k_persist": -1, "app_dim": 384,
+            "n_max": 8, "e_max": 168, "app_dim": 384,
             "dino_model": "dinov2_vits14_reg", "dino_res": 112,
-            "dino_weights": "", "staleness_enabled": False,
+            "dino_weights": "", "visibility_policy": "keep_tabletop",
             "bypass_teemo": False, "state_mode": "pooled",
-            "edge_contract": "legacy_v1", "use_target_flag": True,
+            "use_target_flag": True, "object_object_spatial": False,
         })
         out = graph_observation_config(graph_config, ["fetch_head"])
         self.assertIs(out["simple"], True)

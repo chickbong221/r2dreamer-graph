@@ -32,23 +32,23 @@ _GRAPH_CONFIG_KEYS = (
     # boxes and no identity code, slot graph-simple the reverse, so the env has
     # to know the state mode too.
     "enabled", "simple", "state_mode", "uid_vocab", "mshab_task", "entity_vocab",
-    "edge_contract", "use_target_flag",
-    "thresholds_path", "whitelist_dir", "n_max", "e_max", "k_persist",
-    "app_dim", "dino_model", "dino_res", "dino_weights", "staleness_enabled",
+    "use_target_flag", "object_object_spatial",
+    "thresholds_path", "whitelist_dir", "n_max", "e_max",
+    "app_dim", "dino_model", "dino_res", "dino_weights", "visibility_policy",
     "bypass_teemo",
 )
 
 _GRAPH_CONFIG_CASTS = {
     "enabled": bool,
     "use_target_flag": bool,
+    "object_object_spatial": bool,
     "simple": bool,
-    "staleness_enabled": bool,
+    "visibility_policy": str,
     "bypass_teemo": bool,
     "uid_vocab": int,
     "entity_vocab": int,
     "n_max": int,
     "e_max": int,
-    "k_persist": int,
     "app_dim": int,
     "dino_res": int,
 }
@@ -289,7 +289,7 @@ class ManiSkillVecEnv:
             )
         if self._graph is not None:
             for key in (
-                "log_graph_overflow_drops",
+                "log_graph_in_frame_nodes",
                 "log_graph_episode_entities",
                 "log_graph_fact_drops",
                 "log_graph_node_drops",
@@ -376,8 +376,8 @@ class ManiSkillVecEnv:
                 data[key] = torch.as_tensor(value, device=self._device)
             # Both counters are cumulative within an episode, so the trainer's
             # per-episode maximum is the episode total.
-            data["log_graph_overflow_drops"] = torch.as_tensor(
-                self._graph.overflow_drops, device=self._device
+            data["log_graph_in_frame_nodes"] = torch.as_tensor(
+                self._graph.in_frame_nodes, device=self._device
             ).reshape(-1, 1)
             data["log_graph_episode_entities"] = torch.as_tensor(
                 self._graph.episode_entities, device=self._device

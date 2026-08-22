@@ -66,22 +66,23 @@ graph:
   thresholds_path: ''
   whitelist_dir: ''
   # The node/edge contract follows the model config. Every arm pins the same
-  # 8/168 -- end effector plus seven objects, and 3 * n_max * (n_max - 1)
-  # edges, which is truncation-free. They have to match: the packer drops
-  # spatial relations first, so a tighter cap upstream is not a neutral loss.
-  edge_contract: ${model.graph.edge_contract}
+  # 8/168. Overflow now raises rather than truncating, so these have to be
+  # large enough for the scene, not merely plausible.
   # False: no subtask target. Row 1 is not reserved,
   # graph_node_target stays zero, and the progress critic must
   # be disabled with it.
   use_target_flag: true
+  # Off: the MS-HAB ladder is end-effector-to-target, so these would be new
+  # facts in a branch nothing asked to change.
+  object_object_spatial: false
+  # projected_camera: a retained node stays relational while a camera covers
+  # the space it occupies, whether or not pixels survived the robot arm.
+  # Outside both frustums it keeps its row and centroid but emits no facts.
+  visibility_policy: projected_camera
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
-  k_persist: -1
   app_dim: ${model.graph.app_dim}
   dino_model: dinov2_vits14_reg
   dino_res: 112
   dino_weights: ''
-  # False: emit only objects visible in at least one camera this frame.
-  # True: retain unseen nodes and their cached physical relations.
-  staleness_enabled: false
   bypass_teemo: false

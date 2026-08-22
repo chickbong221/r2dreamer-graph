@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
+
 EE_KEY = "ee"
 
 # Symmetric: no semantic direction, so the pair is stored in key order.
@@ -50,6 +52,155 @@ class InteractionEvent:
     payload: Dict[str, Any] = field(default_factory=dict)
 
 
+def _scalar_at(value: Any, env_idx: int) -> Optional[float]:
+    """One float from a possibly-batched info value, or None if it is not one.
+
+    Nested structures and multi-element-per-env arrays are not predicates and
+    are reported rather than coerced.
+    """
+    if value is None or isinstance(value, (str, bytes, dict, list, tuple, set)):
+        return None
+    if isinstance(value, (bool, int, float)):
+        return float(value)
+    arr = getattr(value, "cpu", None)
+    arr = arr() if callable(arr) else value
+    try:
+        arr = np.asarray(arr)
+    except Exception:
+        return None
+    if arr.dtype.kind not in "biuf" or arr.size == 0:
+        return None
+    if arr.ndim == 0:
+        return float(arr)
+    flat = arr.reshape(-1)
+    if arr.ndim == 1:
+        return float(flat[min(env_idx, flat.size - 1)])
+    return None
+
+
+class InfoTrace:
+    """Per-frame scalar and boolean values from the environment's own ``info``.
+
+    The task's decomposition of its own success predicate is the one account of
+    phase structure that does not come from our detectors, and it exists only
+    while the episode runs. Recorded per frame, reduced on commit.
+    """
+
+    def __init__(self, env_idx: int = 0) -> None:
+        self.env_idx = int(env_idx)
+        self.values: Dict[str, List[Tuple[int, float]]] = defaultdict(list)
+        self.skipped: Dict[str, str] = {}
+
+    def reset(self) -> None:
+        self.values = defaultdict(list)
+        self.skipped = {}
+
+    def observe(self, info: Any, frame: int) -> None:
+        if not isinstance(info, dict):
+            return
+        for key, value in info.items():
+            scalar = _scalar_at(value, self.env_idx)
+            if scalar is None:
+                self.skipped.setdefault(key, type(value).__name__)
+                continue
+            self.values[str(key)].append((int(frame), scalar))
+
+    def reduce(self) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, str]]:
+        """``(predicate spans, scalar series, key kinds)``.
+
+        A key whose every observed value is 0 or 1 is a predicate and reduces to
+        onset/release spans -- the same shape interaction milestones use, so the
+        two orderings are directly comparable. Anything else stays frame-aligned
+        because its shape is the signal.
+        """
+        spans: Dict[str, Any] = {}
+        series: Dict[str, Any] = {}
+        kinds: Dict[str, str] = {}
+        for key, samples in self.values.items():
+            if not samples:
+                continue
+            vals = [v for _, v in samples]
+            if all(v in (0.0, 1.0) for v in vals):
+                kinds[key] = "predicate"
+                spans[key] = _true_spans(samples)
+            else:
+                kinds[key] = "scalar"
+                series[key] = (
+                    np.asarray([f for f, _ in samples], dtype=np.int32),
+                    np.asarray(vals, dtype=np.float32),
+                )
+        for key, why in self.skipped.items():
+            kinds.setdefault(str(key), f"ignored:{why}")
+        return spans, series, kinds
+
+
+def _true_spans(samples: List[Tuple[int, float]]) -> Tuple[Tuple[int, int], ...]:
+    """Maximal runs where the value is 1, as ``(onset, release)`` frames.
+
+    Runs are kept separate here, unlike interaction milestones: a predicate that
+    turns off and on again is exactly the evidence that a phase was undone.
+    """
+    out: List[Tuple[int, int]] = []
+    start = prev = None
+    for frame, value in samples:
+        if value == 1.0:
+            if start is None:
+                start = frame
+            prev = frame
+        elif start is not None:
+            out.append((start, prev))
+            start = prev = None
+    if start is not None:
+        out.append((start, prev))
+    return tuple(out)
+
+
+@dataclass
+class EpisodeRecord:
+    """One successful episode, every stream sharing its index."""
+    interactions: Tuple[Tuple[str, str, str, int, int], ...]
+    predicates: Dict[str, Any] = field(default_factory=dict)
+    scalars: Dict[str, Any] = field(default_factory=dict)
+    kinds: Dict[str, str] = field(default_factory=dict)
+    frames: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Plain types only. A shard outlives the class that wrote it."""
+        return {
+            "interactions": self.interactions,
+            "predicates": {k: v for k, v in self.predicates.items()},
+            "scalars": {k: (f, v) for k, (f, v) in self.scalars.items()},
+            "kinds": dict(self.kinds),
+            "frames": int(self.frames),
+        }
+
+
+def interaction_spans(
+    events: Iterable[InteractionEvent],
+) -> Tuple[Tuple[str, str, str, int, int], ...]:
+    """One ``(relation, src, dst, onset, release)`` per bucket, in onset order.
+
+    One span per bucket, not one per group: a grasp that momentarily breaks
+    opens a second group, and two entries would read as two milestones. The
+    span runs from the earliest onset to the latest release, so ``release`` is
+    when the robot finally let go rather than when it first slipped.
+    """
+    span: Dict[BucketKey, Tuple[int, int]] = {}
+    for event in events:
+        on = int(event.frame)
+        off = int(event.payload.get("last_frame", on))
+        prev = span.get(event.bucket)
+        span[event.bucket] = (
+            (on, off) if prev is None
+            else (min(prev[0], on), max(prev[1], off))
+        )
+    return tuple(
+        (b.relation, b.src, b.dst, on, off)
+        for b, (on, off) in sorted(
+            span.items(), key=lambda kv: (kv[1][0], kv[1][1], kv[0]))
+    )
+
+
 class EpisodeEvidence:
     """One episode's events behind a success gate.
 
@@ -58,12 +209,18 @@ class EpisodeEvidence:
     contains them succeeded.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, env_idx: int = 0) -> None:
         self.events: List[InteractionEvent] = []
+        self.info = InfoTrace(env_idx)
+        self.frames: int = 0
         self.success_once: bool = False
 
     def observe_success(self, flag: Any) -> None:
         self.success_once = self.success_once or bool(flag)
+
+    def observe_info(self, info: Any, frame: int) -> None:
+        self.info.observe(info, frame)
+        self.frames = max(self.frames, int(frame) + 1)
 
     def add(self, event: InteractionEvent) -> None:
         self.events.append(event)
@@ -73,6 +230,8 @@ class EpisodeEvidence:
 
     def reset(self) -> None:
         self.events = []
+        self.info.reset()
+        self.frames = 0
         self.success_once = False
 
     def commit(self, sink: "BucketStore") -> int:
@@ -85,6 +244,12 @@ class EpisodeEvidence:
         for event in self.events:
             if sink.add(event):
                 n += 1
+        spans, series, kinds = self.info.reduce()
+        sink.add_episode(EpisodeRecord(
+            interactions=interaction_spans(self.events),
+            predicates=spans, scalars=series, kinds=kinds,
+            frames=self.frames,
+        ))
         sink.end_episode({e.bucket for e in self.events})
         self.reset()
         return n
@@ -113,6 +278,10 @@ class BucketStore:
         # Episodes a late bucket appeared in, so the report can say whether it
         # would have survived the presence gate had discovery seen it.
         self.late_presence: Dict[BucketKey, int] = defaultdict(int)
+        # One entry per successful episode: which interactions happened, and
+        # when. Buckets say what a task involves; this says in what order, and
+        # that is the only thing a phase schedule can be mined from.
+        self.traces: List["EpisodeRecord"] = []
 
     def add(self, event: InteractionEvent) -> bool:
         bucket = event.bucket
@@ -126,6 +295,15 @@ class BucketStore:
             return False
         self.samples[bucket].append(event)
         return True
+
+    def add_episode(self, record: "EpisodeRecord") -> None:
+        """Store one successful episode's evidence.
+
+        Independent of ``add``: a bucket at its sample cap stops storing
+        payloads but its ordering still counts, and a bucket frozen out as
+        incidental is still evidence about this episode's sequence.
+        """
+        self.traces.append(record)
 
     def end_episode(self, buckets: Optional[Iterable[BucketKey]] = None) -> None:
         self.episodes += 1

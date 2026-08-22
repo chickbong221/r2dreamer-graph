@@ -47,16 +47,21 @@ graph:
   # Names the mined asset tree, not an MS-HAB task plan.
   mshab_task: ${env.task}
   entity_vocab: ${model.graph.entity_vocab}
-  edge_contract: canonical_v2
   use_target_flag: false
+  # Object-to-object planar distance and height offset. A carry phase is
+  # "cube A approaches cube B"; without these the only distance in the graph
+  # is from the gripper, which stops tracking the object once it is released.
+  object_object_spatial: true
   thresholds_path: ''
   whitelist_dir: ''
+  # keep_tabletop: every retained node is relational. These scenes are small
+  # and fully covered, and an object hidden inside a hole is the state the task
+  # is about -- its position comes from the simulator, not from the pixels.
+  visibility_policy: keep_tabletop
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
-  k_persist: -1
   app_dim: ${model.graph.app_dim}
   dino_model: dinov2_vits14_reg
   dino_res: 112
   dino_weights: ''
-  staleness_enabled: false
   bypass_teemo: false

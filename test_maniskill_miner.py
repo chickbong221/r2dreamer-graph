@@ -83,10 +83,14 @@ class MinerTestBase(unittest.TestCase):
         d = self.shards / env_id
         d.mkdir(parents=True, exist_ok=True)
         payload = {
-            "_schema_version": 1, "env_id": env_id, "target": 300,
-            "episodes": 300, "samples": samples,
+            "_schema_version": kw.get("schema", 3), "env_id": env_id,
+            "target": 300,
+            "episodes": kw.get("episodes", 300), "samples": samples,
             "seen_counts": {k: len(v) for k, v in samples.items()},
             "presence": {k: 1.0 for k in samples},
+            "episode_presence": kw.get(
+                "episode_presence", {k: kw.get("episodes", 300) for k in samples}),
+            "traces": kw.get("traces", []),
             "excluded": kw.get("excluded", {}),
             "symmetry": kw.get("symmetry", {}),
             "capability": kw.get("capability"),
@@ -280,10 +284,12 @@ class FinalPresenceTest(MinerTestBase):
             f"grasp / {EE_KEY} / actor:tool": _grasp(),
             drifter: _support(),
         })
-        # Freeze kept it; the full run says 16%.
+        # Freeze kept it; the full run says 16%. Expressed as a count, which
+        # is what the shard carries -- the rate is recomputed on merge.
         path = next((self.shards / "PullCubeTool-v1").glob("*.pkl"))
         with open(path, "rb") as f:
             shard = pickle.load(f)
+        shard["episode_presence"][drifter] = 48      # of 300
         shard["presence"][drifter] = 0.16
         with open(path, "wb") as f:
             pickle.dump(shard, f)
@@ -428,3 +434,67 @@ class QuantileBinTest(MinerTestBase):
         edges = self._mine_with({})
         self.assertTrue(edges["planar-distance"])
         self.assertTrue(edges["height-offset"])
+
+
+class ShardMergeTest(MinerTestBase):
+    """Cross-shard merging. Bites the moment collection is sharded."""
+
+    def test_old_shards_are_rejected_not_silently_mined(self):
+        self.write_shard("PickCube-v1", {f"grasp / {EE_KEY} / actor:cube": _grasp()},
+                         schema=2)
+        with self.assertRaises(SystemExit) as cm:
+            miner.load_shards("PickCube-v1", self.shards)
+        self.assertIn("Re-collect", str(cm.exception))
+
+    def test_traces_stay_one_entry_per_episode(self):
+        a = [(("grasp", "ee", "actor:cube", 5, 20),)]
+        b = [(("contact", "ee", "actor:cube", 1, 4),
+              ("grasp", "ee", "actor:cube", 5, 20))]
+        key = f"grasp / {EE_KEY} / actor:cube"
+        self.write_shard("PickCube-v1", {key: _grasp()}, shard=0, traces=a)
+        self.write_shard("PickCube-v1", {key: _grasp()}, shard=1, traces=b)
+        merged = miner.load_shards("PickCube-v1", self.shards)
+        self.assertEqual(len(merged["traces"]), 2)
+        self.assertEqual(merged["traces"][1], b[0])
+
+    def test_presence_merges_by_count_not_last_shard(self):
+        """Two shards, present in one of them. The rate is 50%, not whatever
+        the last shard happened to write."""
+        key = f"grasp / {EE_KEY} / actor:cube"
+        rare = "support / actor:cube / actor:tool"
+        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: _support()},
+                         shard=0, episodes=100,
+                         episode_presence={key: 100, rare: 100})
+        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: _support()},
+                         shard=1, episodes=100,
+                         episode_presence={key: 100, rare: 0})
+        merged = miner.load_shards("PullCubeTool-v1", self.shards)
+        self.assertEqual(merged["episodes"], 200)
+        self.assertAlmostEqual(merged["presence"][rare], 0.5)
+        self.assertAlmostEqual(merged["presence"][key], 1.0)
+        # 50% clears a 20% gate and fails a 60% one. Last-shard-wins would
+        # have read 0% and dropped it from both.
+        self.assertIn(rare, miner.usable_buckets(merged, 300, 0.2))
+        self.assertNotIn(rare, miner.usable_buckets(merged, 300, 0.6))
+
+
+class EpisodeAlignmentTest(MinerTestBase):
+    def test_every_stream_keeps_its_episode_index(self):
+        """Interactions, predicates and scalars must stay on the same row --
+        a phase mined from episode k is checked against episode k's predicates.
+        """
+        key = f"grasp / {EE_KEY} / actor:cube"
+        ep0 = {"interactions": (("grasp", "ee", "actor:cube", 5, 20),),
+               "predicates": {"is_grasped": ((5, 20),)},
+               "scalars": {}, "kinds": {"is_grasped": "predicate"}, "frames": 30}
+        ep1 = {"interactions": (("grasp", "ee", "actor:cube", 8, 25),),
+               "predicates": {"is_grasped": ((9, 25),)},
+               "scalars": {}, "kinds": {"is_grasped": "predicate"}, "frames": 40}
+        self.write_shard("PickCube-v1", {key: _grasp()}, shard=0, traces=[ep0])
+        self.write_shard("PickCube-v1", {key: _grasp()}, shard=1, traces=[ep1])
+        merged = miner.load_shards("PickCube-v1", self.shards)
+        self.assertEqual(len(merged["traces"]), 2)
+        for rec in merged["traces"]:
+            on = rec["interactions"][0][3]
+            self.assertAlmostEqual(rec["predicates"]["is_grasped"][0][0], on,
+                                   delta=1)

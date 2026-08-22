@@ -76,5 +76,4 @@ whitelists:
 
 selection:
   n_max: 8                          # vertex capacity including the ee node
-  k_persist: -1                     # frames a node stays after last seen; -1 = whole episode, 0 = disabled
 

@@ -25,7 +25,7 @@ def make_config(args):
         reverse_edges=True,
         entity_vocab=14,
         n_rel=11,
-        n_abs=17,
+        n_abs=19,
         n_temp=6,
         act="SiLU",
         bbox_beta=0.1,

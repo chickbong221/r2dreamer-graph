@@ -42,6 +42,9 @@ _QUANTILE_RELATIONS = {
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
 AFFORDANCE_SCHEMA_VERSION = 3
+# Shards below this carry no interaction traces, no env predicate traces
+# and no raw presence counts.
+SHARD_SCHEMA_MIN = 3
 TASK_SUBTASK = "task"
 TASK_TARGET = "all"
 
@@ -76,12 +79,27 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         "samples": defaultdict(list), "presence": {}, "excluded": {},
         "symmetry": {}, "bin_stats": defaultdict(float), "capability": None,
         "bin_samples": defaultdict(list),
+        "episode_presence": defaultdict(int),
+        # One entry per successful episode, never flattened: the "present in
+        # every successful rollout" rule counts episodes, so concatenating
+        # them would destroy the denominator.
+        "traces": [],
         "complete": set(),
     }
     for path in paths:
         with open(path, "rb") as f:
             shard = pickle.load(f)
+        version = int(shard.get("_schema_version", 0))
+        if version < SHARD_SCHEMA_MIN:
+            raise SystemExit(
+                f"{path} is schema v{version}; v{SHARD_SCHEMA_MIN} or newer is "
+                "required (older shards carry no per-episode traces and no "
+                "raw presence counts). Re-collect this task."
+            )
         merged["episodes"] += int(shard.get("episodes", 0))
+        merged["traces"].extend(shard.get("traces") or [])
+        for key, n in (shard.get("episode_presence") or {}).items():
+            merged["episode_presence"][key] += int(n)
         merged["target"] = max(merged["target"], int(shard.get("target", 0)))
         merged["capability"] = merged["capability"] or shard.get("capability")
         merged["symmetry"].update(shard.get("symmetry") or {})
@@ -95,8 +113,17 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
                                            float(value))
         for bucket, samples in (shard.get("samples") or {}).items():
             merged["samples"][bucket].extend(samples)
+    # A rate is not mergeable -- the per-shard value would just be the last
+    # one written, measured over that shard's episodes while the denominator
+    # here counts all of them. Recompute from the summed counts. Excluded
+    # buckets keep their frozen-in rate: they stop accumulating presence, so a
+    # recomputed rate would decay toward zero and misreport why they went.
+    if merged["episodes"]:
+        for bucket, n in merged["episode_presence"].items():
+            if bucket not in merged["excluded"]:
+                merged["presence"][bucket] = n / merged["episodes"]
     print(f"[mine] {len(paths)} shard(s), {merged['episodes']} episodes, "
-          f"{len(merged['samples'])} buckets")
+          f"{len(merged['samples'])} buckets, {len(merged['traces'])} traces")
     return merged
 
 

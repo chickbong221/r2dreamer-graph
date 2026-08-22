@@ -23,11 +23,10 @@ ALL_TYPES = ["contact", "grasp", "support", "contain"]
 _SENTINEL = [object()]
 
 
-def _cfg(contract=rr.EDGE_CONTRACT_LEGACY):
+def _cfg():
     bins = {r: [0.1, 0.2, 0.3, 0.4] for r in rr.SPATIAL_RELATIONS}
     bins.update({r: [1 / 3, 2 / 3] for r in rr.AFFORDANCE_RELATIONS})
     return {
-        "edge_contract": contract,
         "bin_edges": bins,
         "contact": {"eps_force": 0.05},
         "grasp": {"max_angle": 30, "tcp_approach_axis_local": [0.0, 0.0, 1.0]},
@@ -39,6 +38,8 @@ def _cfg(contract=rr.EDGE_CONTRACT_LEGACY):
                         "object_object_support_compatibility": True,
                         "object_object_contain_compatibility": True,
                         "object_object_compat_max_distance": 2.0},
+        # ManiSkill's setting: the object-to-object approach ladders exist.
+        "object_object_spatial": True,
         "affordance_set": object(),
         "compat_norm": {"pos": 0.1, "orient": 1.57, "width": 0.04, "xy": 0.05,
                         "vertical": 0.03, "radial": 0.02, "axial": 0.03},
@@ -82,7 +83,7 @@ def _role(ids):
 
 def _stubs(roles=None):
     """Stub affordance lookups. ``roles`` splits container/containee so no pair
-    claims both orientations, which canonical_v2 refuses."""
+    claims both orientations, which the contract refuses."""
     symmetric = ("lookup_components", "lookup_contact_components")
     directed = ("lookup_support_components", "lookup_contain_components",
                 "lookup_bottom_components", "lookup_key_components")
@@ -106,10 +107,9 @@ def _stubs(roles=None):
     return p
 
 
-def _emit(n_objects, contract=rr.EDGE_CONTRACT_LEGACY, roles=None,
-          nodes=None):
+def _emit(n_objects, roles=None, nodes=None):
     graph = _graph(n_objects) if nodes is None else nodes
-    state, cfg = _state(graph), _cfg(contract)
+    state, cfg = _state(graph), _cfg()
     stubs = _stubs(roles)
     for s in stubs:
         s.start()
@@ -131,77 +131,48 @@ def _by_relation(edges, ee=False):
     return out
 
 
-class LegacyEmissionTest(unittest.TestCase):
-    def test_support_and_contain_emit_both_orderings(self):
-        counts = _by_relation(_emit(2))          # one object-object pair
-        self.assertEqual(counts["contact"], 1)
-        self.assertEqual(counts["support"], 2)
-        self.assertEqual(counts["contain"], 2)
-        self.assertEqual(counts["support-compatibility"], 2)
-        self.assertEqual(counts["contain-compatibility"], 2)
-        self.assertEqual(counts["contact-compatibility"], 1)
-
-    def test_ee_object_pair_emits_six(self):
-        counts = _by_relation(_emit(1), ee=True)
-        self.assertEqual(sum(counts.values()), 6)
-
-    def test_full_graph_exceeds_configured_e_max(self):
-        n_max = 8
-        edges = _emit(n_max - 1)
-        with open("configs/model/_base_.yaml") as f:
-            e_max = yaml.safe_load(f)["graph"]["e_max"]
-        self.assertEqual(e_max, 3 * n_max * (n_max - 1))
-        # 7 ee pairs x 6, plus 21 object pairs x 10.
-        self.assertEqual(len(edges), 42 + 210)
-        self.assertGreater(len(edges), e_max)
-
-    def test_canonical_v2_target_would_fit(self):
-        """One edge per unordered pair for support/contain lands exactly on 168."""
-        edges = _emit(8 - 1)
-        pair = _by_relation(edges)
-        halved = sum(
-            c // 2 if r in ("support", "contain",
-                            "support-compatibility", "contain-compatibility")
-            else c
-            for r, c in pair.items())
-        ee = sum(_by_relation(edges, ee=True).values())
-        self.assertEqual(halved + ee, 3 * 8 * (8 - 1))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-CANON = rr.EDGE_CONTRACT_CANONICAL
 _ROLES = ({"actor:o0"}, {"actor:o1"})   # o0 supports/contains o1
 
 
-class CanonicalV2EmissionTest(unittest.TestCase):
-    def test_object_pair_emits_six(self):
-        counts = _by_relation(_emit(2, CANON, _ROLES))
+class EmissionTest(unittest.TestCase):
+    def test_object_pair_emits_eight(self):
+        """Six physical/affordance facts plus the two spatial ladders a
+        schedule needs for object-to-object approach."""
+        counts = _by_relation(_emit(2, _ROLES))
         self.assertEqual(counts, {
             "contact": 1, "support": 1, "contain": 1,
             "contact-compatibility": 1, "support-compatibility": 1,
             "contain-compatibility": 1,
+            "planar-distance": 1, "height-offset": 1,
         })
 
     def test_ee_pair_unchanged(self):
         legacy = _by_relation(_emit(1), ee=True)
-        canon = _by_relation(_emit(1, CANON, _ROLES), ee=True)
+        canon = _by_relation(_emit(1, _ROLES), ee=True)
         self.assertEqual(legacy, canon)
 
-    def test_ceiling_is_exactly_e_max(self):
+    def test_saturated_graph_needs_more_than_configured_e_max(self):
+        """n_max=8 is one end effector plus seven objects, so a saturated
+        canonical graph is 21*8 + 7*6 = 210. e_max stays at 168 because the
+        scenes actually run hold far fewer -- and overflow now raises."""
         with open("configs/model/_base_.yaml") as f:
             e_max = yaml.safe_load(f)["graph"]["e_max"]
-        n_max = 8
-        per_ee = sum(_by_relation(_emit(1, CANON, _ROLES), ee=True).values())
-        per_pair = sum(_by_relation(_emit(2, CANON, _ROLES)).values())
-        total = (n_max - 1) * per_ee + 21 * per_pair
-        self.assertEqual(total, e_max)
+        per_ee = sum(_by_relation(_emit(1, _ROLES), ee=True).values())
+        per_pair = sum(_by_relation(_emit(2, _ROLES)).values())
+        total = 7 * per_ee + 21 * per_pair
+        self.assertEqual(total, 210)
+        self.assertGreater(total, e_max)
+
+    def test_three_object_tabletop_scene_fits(self):
+        """Table plus two task objects, which is every selected task."""
+        with open("configs/model/_base_.yaml") as f:
+            e_max = yaml.safe_load(f)["graph"]["e_max"]
+        edges = _emit(3, _ROLES)
+        self.assertLessEqual(len(edges), e_max)
 
     def test_direction_does_not_flip_when_predicate_is_false(self):
         """The bug one-direction emission could have introduced."""
-        edges = _emit(2, CANON, _ROLES)
+        edges = _emit(2, _ROLES)
         support = [e for e in edges if e.relation == "support"]
         self.assertEqual(support[0].label, rr.NOT_HOLDS)
         self.assertEqual((support[0].src, support[0].dst),
@@ -212,7 +183,7 @@ class CanonicalV2EmissionTest(unittest.TestCase):
         a, b = graph.nodes[1], graph.nodes[2]
         # Force b under a: get_pairwise_contact_forces is "force on a due to b",
         # so fz < 0 makes a the supporter.
-        state, cfg = _state(graph), _cfg(CANON)
+        state, cfg = _state(graph), _cfg()
         state.pairwise_force_vector = lambda x, y: np.array([0.0, 0.0, -1.0])
         stubs = _stubs(_ROLES)
         for s in stubs:
@@ -230,12 +201,12 @@ class CanonicalV2EmissionTest(unittest.TestCase):
 
     def test_ambiguous_role_raises(self):
         with self.assertRaises(ValueError):
-            _emit(2, CANON, roles=None)      # both orientations resolve
+            _emit(2, roles=None)      # both orientations resolve
 
 
 class PairOrderStabilityTest(unittest.TestCase):
     def _orientations(self, graph):
-        pairs = rr._object_pairs(graph, CANON)
+        pairs = rr._object_pairs(graph)
         return [(a.node_id, b.node_id) for a, b in pairs]
 
     def test_node_order_does_not_change_orientation(self):
@@ -244,14 +215,6 @@ class PairOrderStabilityTest(unittest.TestCase):
         g2.nodes = [g2.nodes[0]] + list(reversed(g2.nodes[1:]))
         self.assertEqual(self._orientations(g1), self._orientations(g2))
 
-    def test_legacy_follows_node_order(self):
-        """Documents why canonical ordering is a real change, not a no-op."""
-        g1, g2 = _graph(4), _graph(4)
-        g2.nodes = [g2.nodes[0]] + list(reversed(g2.nodes[1:]))
-        legacy = lambda g: [(a.node_id, b.node_id)
-                            for a, b in rr._object_pairs(g)]
-        self.assertNotEqual(legacy(g1), legacy(g2))
-
     def test_index_reuse_does_not_flip_a_pair(self):
         g = _graph(3)
         for i, n in enumerate(g.nodes[1:]):
@@ -259,31 +222,56 @@ class PairOrderStabilityTest(unittest.TestCase):
         self.assertEqual(self._orientations(g), self._orientations(_graph(3)))
 
 
-class ContractVocabTest(unittest.TestCase):
-    def test_absolute_vocab_widths(self):
+class AbsoluteVocabTest(unittest.TestCase):
+    def test_vocab_width_matches_the_configured_n_abs(self):
+        import yaml
         from scenegraph.adapters.graph_vocab import build_absolute_vocab
-        self.assertEqual(len(build_absolute_vocab(rr.EDGE_CONTRACT_LEGACY)), 17)
-        self.assertEqual(len(build_absolute_vocab(CANON)), 19)
+        with open("configs/model/_base_.yaml") as f:
+            n_abs = yaml.safe_load(f)["graph"]["n_abs"]
+        self.assertEqual(len(build_absolute_vocab()), 19)
+        self.assertEqual(n_abs, 19)
 
-    def test_directional_labels_only_in_canonical(self):
+    def test_progress_ids_track_the_vocabulary(self):
+        """The whole point of deriving them. Adding the two directional labels
+        shifted every id from very-near upward by two, and a hardcoded table
+        would have gone on scoring the wrong labels -- ProgressScorer only
+        checks 0 < label < n_abs, so nothing would have raised."""
+        from scenegraph.adapters.graph_vocab import (
+            build_absolute_vocab, build_relation_vocab,
+        )
+        src = open("progress.py", encoding="utf-8").read()
+        ns = {"build_absolute_vocab": build_absolute_vocab,
+              "build_relation_vocab": build_relation_vocab}
+        exec(src[src.index("_REL = build_relation_vocab()"):
+                 src.index("@dataclass(frozen=True)")], ns)
+        absolute = build_absolute_vocab()
+        for label in absolute.token_to_id:
+            const = "ABS_" + label.upper().replace("-", "_")
+            self.assertEqual(ns[const], absolute.encode(label), msg=const)
+        relation = build_relation_vocab()
+        for name, const in (("contact", "REL_CONTACT"),
+                            ("planar-distance", "REL_PLANAR_DISTANCE"),
+                            ("contain-compatibility", "REL_CONTAIN_COMPAT")):
+            self.assertEqual(ns[const], relation.encode(name), msg=const)
+        self.assertEqual(ns["N_ABS"], len(absolute))
+
+    def test_directional_labels_are_in_the_vocabulary(self):
         from scenegraph.adapters.graph_vocab import build_absolute_vocab
-        legacy = build_absolute_vocab(rr.EDGE_CONTRACT_LEGACY).token_to_id
-        canon = build_absolute_vocab(CANON).token_to_id
-        self.assertNotIn(rr.SRC_HOLDS, legacy)
-        self.assertIn(rr.SRC_HOLDS, canon)
-        self.assertIn(rr.DST_HOLDS, canon)
+        tokens = build_absolute_vocab().token_to_id
+        self.assertIn(rr.SRC_HOLDS, tokens)
+        self.assertIn(rr.DST_HOLDS, tokens)
 
-    def test_support_labels_are_non_contiguous_in_canonical(self):
+    def test_support_labels_are_non_contiguous(self):
         """Why the hardcoded slice mask in graph.py could not be kept."""
         from scenegraph.adapters.graph_vocab import build_absolute_vocab
-        vocab = build_absolute_vocab(CANON)
+        vocab = build_absolute_vocab()
         contact = {vocab.encode(l)
-                   for l in rr.abs_labels_for(CANON)["contact"]}
+                   for l in rr.abs_labels_for()["contact"]}
         support = {vocab.encode(l)
-                   for l in rr.abs_labels_for(CANON)["support"]}
+                   for l in rr.abs_labels_for()["support"]}
         self.assertEqual(contact, {1, 2})
         self.assertEqual(support, {1, 3, 4})
 
-    def test_unknown_contract_raises(self):
-        with self.assertRaises(ValueError):
-            rr.abs_labels_for("v3")
+
+if __name__ == "__main__":
+    unittest.main()

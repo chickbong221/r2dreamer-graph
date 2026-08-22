@@ -47,9 +47,9 @@ class PrivilegedState:
     ee_links: List[Any] = field(default_factory=list)   # Link objs to merge into ee
     tcp_pose_world: Optional[np.ndarray] = None          # [7] xyz + wxyz
 
-    # Gripper width in qpos-sum convention: qpos[-2] + qpos[-1] for Fetch.
-    # Matches the miner (tools/build_affordances.py). None for non-Fetch agents
-    # or when qpos is unavailable.
+    # Gripper width in qpos-sum convention: qpos[-2] + qpos[-1]. Matches the
+    # miner (tools/build_affordances.py). Correct for Fetch and Panda alike;
+    # None only when the agent has no robot or qpos is unavailable.
     gripper_width: Optional[float] = None
 
     # Segmentation id -> Actor/Link (ManiSkill primitive).
@@ -470,8 +470,9 @@ def _tcp_pose_world_cached(agent, env_idx: int) -> np.ndarray:
 def compute_gripper_width(agent, env_idx: int) -> Optional[float]:
     """Width = qpos[-2] + qpos[-1] (matches MS-HAB miner / collect_data.py).
 
-    Fetch qpos layout is 15-D: [base 3 | head 2 | torso 1 | arm 7 | gripper 2],
-    so qpos[-2:] are the two finger prismatic joints. We deliberately do NOT
+    Fetch qpos is 15-D ([base 3 | head 2 | torso 1 | arm 7 | gripper 2]) and
+    Panda 9-D ([arm 7 | gripper 2]); both end in the two finger prismatic
+    joints, so qpos[-2:] is the right slice for either. We deliberately do NOT
     use ``||finger1.pose.p - finger2.pose.p||`` here -- the URDF joint origins
     add a constant +0.03085 m to that distance, which would systematically bias
     every ``gripper-width-alignment`` reading relative to the mined preferred

@@ -118,10 +118,11 @@ by querying `g` with a narrow signature of that node's current box, which makes
 `node`, `nodetgt`, `relabs` and `reltemp` a measure of what `g` retained. A box
 is a cheap content address: it works the frame a node first appears and keeps
 episode-random identity codes out of the global dynamics. It is a *content*
-key, not an identity one, so two nodes with identical boxes are not separable --
-under `staleness_enabled: false` only currently segmented objects are emitted,
-so the end effector is the one node that can have an empty box, and it is the
-only node of its type. Turning staleness on would break that argument.
+key, not an identity one, so two nodes with identical boxes are not separable.
+That mattered little when only currently segmented objects were emitted: the end
+effector was the one node that could have an empty box. Under unconditional
+retention every node without pixels has an all-zero box, so more than one node
+can share a query. See "Retention and the decoder query" below.
 
 `loss/node` here averages entity cross entropy and box SmoothL1, reported
 separately as `node_ent_loss` and `node_bbox_loss`. It is **not** comparable
@@ -183,26 +184,38 @@ pass covers all `B x H` states at once.
 
 ### The retained target
 
-Both sources depend on the target existing to have relations with. With
-`staleness_enabled: false` every other vertex is emitted only while a camera
-sees it, but the subtask target is retained: the graph builder keeps one
-snapshot, replays it as an invisible vertex on frames no camera saw it, and
-clears it only on episode reset. While retained it keeps row 1 and its entity
-id, its bounding boxes go to zero (the only per-camera visibility signal the
-packed observation carries), and all six end-effector relations keep being
-recomputed -- the four geometric ones from the current end-effector pose
+Both sources depend on the target existing to have relations with. Retention is
+now unconditional -- every whitelisted object a camera has seen stays a vertex
+until reset -- so the target is no longer a special case for *existence*. It
+remains one for *eligibility*: under `visibility_policy: projected_camera` an
+ordinary node outside both frustums emits no relations, while the protected
+target keeps its end-effector facts and pairs with any in-frame object. While
+retained it keeps row 1 and its entity id, its bounding boxes go to zero (the
+only per-camera visibility signal the packed observation carries), its centroid
+stays live, and all six end-effector relations keep being recomputed -- the four geometric ones from the current end-effector pose
 against its centroid, `contact` and `grasp` from live simulator queries through
 `state.active_obj`. So an occluded target's facts still change as the robot
 moves, and supervision is continuous after first observation rather than
 punched full of holes.
 
-Its pose freezes only while it is *also* ungrasped. A grasped target rides with
-the gripper, and a frozen centroid would report the object still lying where it
-was picked up while `grasp` reads `holds` on the same frame -- the two would
-contradict each other and the ladder reads both.
+Its pose is re-read from the simulator every frame, retained or not. A grasped
+object rides with the gripper, and a frozen centroid would report it still lying
+where it was picked up while `grasp` reads `holds` on the same frame -- the two
+would contradict each other and the ladder reads both. The old snapshot froze
+the pose while the target was ungrasped *and* invisible; nothing freezes now.
+
+### Retention and the decoder query
+
+The decoder addresses a node by its geometry, so under retention that signature
+has to include the centroid. Every node without pixels has an all-zero box and
+all-zero per-camera visibility bits; a box-only query would be identical for all
+of them, and the decoder would be asked for a different entity id and a different
+relation set for each from one input. `SimpleGraphDecoder` therefore queries on
+`bbox_feature` concatenated with `centroid_feature`, on the same fixed bounds the
+encoder uses.
 
 `graph_node_centroid` `[N, 3]` carries the world-frame position that survives
-the boxes going dark, normalised in the encoder on fixed bounds
+the boxes going dark, normalised on fixed bounds
 (`graph.centroid_origin`, `graph.centroid_scale`) rather than batch statistics,
 so the same object in the same place encodes identically in every episode.
 

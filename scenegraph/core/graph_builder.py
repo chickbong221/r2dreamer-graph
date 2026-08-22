@@ -1,7 +1,12 @@
 """Per-frame vertex maintenance and fact orchestration.
 
-Pipeline: build_nodes -> apply_whitelist -> merge_persistent
--> registry.assign -> absolute facts -> retained facts -> temporal labels.
+Pipeline: build_nodes -> apply_whitelist -> merge_retained -> live pose
+refresh -> visibility policy -> registry.assign -> absolute facts -> temporal
+labels.
+
+Retention is unconditional: a whitelisted object seen once stays a vertex until
+episode reset. Capacity is therefore a configuration error, not a runtime
+decision, and overflow raises rather than evicting.
 """
 
 from __future__ import annotations
@@ -20,18 +25,18 @@ from .temporal_buffer import TemporalBuffer
 from .mask_extractor import MaskAccumulator
 from .selector import EntityRegistry, NodeSelector
 from .whitelist import entity_match_key, load_whitelist, resolve_whitelist_path
+from ..adapters.camera_projection import CameraCoverage
 from ..adapters.privileged_state import (
     entity_pose_world_array,
     get_privileged_state,
 )
 
-# A node that left the view keeps only its most recently observed
-# object--object physical state. Spatial and affordance facts need current
-# perceptual evidence and are omitted instead.
-_STALE_REPLAY_RELATIONS = frozenset({"contact", "support", "contain"})
-
 # Packed-UID reservations. Zero is padding so an unfilled slot decodes as
 # "no node"; one is the end effector, whose identity never varies.
+VISIBILITY_PROJECTED = "projected_camera"
+VISIBILITY_KEEP = "keep_tabletop"
+VISIBILITY_POLICIES = frozenset({VISIBILITY_PROJECTED, VISIBILITY_KEEP})
+
 UID_PAD = 0
 UID_EE = 1
 _UID_FIRST_OBJECT = 2
@@ -113,7 +118,7 @@ class GraphBuilder:
         env_id: str = "env",
         camera: Optional[str] = None,
         camera_order: Optional[List[str]] = None,
-        staleness_enabled: bool = False,
+        visibility_policy: str = VISIBILITY_KEEP,
         uid_vocab: int = 256,
         appearance_enabled: bool = True,
         bbox_enabled: bool = True,
@@ -126,7 +131,12 @@ class GraphBuilder:
         self.env_id = env_id
         self.camera = camera
         self.camera_order = list(camera_order) if camera_order else None
-        self.staleness_enabled = bool(staleness_enabled)
+        if visibility_policy not in VISIBILITY_POLICIES:
+            raise ValueError(
+                f"unknown visibility_policy {visibility_policy!r}; "
+                f"expected one of {sorted(VISIBILITY_POLICIES)}"
+            )
+        self.visibility_policy = visibility_policy
         # Two switches, not one. The pooled relation contract wants boxes and
         # no patch coverage; appearance implies both.
         self.appearance_enabled = bool(appearance_enabled)
@@ -136,8 +146,7 @@ class GraphBuilder:
         # packs a UID there.
         self.uids_enabled = bool(uids_enabled)
         # False: no subtask target exists, so no whitelist is
-        # bound per target, no row is reserved and nothing is
-        # retained through occlusion.
+        # bound per target and no row is reserved.
         self.use_target_flag = bool(use_target_flag)
         self.uids = EpisodeUIDs(uid_vocab, seed=1000 + int(env_idx))
 
@@ -145,6 +154,16 @@ class GraphBuilder:
         self.selector = NodeSelector(cfg)
         self.registry = EntityRegistry(n_max=int(cfg["selection"]["n_max"]))
         self.cfg.setdefault("_affordance_selection_cache", {})
+        # node_id -> simulator entity. A retained node has no segmentation
+        # ids to look one up with, and physics queries still need it.
+        # Shared with relation_rules through cfg, which is per-env.
+        self._entities: Dict[str, Any] = self.cfg.setdefault(
+            "_entity_cache", {})
+        self._coverage = (
+            CameraCoverage(env, self.camera_order)
+            if self.visibility_policy == VISIBILITY_PROJECTED
+            else None
+        )
 
         self._whitelist_dir: Optional[str] = cfg.get("whitelist_dir")
         self._task_group: str = str(cfg.get("task_group") or "")
@@ -152,17 +171,10 @@ class GraphBuilder:
         self._bin_edges_subtask: Optional[str] = None
 
         self._last_seen: Dict[str, int] = {}
-        self._first_unseen: Dict[str, int] = {}
-        # Last observed fact per (src,dst,relation) -- replayed while an
-        # endpoint is out of view.
-        self._edge_history: Dict[Tuple[str, str, str], Edge] = {}
         # entity -> whitelist match key, identity-guarded (ids recycle).
         self._match_key_cache: Dict[int, Tuple[Any, Optional[str]]] = {}
-        # The one node that outlives its own visibility: the active subtask
-        # target. Written on every frame a camera sees it, replayed on every
-        # frame none does, cleared only by ``reset_episode``. No other node
-        # gets this -- general staleness stays off.
-        self._target_snapshot: Optional[Node] = None
+        # Last frame's relation-eligible vertex count, for logging only.
+        self.last_in_frame: int = 0
 
     def _uid_for(self, node: Node) -> int:
         return self.uids.uid_for(node.node_id, is_ee=node.node_type == "ee")
@@ -172,12 +184,13 @@ class GraphBuilder:
         self.registry.reset_episode()
         self.temporal = TemporalBuffer(K=self.cfg["temporal"]["K"])
         self._last_seen.clear()
-        self._first_unseen.clear()
-        self._edge_history.clear()
         self._match_key_cache.clear()
+        self._entities.clear()
+        if self._coverage is not None:
+            # Reconfiguration destroys the actors the AABB cache describes.
+            self._coverage.invalidate()
         self.cfg.setdefault("_affordance_selection_cache", {}).clear()
         self._whitelist_key = None
-        self._target_snapshot = None
         self.uids.reset()
 
     def _bind_global_bin_edges(self, subtask: str) -> None:
@@ -329,81 +342,95 @@ class GraphBuilder:
             self._match_key_cache[id(entity)] = (entity, key)
         return wl.contains(key)
 
-    def _refresh_target_snapshot(
-        self,
-        nodes: Dict[str, Node],
-        active_target_node_id: Optional[str],
-        state,
-    ) -> Dict[str, Node]:
-        """Keep exactly one node alive across occlusion: the subtask target.
+    def _check_capacity(self, nodes: Dict[str, Node], frame: int, state) -> None:
+        """Retention makes capacity a configuration fact, not a runtime choice.
 
-        A frame that sees the target overwrites the snapshot outright. A frame
-        that does not replays it as an invisible vertex so its row, its entity
-        id and its six end-effector relations survive the gap. Nothing else is
-        retained -- an ordinary object that leaves the view leaves the graph.
-
-        Two details matter for what the progress ladder reads off this node.
-
-        Boxes go to zero while invisible. They are the only per-camera
-        visibility signal the packed observation carries, so a retained box
-        would tell the encoder a camera can still see the target.
-
-        The pose freezes only while the target is *also* ungrasped. A grasped
-        target rides with the gripper: freezing its centroid would report the
-        object still lying where it was picked up while ``grasp`` reads
-        ``holds`` on the same frame, and the ladder reads both -- planar
-        distance and height offset would climb away from zero exactly as the
-        two physical rungs are won. So a grasped target keeps asking the
-        simulator where it is. Only an unobserved, ungrasped object is
-        genuinely stationary and safe to freeze.
+        Nothing is evicted any more, so an overflowing scene has no correct
+        behaviour left: dropping a vertex would silently delete facts the
+        progress target reads. Raise instead, naming what would have to grow.
         """
-        if active_target_node_id is None:
-            return nodes
-
-        live = nodes.get(active_target_node_id)
-        if live is not None and live.visible:
-            self._target_snapshot = replace(
-                live,
-                segmentation_ids=list(live.segmentation_ids),
-                bbox=None if live.bbox is None else np.array(live.bbox, copy=True),
-                patch_weights=None,
-                appearance=None,
-                attributes=dict(live.attributes),
-            )
-            return nodes
-        if live is not None or self._target_snapshot is None:
-            # Already present (the staleness path put it back), or never seen:
-            # there is nothing to replay and no slot to reserve.
-            return nodes
-
-        snapshot = self._target_snapshot
-        pose_world = snapshot.pose_world
-        if state.active_obj is not None and state.is_grasping(
-            state.active_obj, max_angle=self.cfg["grasp"]["max_angle"]
-        ):
-            moved = entity_pose_world_array(state.active_obj, self.env_idx)
-            if moved is not None:
-                pose_world = list(moved)
-                snapshot.pose_world = pose_world
-
-        nodes[active_target_node_id] = replace(
-            snapshot,
-            visible=False,
-            segmentation_ids=[],
-            pixel_area=0,
-            pose_world=pose_world,
-            bbox=None
-            if snapshot.bbox is None
-            else np.zeros_like(np.asarray(snapshot.bbox)),
-            patch_weights=None,
-            appearance=None,
-            # ``registry.assign`` fills this from the index it is already
-            # holding for the target; a stale one would survive an eviction.
-            index=None,
-            attributes=dict(snapshot.attributes),
-            source="retained-target",
+        objects = [n for n in nodes.values() if n.node_type == "object"]
+        capacity = self.registry.n_max - 1
+        if len(objects) <= capacity:
+            return
+        raise RuntimeError(
+            f"graph capacity exceeded: {len(objects)} retained objects need "
+            f"{len(objects) + 1} rows but n_max={self.registry.n_max} allows "
+            f"{capacity} objects plus the end effector. "
+            f"env={self.env_id} task={self._task_group or '?'} "
+            f"subtask={state.active_subtask_type or '?'} frame={frame}. "
+            f"nodes={sorted(n.node_id for n in objects)}. "
+            "Raise model.graph.n_max (and e_max with it) or tighten the "
+            "whitelist -- retention never evicts."
         )
-        return nodes
+
+    def _entity_for(self, node: Node, state):
+        """Cached simulator entity for one node, resolved on first sight.
+
+        Segmentation ids are the only way in, so the association has to be made
+        while the node is still visible and kept afterwards. Without it a
+        retained node's force queries read zero, which would be emitted as a
+        confident ``not-holds``.
+        """
+        ent = self._entities.get(node.node_id)
+        if ent is not None:
+            return ent
+        named = None
+        for seg_id in node.segmentation_ids:
+            candidate = state.seg_id_map.get(seg_id)
+            if candidate is None:
+                continue
+            if getattr(candidate, "name", None) == node.name:
+                self._entities[node.node_id] = candidate
+                return candidate
+            named = named or candidate
+        if named is not None:
+            self._entities[node.node_id] = named
+        return named
+
+    def _refresh_live_state(self, nodes: Dict[str, Node], state) -> None:
+        """Current simulator pose for every object node, seen or not.
+
+        A retained node's snapshot pose is from the frame it was last seen. For
+        anything the gripper is carrying that is simply wrong, so the pose is
+        re-read every frame and the snapshot is never trusted for geometry.
+        """
+        for node in nodes.values():
+            if node.node_type != "object":
+                continue
+            ent = self._entity_for(node, state)
+            if ent is None:
+                continue
+            pose = entity_pose_world_array(ent, self.env_idx)
+            if pose is None:
+                continue
+            node.pose_world = [float(v) for v in np.asarray(pose).reshape(-1)]
+
+    def _apply_visibility(self, nodes: Dict[str, Node], state) -> None:
+        """Write ``in_frame`` per the environment's policy.
+
+        ``keep_tabletop``: every retained node stays relational. Tabletop scenes
+        are small and fully covered, and an object hidden inside a hole is the
+        state the task is about.
+
+        ``projected_camera``: a node is relational when a camera covers the
+        space it occupies, whether or not any pixel survived the robot.
+        """
+        keep = self.visibility_policy == VISIBILITY_KEEP
+        for node in nodes.values():
+            if keep or node.node_type == "ee" or node.visible:
+                node.in_frame = True
+            else:
+                node.in_frame = self._projects(node, state)
+
+    def _projects(self, node: Node, state) -> bool:
+        if self._coverage is None:
+            return False
+        ent = self._entity_for(node, state)
+        if ent is None:
+            return False
+        return self._coverage.covers(
+            ent, self.env_idx, node.pose_world, self.env_idx)
 
     def step(
         self, obs: dict, frame: int,
@@ -461,62 +488,16 @@ class GraphBuilder:
                 except Exception:
                     active_target_node_id = None
         nodes = self.selector.apply_whitelist(nodes)
-        if self.staleness_enabled:
-            nodes = self.selector.merge_persistent(nodes, frame)
-        nodes = self._refresh_target_snapshot(nodes, active_target_node_id, state)
+        nodes = self.selector.merge_retained(nodes, frame)
+        self._refresh_live_state(nodes, state)
+        self._apply_visibility(nodes, state)
 
         for nid, n in nodes.items():
-            if n.node_type == "ee":
-                continue
-            if n.visible:
+            if n.node_type != "ee" and n.visible:
                 self._last_seen[nid] = frame
-                n.steps_since_seen = 0
-            elif nid not in self._last_seen:
-                first = self._first_unseen.setdefault(nid, frame)
-                n.steps_since_seen = max(1, frame - first + 1)
-            else:
-                n.steps_since_seen = frame - self._last_seen[nid]
 
-        # With history off the vertex set is exactly this frame, so slots held
-        # for absent objects are slots nothing can use -- and nothing else
-        # frees them, because commit/evict_expired are both skipped below.
-        # Capacity has to describe what the cameras can see, with one exception:
-        # the subtask target keeps its registry position once admitted. It is
-        # fixed for the episode, the world model has to keep predicting it while
-        # it is occluded, and releasing it would let the next arriving object
-        # take its slot.
-        if not self.staleness_enabled:
-            retain_ids = set(nodes.keys())
-            if (
-                active_target_node_id is not None
-                and self.registry.index_of(active_target_node_id) is not None
-            ):
-                retain_ids.add(active_target_node_id)
-            self.registry.retain(retain_ids)
-
-        # Protection is unconditional, not "while visible": an absent retained
-        # target must also be ineligible for category-balanced eviction. Before
-        # the target is ever admitted this is a no-op, so no slot sits reserved
-        # for it; when it first appears it force-admits by evicting a non-target.
-        nodes = self.registry.assign(nodes, protected_id=active_target_node_id)
-
-        # k_persist=-1 must not inject an overflow-evicted old instance again
-        # on the next frame and displace one of the newer residents.
-        overflow_evicted = list(self.registry.evicted_ids)
-        if overflow_evicted:
-            self.selector.evict(overflow_evicted)
-
-        expired = self.selector.evict_expired(frame)
-        purged = list(dict.fromkeys([*overflow_evicted, *expired]))
-        if purged:
-            self.temporal.purge(purged)
-        for nid in purged:
-            if nid in expired:
-                self.registry.release(nid)
-            self._last_seen.pop(nid, None)
-            self._first_unseen.pop(nid, None)
-            for key in [k for k in self._edge_history if nid in k[:2]]:
-                del self._edge_history[key]
+        self._check_capacity(nodes, frame, state)
+        nodes = self.registry.assign(nodes)
 
         ordered = sorted(nodes.values(), key=lambda n: n.index)
 
@@ -537,45 +518,13 @@ class GraphBuilder:
                 ),
                 n_objects=sum(1 for n in ordered if n.node_type == "object"),
                 n_visible=sum(1 for n in ordered if n.visible),
+                n_in_frame=sum(1 for n in ordered if n.in_frame),
             ),
         )
 
+        self.last_in_frame = graph.meta["n_in_frame"]
         build_absolute_edges(graph, state, self.cfg)
-        if self.staleness_enabled:
-            self._attach_stale_edges(graph, frame)
         self.temporal.annotate(graph, self.cfg)
-
-        if self.staleness_enabled:
-            self.selector.commit(nodes, frame)
+        self.selector.commit(nodes, frame)
         return graph, masks, cam, rgb
 
-    def _attach_stale_edges(self, graph: Graph, frame: int) -> None:
-        """Cache observed object--object physical facts and replay the last one
-        for pairs whose endpoint left the view. Both polarities are retained so
-        a later negative-to-positive transition stays legible."""
-        by_id = {n.node_id: n for n in graph.nodes}
-        visible_objects = {
-            nid for nid, n in by_id.items()
-            if n.node_type == "object" and n.visible
-        }
-
-        for edge in graph.edges:
-            if edge.stale or edge.relation not in _STALE_REPLAY_RELATIONS:
-                continue
-            if edge.src in visible_objects and edge.dst in visible_objects:
-                key = (edge.src, edge.dst, edge.relation)
-                self._edge_history[key] = replace(
-                    edge, stale=False, observed_frame=frame, age=0,
-                )
-
-        existing = {(e.src, e.dst, e.relation) for e in graph.edges}
-        for key, cached in self._edge_history.items():
-            if key in existing:
-                continue
-            if cached.src not in by_id or cached.dst not in by_id:
-                continue
-            if cached.src in visible_objects and cached.dst in visible_objects:
-                continue
-            observed = cached.observed_frame
-            age = max(1, frame - observed) if observed is not None else 1
-            graph.edges.append(replace(cached, stale=True, age=age))

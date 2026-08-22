@@ -37,7 +37,6 @@ from .graph_pack import (
     pack_graph,
 )
 from .graph_vocab import GraphVocab, build_graph_vocab
-from ..core.relation_rules import EDGE_CONTRACT_LEGACY
 from ..configs.loader import load_config as load_teemo_config
 from ..core.graph_builder import GraphBuilder
 
@@ -163,7 +162,7 @@ class GraphObsBuilder:
         dino: Optional[DinoFeatures] = None,
         app_dim: int = 384,
         bypass_teemo: bool = False,
-        staleness_enabled: bool = False,
+        visibility_policy: str = "keep_tabletop",
         simple: bool = False,
         state_mode: str = "pooled",
         uid_vocab: int = 256,
@@ -176,7 +175,7 @@ class GraphObsBuilder:
         self.n_max = int(n_max)
         self.e_max = int(e_max)
         self.bypass_teemo = bool(bypass_teemo)
-        self.staleness_enabled = bool(staleness_enabled)
+        self.visibility_policy = str(visibility_policy)
         self.simple = bool(simple)
         # ``simple`` alone no longer names a contract: pooled graph-simple emits
         # boxes and no identity code, slot graph-simple the reverse.
@@ -210,7 +209,7 @@ class GraphObsBuilder:
                 GraphBuilder(env, cfg_i, env_idx=i, env_id=f"env{i}",
                              camera=self.record_camera,
                              camera_order=self.cameras,
-                             staleness_enabled=self.staleness_enabled,
+                             visibility_policy=self.visibility_policy,
                              uid_vocab=self.uid_vocab,
                              appearance_enabled=self.appearance_enabled,
                              bbox_enabled=self.bbox_enabled,
@@ -282,18 +281,24 @@ class GraphObsBuilder:
         return {key: _DTYPES[key] for key in self.graph_keys}
 
     @property
-    def overflow_drops(self) -> np.ndarray:
-        """Per-env count of vertices the registry could not seat this episode."""
+    def in_frame_nodes(self) -> np.ndarray:
+        """Per-env count of nodes relations may be emitted for.
+
+        Under ``keep_tabletop`` this equals the vertex count. Under
+        ``projected_camera`` the gap between this and the vertex count is what
+        the projection is actually excluding, which is the only way to notice a
+        camera matrix that has gone wrong.
+        """
         return np.array(
-            [b.registry.overflow_drops for b in self.builders], np.float32)
+            [float(b.last_in_frame) for b in self.builders], np.float32)
 
     @property
     def episode_entities(self) -> np.ndarray:
         """Per-env distinct object instances presented this episode.
 
-        Reaching ``n_max - 1`` means the vertex budget is the binding
-        constraint; staying below it means overflow never had a chance to
-        fire, which is what makes a zero ``overflow_drops`` readable.
+        Under retention this equals live occupancy. Reaching ``n_max - 1`` is
+        the last reading before the run raises on capacity, so it is the number
+        to size ``n_max`` against.
         """
         return np.array(
             [b.registry.episode_entities for b in self.builders], np.float32)
@@ -348,13 +353,11 @@ class GraphObsBuilder:
                 if v is not None:
                     stats[key] = len(v)
         stats["match_key"] = sum(len(b._match_key_cache) for b in self.builders)
-        stats["edge_history"] = sum(len(b._edge_history) for b in self.builders)
         stats["registry"] = sum(len(b.registry) for b in self.builders)
         stats["appearance"] = sum(len(c) for c in self._appearance)
         stats["temporal_values"] = sum(
             len(b.temporal._values) for b in self.builders
         )
-        stats["overflow_drops"] = int(self.overflow_drops.sum())
         return stats
 
     @property
@@ -364,9 +367,7 @@ class GraphObsBuilder:
         A rise here that does not level off is a leak; ``cache_stats`` then
         names which container.
         """
-        stats = self.cache_stats()
-        stats.pop("overflow_drops", None)
-        return int(sum(stats.values()))
+        return int(sum(self.cache_stats().values()))
 
     def _zero_pack(self) -> Dict[str, np.ndarray]:
         return {
@@ -646,14 +647,14 @@ def build_graph_obs(
     )
     if "n_max" in graph_cfg:
         teemo_cfg["selection"]["n_max"] = int(graph_cfg["n_max"])
-    if "k_persist" in graph_cfg:
-        teemo_cfg["selection"]["k_persist"] = int(graph_cfg["k_persist"])
     if graph_cfg.get("whitelist_dir"):
         teemo_cfg["whitelist_dir"] = graph_cfg["whitelist_dir"]
-    contract = str(graph_cfg.get("edge_contract") or EDGE_CONTRACT_LEGACY)
-    teemo_cfg["edge_contract"] = contract
     use_target_flag = bool(graph_cfg.get("use_target_flag", True))
     teemo_cfg["use_target_flag"] = use_target_flag
+    # Named per environment, not inferred: MS-HAB and normal ManiSkill want
+    # different graphs here and neither should get the other's by default.
+    teemo_cfg["object_object_spatial"] = bool(
+        graph_cfg.get("object_object_spatial", False))
     if teemo_cfg.get("whitelist_dir") is None:
         raise ValueError(
             "graph: whitelist_dir is not set in the loaded config; set "
@@ -661,7 +662,7 @@ def build_graph_obs(
         )
 
     _verify_whitelist_coverage(env, teemo_cfg["whitelist_dir"], task_group)
-    vocab = build_graph_vocab(teemo_cfg["whitelist_dir"], contract)
+    vocab = build_graph_vocab(teemo_cfg["whitelist_dir"])
     if vocab.sizes["entity"] > np.iinfo(np.uint8).max + 1:
         raise ValueError(
             f"graph: entity vocabulary has {vocab.sizes['entity']} entries; "
@@ -725,7 +726,7 @@ def build_graph_obs(
         dino=dino,
         app_dim=app_dim,
         bypass_teemo=bool(graph_cfg.get("bypass_teemo", False)),
-        staleness_enabled=bool(graph_cfg.get("staleness_enabled", False)),
+        visibility_policy=str(graph_cfg["visibility_policy"]),
         simple=simple,
         state_mode=state_mode,
         uid_vocab=int(graph_cfg.get("uid_vocab", 256)),

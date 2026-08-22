@@ -86,7 +86,6 @@ def load_config(
 
     selection_cfg = dict(raw.get("selection") or {})
     selection_cfg.setdefault("n_max", 11)
-    selection_cfg.setdefault("k_persist", -1)
 
     aff_set = load_affordance_set(affordances_cfg["asset_path_abs"])
 

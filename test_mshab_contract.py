@@ -38,7 +38,7 @@ class _FakeGraph:
         "graph_edge_abs": np.uint8,
         "graph_edge_temp": np.uint8,
     }
-    overflow_drops = np.zeros(2, np.float32)
+    in_frame_nodes = np.zeros(2, np.float32)
     episode_entities = np.zeros(2, np.float32)
     fact_drops = np.zeros(2, np.float32)
     node_drops = np.zeros(2, np.float32)
@@ -47,19 +47,15 @@ class _FakeGraph:
 
 
 class MSHABContractTest(unittest.TestCase):
-    def test_graph_history_is_off_by_default(self):
-        self.assertIs(
-            inspect.signature(GraphBuilder).parameters[
-                "staleness_enabled"
-            ].default,
-            False,
-        )
-        self.assertIs(
-            inspect.signature(GraphObsBuilder).parameters[
-                "staleness_enabled"
-            ].default,
-            False,
-        )
+    def test_visibility_policy_has_no_silent_default(self):
+        """Both policies change which facts exist, so a run that forgets to
+        name one must not quietly get the other environment's behaviour."""
+        for cls in (GraphBuilder, GraphObsBuilder):
+            default = inspect.signature(cls).parameters[
+                "visibility_policy"].default
+            self.assertEqual(default, "keep_tabletop", msg=cls.__name__)
+        self.assertNotIn(
+            "staleness_enabled", inspect.signature(GraphBuilder).parameters)
 
     def _adapter(self):
         env = ManiSkillVecEnv.__new__(ManiSkillVecEnv)
@@ -94,7 +90,7 @@ class MSHABContractTest(unittest.TestCase):
         # Membership must go through .spaces: ``x in space`` asks whether x is
         # a valid *sample*, so a key name is always absent and the assertion
         # would pass whatever the space contains.
-        self.assertIn("log_graph_overflow_drops", space.spaces)
+        self.assertIn("log_graph_in_frame_nodes", space.spaces)
         self.assertIn("log_graph_episode_entities", space.spaces)
         transition = env._transition(
             self._obs(),
@@ -105,7 +101,7 @@ class MSHABContractTest(unittest.TestCase):
         )
         self.assertEqual(tuple(transition.batch_size), (2,))
         self.assertTrue(set(GRAPH_KEYS).issubset(transition.keys()))
-        self.assertIn("log_graph_overflow_drops", transition.keys())
+        self.assertIn("log_graph_in_frame_nodes", transition.keys())
         self.assertIn("log_graph_episode_entities", transition.keys())
         self.assertEqual(transition["graph_node_ent"].dtype, torch.uint8)
         self.assertEqual(transition["graph_node_app"].dtype, torch.float16)

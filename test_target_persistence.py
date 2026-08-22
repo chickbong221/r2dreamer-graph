@@ -1,12 +1,10 @@
-"""Target-only persistence: the retained vertex, its row, and its relations.
+"""Retention: which vertices survive, what they carry, and what they relate to.
 
-Everything here is synthetic -- no simulator, no torch. The builder's
-``step`` needs a live ManiSkill env, so the persistence rule is exercised
-through ``_refresh_target_snapshot`` directly, which is the whole of it.
-
-The property under test throughout: exactly one node outlives its own
-visibility, it keeps row 1, and all six of its end-effector facts keep being
-recomputed while it is hidden.
+Everything here is synthetic -- no simulator, no torch. Retention is now
+unconditional, so there is no snapshot rule left to exercise; what matters is
+that a node without pixels keeps its row and its live centroid, that ``in_frame``
+rather than ``visible`` decides eligibility, and that the protected target still
+pairs with whatever the cameras do cover.
 """
 
 import unittest
@@ -26,14 +24,18 @@ from scenegraph.adapters.graph_vocab import (
     build_relation_vocab,
     build_temporal_vocab,
 )
-from scenegraph.core.graph_builder import GraphBuilder
+from scenegraph.core.graph_builder import (
+    VISIBILITY_KEEP,
+    VISIBILITY_PROJECTED,
+    GraphBuilder,
+)
 from scenegraph.core.relation_rules import (
+    _eligible_objects,
     _ee_object_nodes,
     _object_pairs,
-    _resolve_entity,
-    _visible_objects,
     ee_object_spatial_edges,
     height_offset_xyz,
+    object_object_spatial_edges,
     planar_distance_xyz,
 )
 from scenegraph.core.schema import Graph, Node
@@ -45,13 +47,14 @@ E_MAX = 24
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
-def _node(node_id, name, *, visible=True, pose=(0.0, 0.0, 0.0), seg=(1,),
-          node_type="object", box=0.4):
+def _node(node_id, name, *, visible=True, in_frame=None, pose=(0.0, 0.0, 0.0),
+          seg=(1,), node_type="object", box=0.4):
     node = Node(
         node_id=node_id,
         node_type=node_type,
         name=name,
         visible=visible,
+        in_frame=visible if in_frame is None else in_frame,
         segmentation_ids=list(seg),
         pose_world=[*pose, 1.0, 0.0, 0.0, 0.0],
         attributes={"whitelist_key": name, "interaction_types": {"grasp", "contact"}},
@@ -59,6 +62,13 @@ def _node(node_id, name, *, visible=True, pose=(0.0, 0.0, 0.0), seg=(1,),
     node.bbox = np.full((2, 4), box, np.float32)
     node.bbox[:, 1] += 0.1
     node.bbox[:, 3] += 0.1
+    return node
+
+
+def _retained(node_id, name, **kw):
+    """A node re-injected by ``merge_retained``: no pixels, live pose."""
+    node = _node(node_id, name, visible=False, seg=(), **kw)
+    node.bbox = None
     return node
 
 
@@ -91,283 +101,331 @@ def _pack(graph, names, n_max=N_MAX):
     )
 
 
-class _FakeState:
-    """The two privileged queries the retained target still needs answered."""
-
-    def __init__(self, active_obj=None, grasped=False, pose=None):
-        self.active_obj = active_obj
-        self.active_obj_merged = None
-        self.grasped = bool(grasped)
-        self.pose = pose
-        self.seg_id_map = {}
-
-    def is_grasping(self, obj, max_angle=30):
-        return self.grasped and obj is self.active_obj
-
-
-def _builder():
-    """A GraphBuilder with only the fields the persistence rule touches."""
-    builder = object.__new__(GraphBuilder)
-    builder.env_idx = 0
-    builder.cfg = {"grasp": {"max_angle": 30}}
-    builder._target_snapshot = None
-    return builder
+# Labels come from the relation vocabulary; cfg supplies edges only.
+_BINS = {
+    "planar-distance": [0.1, 0.2, 0.6, 1.0],
+    "height-offset": [-0.4, -0.1, 0.1, 0.4],
+}
 
 
 # --------------------------------------------------------------------------- #
 # Row assignment
 # --------------------------------------------------------------------------- #
 class FixedRowTest(unittest.TestCase):
-    """Row 0 is the end effector and row 1 is the target, by meaning."""
+    """Row 0 is the end effector, row 1 the subtask target."""
 
     def test_ee_is_row_zero_even_when_it_arrives_last(self):
-        ee = _node("ee", "ee", node_type="ee")
-        obj = _node("obj-1", "apple")
-        rows, dropped = _row_assignment(_graph([obj, ee]), N_MAX, "obj-1", True)
-        self.assertEqual(dict((n.node_id, r) for r, n in rows)["ee"], 0)
-        self.assertEqual(dropped, 0)
+        graph = _graph([_node("obj-1", "apple"),
+                        _node("ee", "ee", node_type="ee", seg=())])
+        rows, _ = _row_assignment(graph, N_MAX, "obj-1", True)
+        self.assertEqual({r for r, n in rows if n.node_type == "ee"}, {0})
 
     def test_target_takes_row_one_whatever_its_registry_index(self):
-        # The registry admitted two distractors first, so the target's own
-        # index is 3. Packing must ignore that.
-        nodes = [
-            _node("ee", "ee", node_type="ee"),
-            _node("obj-a", "apple"),
-            _node("obj-b", "bowl"),
-            _node("obj-1", "can"),
-        ]
-        for i, node in enumerate(nodes):
-            node.index = i
-        packed = _pack(_graph(nodes), ["apple", "bowl", "can"])
-        self.assertEqual(int(packed["graph_node_target"][1]), 1)
-        self.assertEqual(int(packed["graph_node_target"].sum()), 1)
+        graph = _graph([_node("ee", "ee", node_type="ee", seg=()),
+                        _node("obj-0", "bowl"), _node("obj-1", "apple")])
+        rows, _ = _row_assignment(graph, N_MAX, "obj-1", True)
+        by_id = {n.node_id: r for r, n in rows}
+        self.assertEqual(by_id["obj-1"], 1)
+        self.assertEqual(by_id["obj-0"], 2)
 
     def test_row_one_is_padding_before_the_target_is_observed(self):
-        nodes = [_node("ee", "ee", node_type="ee"), _node("obj-a", "apple")]
-        packed = _pack(_graph(nodes), ["apple"])
-        self.assertEqual(int(packed["graph_node_ent"][1]), 0)
-        self.assertNotEqual(int(packed["graph_node_ent"][0]), 0)
-        self.assertNotEqual(int(packed["graph_node_ent"][2]), 0)
+        graph = _graph([_node("ee", "ee", node_type="ee", seg=()),
+                        _node("obj-0", "bowl")], target_id="obj-1")
+        rows, _ = _row_assignment(graph, N_MAX, "obj-1", True)
+        self.assertNotIn(1, {r for r, _ in rows})
 
-    def test_dynamic_rows_churn_without_touching_zero_or_one(self):
-        ee = _node("ee", "ee", node_type="ee")
-        target = _node("obj-1", "can")
-        first = _pack(_graph([ee, target, _node("obj-a", "apple")]),
-                      ["apple", "bowl", "can"])
-        # A different distractor arrives; the target did not move.
-        second = _pack(_graph([ee, target, _node("obj-b", "bowl")]),
-                       ["apple", "bowl", "can"])
-        for key in ("graph_node_ent", "graph_node_target"):
-            np.testing.assert_array_equal(first[key][:2], second[key][:2])
-        self.assertNotEqual(int(first["graph_node_ent"][2]),
-                            int(second["graph_node_ent"][2]))
+    def test_reserving_row_one_raises_rather_than_dropping(self):
+        """The old packer returned a drop count here. Retention leaves no
+        vertex that is safe to lose, so it is an error instead."""
+        nodes = [_node("ee", "ee", node_type="ee", seg=())]
+        nodes += [_node(f"obj-{i}", f"o{i}") for i in range(N_MAX)]
+        graph = _graph(nodes, target_id="missing")
+        with self.assertRaises(RuntimeError):
+            _row_assignment(graph, N_MAX, "missing", True)
 
-    def test_reserving_row_one_reports_its_overflow(self):
-        # n_max=4 leaves rows 2 and 3 for non-target objects. A third one is
-        # dropped, and the drop is counted rather than swallowed.
-        nodes = [_node("ee", "ee", node_type="ee")] + [
-            _node(f"obj-{i}", f"o{i}") for i in "abc"
-        ]
+    def test_more_vertices_than_rows_raises(self):
+        nodes = [_node(f"obj-{i}", f"o{i}") for i in range(N_MAX + 1)]
         graph = _graph(nodes, target_id=None)
-        _pack(graph, ["oa", "ob", "oc"], n_max=4)
-        self.assertEqual(graph.meta["n_nodes_dropped"], 1)
-        self.assertEqual(graph.meta["n_nodes_packed"], 3)
+        with self.assertRaises(RuntimeError) as cm:
+            _row_assignment(graph, N_MAX, None, False)
+        self.assertIn("Retention never evicts", str(cm.exception))
 
 
 # --------------------------------------------------------------------------- #
-# What the packed target looks like while it is hidden
+# What a node without pixels carries
 # --------------------------------------------------------------------------- #
-class InvisibleTargetPackingTest(unittest.TestCase):
-    def _frames(self, grasped=False, moved_to=None):
-        builder = _builder()
-        ee = _node("ee", "ee", node_type="ee")
-        target = _node("obj-1", "can", pose=(1.0, 2.0, 0.5))
-        state = _FakeState(active_obj=object(), grasped=grasped, pose=moved_to)
+class RetainedNodePackingTest(unittest.TestCase):
+    NAMES = ["apple", "bowl"]
 
-        seen = builder._refresh_target_snapshot(
-            {"ee": ee, "obj-1": target}, "obj-1", state
-        )
-        hidden = builder._refresh_target_snapshot({"ee": ee}, "obj-1", state)
-        return seen, hidden
+    def _packed(self, nodes, target="obj-1"):
+        return _pack(_graph(nodes, target), self.NAMES)
 
-    def test_invisible_target_keeps_row_one_and_its_centroid(self):
-        seen, hidden = self._frames()
-        first = _pack(_graph(list(seen.values())), ["can"])
-        second = _pack(_graph(list(hidden.values())), ["can"])
-        self.assertEqual(int(second["graph_node_target"][1]), 1)
-        self.assertEqual(int(first["graph_node_ent"][1]),
-                         int(second["graph_node_ent"][1]))
-        np.testing.assert_array_equal(
-            first["graph_node_centroid"][1], second["graph_node_centroid"][1]
-        )
+    def test_retained_node_keeps_its_centroid(self):
+        """Decided deliberately: the position stays live. ``bbox = 0000`` is the
+        pixel-visibility signal, and zeroing the centroid too would delete the
+        only thing that says where an inserted object went."""
+        packed = self._packed([
+            _node("ee", "ee", node_type="ee", seg=()),
+            _retained("obj-1", "apple", pose=(0.4, 0.1, 0.9)),
+        ])
         np.testing.assert_allclose(
-            second["graph_node_centroid"][1], [1.0, 2.0, 0.5], atol=1e-6
-        )
+            packed["graph_node_centroid"][1], [0.4, 0.1, 0.9], atol=1e-6)
 
-    def test_invisible_target_boxes_go_to_zero(self):
-        seen, hidden = self._frames()
-        first = _pack(_graph(list(seen.values())), ["can"])
-        second = _pack(_graph(list(hidden.values())), ["can"])
-        self.assertGreater(float(np.abs(first["graph_node_bbox"][1]).max()), 0.0)
-        self.assertEqual(float(np.abs(second["graph_node_bbox"][1]).max()), 0.0)
+    def test_retained_node_boxes_go_to_zero(self):
+        packed = self._packed([
+            _node("ee", "ee", node_type="ee", seg=()),
+            _retained("obj-1", "apple"),
+        ])
+        np.testing.assert_allclose(packed["graph_node_bbox"][1], 0.0)
 
-    def test_other_invisible_objects_simply_disappear(self):
-        builder = _builder()
-        state = _FakeState(active_obj=object())
-        nodes = {
-            "ee": _node("ee", "ee", node_type="ee"),
-            "obj-1": _node("obj-1", "can"),
-            "obj-a": _node("obj-a", "apple"),
-        }
-        builder._refresh_target_snapshot(dict(nodes), "obj-1", state)
-        # Next frame the cameras see neither object.
-        kept = builder._refresh_target_snapshot({"ee": nodes["ee"]}, "obj-1", state)
-        self.assertIn("obj-1", kept)
-        self.assertNotIn("obj-a", kept)
-
-    def test_grasped_invisible_target_follows_the_simulator(self):
-        builder = _builder()
-        handle = object()
-        state = _FakeState(active_obj=handle, grasped=True)
-        target = _node("obj-1", "can", pose=(1.0, 2.0, 0.5))
-        builder._refresh_target_snapshot({"obj-1": target}, "obj-1", state)
-
-        moved = np.array([1.0, 2.0, 0.9, 1.0, 0.0, 0.0, 0.0])
-        import scenegraph.core.graph_builder as gb
-        original = gb.entity_pose_world_array
-        gb.entity_pose_world_array = lambda entity, idx: moved
-        try:
-            kept = builder._refresh_target_snapshot({}, "obj-1", state)
-        finally:
-            gb.entity_pose_world_array = original
-        np.testing.assert_allclose(kept["obj-1"].pose_world[:3], [1.0, 2.0, 0.9])
-
-    def test_ungrasped_invisible_target_does_not_ask_the_simulator(self):
-        builder = _builder()
-        state = _FakeState(active_obj=object(), grasped=False)
-        target = _node("obj-1", "can", pose=(1.0, 2.0, 0.5))
-        builder._refresh_target_snapshot({"obj-1": target}, "obj-1", state)
-
-        import scenegraph.core.graph_builder as gb
-        original = gb.entity_pose_world_array
-
-        def _boom(entity, idx):
-            raise AssertionError("an ungrasped hidden target must stay frozen")
-
-        gb.entity_pose_world_array = _boom
-        try:
-            kept = builder._refresh_target_snapshot({}, "obj-1", state)
-        finally:
-            gb.entity_pose_world_array = original
-        np.testing.assert_allclose(kept["obj-1"].pose_world[:3], [1.0, 2.0, 0.5])
-
-    def test_nothing_is_replayed_before_the_target_is_ever_seen(self):
-        builder = _builder()
-        state = _FakeState(active_obj=object())
-        kept = builder._refresh_target_snapshot(
-            {"ee": _node("ee", "ee", node_type="ee")}, "obj-1", state
-        )
-        self.assertNotIn("obj-1", kept)
-
-    def test_reset_clears_the_retained_target(self):
-        builder = _builder()
-        state = _FakeState(active_obj=object())
-        builder._refresh_target_snapshot(
-            {"obj-1": _node("obj-1", "can")}, "obj-1", state
-        )
-        self.assertIsNotNone(builder._target_snapshot)
-        # ``reset_episode`` touches collaborators this fixture does not build,
-        # so assert on the one line of it that owns this state.
-        builder._target_snapshot = None
-        kept = builder._refresh_target_snapshot({}, "obj-1", state)
-        self.assertNotIn("obj-1", kept)
+    def test_a_retained_non_target_keeps_its_row_too(self):
+        """The old rule kept exactly one node alive. Every admitted node now
+        survives, so a hidden receptacle is still a vertex."""
+        packed = self._packed([
+            _node("ee", "ee", node_type="ee", seg=()),
+            _node("obj-1", "apple"),
+            _retained("obj-0", "bowl", pose=(0.2, 0.0, 0.5)),
+        ])
+        self.assertNotEqual(int(packed["graph_node_ent"][2]), 0)
+        np.testing.assert_allclose(
+            packed["graph_node_centroid"][2], [0.2, 0.0, 0.5], atol=1e-6)
 
 
 # --------------------------------------------------------------------------- #
-# Relations recomputed through the occlusion
+# Eligibility
 # --------------------------------------------------------------------------- #
-_BINS = {
-    "bin_edges": {
-        "planar-distance": [0.05, 0.15, 0.35, 0.75],
-        "height-offset": [-0.35, -0.10, 0.10, 0.35],
-    }
-}
+class EligibilityTest(unittest.TestCase):
+    """``in_frame`` decides relations; ``visible`` decides pixels."""
+
+    def test_robot_blocked_object_is_still_eligible(self):
+        blocked = _node("obj-0", "bowl", visible=False, in_frame=True, seg=())
+        graph = _graph([_node("ee", "ee", node_type="ee", seg=()), blocked],
+                       target_id=None)
+        self.assertEqual([n.node_id for n in _eligible_objects(graph)],
+                         ["obj-0"])
+
+    def test_out_of_frame_object_is_not_eligible(self):
+        gone = _node("obj-0", "bowl", visible=False, in_frame=False, seg=())
+        self.assertEqual(_eligible_objects(_graph([gone], target_id=None)), [])
+
+    def test_segmentation_ids_are_no_longer_required_for_pairing(self):
+        """They used to gate object pairs, which excluded exactly the
+        robot-blocked case the projection exists to keep."""
+        a = _node("obj-0", "bowl", visible=False, in_frame=True, seg=())
+        b = _node("obj-1", "apple")
+        graph = _graph([a, b], target_id=None)
+        self.assertEqual(len(_object_pairs(graph)), 1)
 
 
+class ProtectedTargetPairingTest(unittest.TestCase):
+    """The target bypasses its own eligibility, and only its own."""
+
+    def _pairs(self, nodes):
+        pairs = _object_pairs(_graph(nodes, "obj-1"))
+        return {frozenset((a.node_id, b.node_id)) for a, b in pairs}
+
+    def test_out_of_frame_target_pairs_with_an_in_frame_object(self):
+        """A place subtask's defining fact is target-to-receptacle. Losing it
+        when the camera turns away deletes the evidence mid-subtask."""
+        target = _node("obj-1", "apple", visible=False, in_frame=False, seg=())
+        other = _node("obj-0", "bowl")
+        self.assertIn(frozenset(("obj-1", "obj-0")),
+                      self._pairs([target, other]))
+
+    def test_two_out_of_frame_objects_do_not_pair(self):
+        target = _node("obj-1", "apple", visible=False, in_frame=False, seg=())
+        other = _node("obj-0", "bowl", visible=False, in_frame=False, seg=())
+        self.assertEqual(self._pairs([target, other]), set())
+
+    def test_an_ordinary_out_of_frame_object_gets_no_exception(self):
+        stray = _node("obj-2", "bowl", visible=False, in_frame=False, seg=())
+        other = _node("obj-0", "bowl")
+        self.assertEqual(self._pairs([stray, other]), set())
+
+    def test_an_in_frame_target_is_paired_exactly_once(self):
+        """The exception must not double-emit when the target is visible."""
+        pairs = _object_pairs(
+            _graph([_node("obj-1", "apple"), _node("obj-0", "bowl")], "obj-1"))
+        self.assertEqual(len(pairs), 1)
+
+    def test_canonical_orientation_holds_for_the_exception_pair(self):
+        """A single stored edge only means one thing if the pair order is
+        stable, target exception or not."""
+        target = _node("obj-1", "zebra", visible=False, in_frame=False, seg=())
+        other = _node("obj-0", "apple")
+        pairs = _object_pairs(_graph([target, other], "obj-1"))
+        self.assertEqual([(a.node_id, b.node_id) for a, b in pairs],
+                         [("obj-0", "obj-1")])
+
+
+# --------------------------------------------------------------------------- #
+# Relations that continue while the target is hidden
+# --------------------------------------------------------------------------- #
 class RetainedTargetRelationTest(unittest.TestCase):
-    def _scene(self, ee_xyz=(0.0, 0.0, 0.0)):
+    def _graph_with(self, ee_xyz, target_xyz, in_frame=False):
         ee = _node("ee", "ee", node_type="ee", pose=ee_xyz, seg=())
-        target = _node("obj-1", "can", visible=False, pose=(0.2, 0.0, 0.1), seg=())
-        other = _node("obj-a", "apple", visible=False, pose=(0.9, 0.0, 0.0))
-        visible = _node("obj-b", "bowl", visible=True, pose=(0.3, 0.3, 0.0))
-        return _graph([ee, target, other, visible])
+        target = _node("obj-1", "apple", visible=in_frame, in_frame=in_frame,
+                       pose=target_xyz, seg=())
+        return _graph([ee, target], "obj-1")
 
-    def test_iterator_keeps_the_target_and_drops_everyone_else(self):
-        graph = self._scene()
-        ids = {n.node_id for n in _ee_object_nodes(graph)}
-        self.assertEqual(ids, {"obj-1", "obj-b"})
-        self.assertEqual({n.node_id for n in _visible_objects(graph)}, {"obj-b"})
-
-    def test_object_object_pairs_never_include_the_retained_target(self):
-        graph = self._scene()
-        for a, b in _object_pairs(graph):
-            self.assertNotIn("obj-1", (a.node_id, b.node_id))
-
-    def test_only_the_exact_target_gets_the_privileged_handle(self):
-        graph = self._scene()
-        handle = object()
-        state = _FakeState(active_obj=handle)
-        target = graph.get_node("obj-1")
-        other = graph.get_node("obj-a")
-        self.assertIs(_resolve_entity(target, state, graph), handle)
-        self.assertIsNone(_resolve_entity(other, state, graph))
-        # And never without the graph that names it.
-        self.assertIsNone(_resolve_entity(target, state))
+    def test_iterator_keeps_the_target_when_it_is_out_of_frame(self):
+        graph = self._graph_with((0, 0, 0), (0.3, 0, 0.2))
+        self.assertEqual([n.node_id for n in _ee_object_nodes(graph)],
+                         ["obj-1"])
 
     def test_distance_and_height_match_the_centroids_exactly(self):
-        graph = self._scene(ee_xyz=(0.0, 0.0, 0.4))
-        edges = ee_object_spatial_edges(graph, _FakeState(), dict(_BINS))
-        raw = {
-            (e.relation, e.dst): e.raw_value
-            for e in edges
-        }
-        ee_xyz = np.asarray(graph.get_node("ee").pose_world[:3], float)
-        tgt_xyz = np.asarray(graph.get_node("obj-1").pose_world[:3], float)
-        self.assertAlmostEqual(
-            raw[("planar-distance", "obj-1")],
-            planar_distance_xyz(ee_xyz, tgt_xyz),
-            places=12,
-        )
-        self.assertAlmostEqual(
-            raw[("height-offset", "obj-1")],
-            height_offset_xyz(ee_xyz, tgt_xyz),
-            places=12,
-        )
+        graph = self._graph_with((0.0, 0.0, 0.0), (0.3, 0.4, 0.2))
+        edges = {e.relation: e
+                 for e in ee_object_spatial_edges(graph, None, {"bin_edges": _BINS})}
+        target = np.array([0.3, 0.4, 0.2])
+        self.assertAlmostEqual(edges["planar-distance"].raw_value,
+                               planar_distance_xyz(np.zeros(3), target))
+        self.assertAlmostEqual(edges["height-offset"].raw_value,
+                               height_offset_xyz(np.zeros(3), target))
 
     def test_moving_the_end_effector_moves_the_hidden_targets_relations(self):
-        # The target is stationary and unobserved in both scenes; only the
-        # robot moved. Its facts must move anyway.
+        cfg = {"bin_edges": _BINS}
         far = ee_object_spatial_edges(
-            self._scene(ee_xyz=(2.0, 0.0, 0.9)), _FakeState(), dict(_BINS)
-        )
+            self._graph_with((0.0, 0.0, 0.0), (0.9, 0.0, 0.0)), None, cfg)[0]
         near = ee_object_spatial_edges(
-            self._scene(ee_xyz=(0.21, 0.0, 0.1)), _FakeState(), dict(_BINS)
-        )
+            self._graph_with((0.8, 0.0, 0.0), (0.9, 0.0, 0.0)), None, cfg)[0]
+        self.assertGreater(far.raw_value, near.raw_value)
 
-        def edge(edges, relation):
-            return next(
-                e for e in edges
-                if e.relation == relation and e.dst == "obj-1"
-            )
 
-        self.assertEqual(edge(far, "planar-distance").label, "very-far")
-        self.assertEqual(edge(near, "planar-distance").label, "very-near")
-        self.assertEqual(edge(far, "height-offset").label, "far-above")
-        self.assertEqual(edge(near, "height-offset").label, "level")
-        self.assertNotEqual(
-            edge(far, "height-offset").raw_value,
-            edge(near, "height-offset").raw_value,
-        )
+# --------------------------------------------------------------------------- #
+# The ladder a carry phase reads
+# --------------------------------------------------------------------------- #
+class ObjectObjectSpatialTest(unittest.TestCase):
+    CFG = {"bin_edges": _BINS}
+
+    def _edges(self, a_xyz, b_xyz):
+        a = _node("obj-0", "cubeA", pose=a_xyz)
+        b = _node("obj-1", "cubeB", pose=b_xyz)
+        return object_object_spatial_edges(_graph([a, b], None), None, self.CFG)
+
+    def _of(self, edges, relation):
+        return [e for e in edges if e.relation == relation][0]
+
+    def test_a_pair_gets_both_ladders(self):
+        rels = {e.relation for e in self._edges((0, 0, 0), (0.3, 0, 0))}
+        self.assertEqual(rels, {"planar-distance", "height-offset"})
+
+    def test_distance_shrinks_as_the_objects_approach(self):
+        """Without this a carry phase has to score the gripper's distance to
+        the destination, which stops being the object's the moment it is let
+        go."""
+        far = self._of(self._edges((0.0, 0, 0), (0.9, 0, 0)), "planar-distance")
+        near = self._of(self._edges((0.0, 0, 0), (0.15, 0, 0)), "planar-distance")
+        self.assertGreater(far.raw_value, near.raw_value)
+        self.assertNotEqual(far.label, near.label)
+
+    def test_height_direction_rides_in_the_label(self):
+        """One edge per pair, so above/below has to be readable from the label
+        rather than from which endpoint is the source."""
+        above = self._of(self._edges((0, 0, 0.5), (0, 0, 0.0)), "height-offset")
+        below = self._of(self._edges((0, 0, 0.0), (0, 0, 0.5)), "height-offset")
+        self.assertNotEqual(above.label, below.label)
+
+
+# --------------------------------------------------------------------------- #
+# Builder-side retention
+# --------------------------------------------------------------------------- #
+class _State:
+    """The two privileged lookups retention needs. ``step`` wants a live env;
+    these methods do not."""
+
+    active_subtask_type = "pick"
+
+    def __init__(self, seg_id_map=None):
+        self.seg_id_map = dict(seg_id_map or {})
+
+
+class _Entity:
+    def __init__(self, name):
+        self.name = name
+
+
+def _builder(policy=VISIBILITY_KEEP, n_max=3):
+    from scenegraph.core.selector import EntityRegistry
+
+    builder = object.__new__(GraphBuilder)
+    builder.env_id, builder.env_idx = "env0", 0
+    builder._task_group = "set_table"
+    builder.registry = EntityRegistry(n_max=n_max)
+    builder._entities = {}
+    builder._coverage = None
+    builder.visibility_policy = policy
+    return builder
+
+
+class CapacityIsFatalTest(unittest.TestCase):
+    def test_overflow_raises_before_anything_is_dropped(self):
+        builder = _builder(n_max=3)          # ee plus two objects
+        nodes = {f"o{i}": _node(f"o{i}", f"n{i}") for i in range(3)}
+        with self.assertRaises(RuntimeError) as cm:
+            builder._check_capacity(nodes, 7, _State())
+        message = str(cm.exception)
+        self.assertIn("frame=7", message)
+        self.assertIn("n_max=3", message)
+        self.assertIn("set_table", message)
+        self.assertIn("o0", message)
+
+    def test_exactly_at_capacity_is_silent(self):
+        builder = _builder(n_max=3)
+        nodes = {f"o{i}": _node(f"o{i}", f"n{i}") for i in range(2)}
+        builder._check_capacity(nodes, 0, _State())
+
+
+class EntityCacheTest(unittest.TestCase):
+    """The association has to be made while the node still has pixels."""
+
+    def test_resolution_survives_the_pixels_going_away(self):
+        builder = _builder()
+        apple = _Entity("apple")
+        seen = _node("o1", "apple", seg=(5,))
+        self.assertIs(builder._entity_for(seen, _State({5: apple})), apple)
+        hidden = _node("o1", "apple", visible=False, seg=())
+        self.assertIs(builder._entity_for(hidden, _State({})), apple)
+
+    def test_an_unseen_node_resolves_to_nothing(self):
+        """A force query on None reads zero, which would be emitted as a
+        confident not-holds. Nothing may reach that path unresolved."""
+        builder = _builder()
+        stray = _node("o9", "ghost", visible=False, seg=())
+        self.assertIsNone(builder._entity_for(stray, _State({})))
+
+    def test_name_match_wins_over_first_segmentation_hit(self):
+        builder = _builder()
+        other, apple = _Entity("bowl"), _Entity("apple")
+        node = _node("o1", "apple", seg=(4, 5))
+        self.assertIs(builder._entity_for(node, _State({4: other, 5: apple})),
+                      apple)
+
+
+class VisibilityPolicyTest(unittest.TestCase):
+    def test_keep_tabletop_makes_everything_eligible(self):
+        builder = _builder(VISIBILITY_KEEP)
+        nodes = {"o1": _node("o1", "apple", visible=False, seg=())}
+        builder._apply_visibility(nodes, _State())
+        self.assertTrue(nodes["o1"].in_frame)
+
+    def test_projected_camera_needs_a_camera_to_agree(self):
+        builder = _builder(VISIBILITY_PROJECTED)
+        nodes = {"o1": _node("o1", "apple", visible=False, seg=())}
+        builder._apply_visibility(nodes, _State())
+        self.assertFalse(nodes["o1"].in_frame)
+
+    def test_a_visible_node_is_eligible_without_projecting(self):
+        builder = _builder(VISIBILITY_PROJECTED)
+        nodes = {"o1": _node("o1", "apple")}
+        builder._apply_visibility(nodes, _State())
+        self.assertTrue(nodes["o1"].in_frame)
+
+    def test_an_unknown_policy_is_refused_at_construction(self):
+        with self.assertRaises(ValueError):
+            GraphBuilder(None, {"selection": {"n_max": 8},
+                                "temporal": {"K": 5}},
+                         visibility_policy="sometimes")
 
 
 if __name__ == "__main__":

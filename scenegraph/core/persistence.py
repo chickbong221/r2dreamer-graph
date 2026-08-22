@@ -26,7 +26,6 @@ def _snapshot(node: Node) -> Node:
         pixel_area=node.pixel_area,
         pose_world=list(node.pose_world) if node.pose_world else None,
         index=node.index,
-        steps_since_seen=node.steps_since_seen,
         source=node.source,
         attributes=_stripped_attrs(node.attributes),
     )

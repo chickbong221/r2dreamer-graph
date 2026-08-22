@@ -22,18 +22,12 @@ from torch import nn
 from tools import weight_init_
 from scenegraph.adapters.graph_vocab import build_absolute_vocab
 from scenegraph.core.relation_rules import (
-    EDGE_CONTRACT_CANONICAL,
-    EDGE_CONTRACT_LEGACY,
     RELATION_TYPES,
     abs_labels_for,
 )
 
 # Relation ids match build_relation_vocab: index 0 is pad.
 _RELATION_IDS = {name: i + 1 for i, name in enumerate(RELATION_TYPES)}
-
-
-def _edge_contract(config) -> str:
-    return str(getattr(config, "edge_contract", None) or EDGE_CONTRACT_LEGACY)
 
 
 # Mirrors ``scenegraph.core.graph_builder``. Duplicated rather than imported so
@@ -443,16 +437,7 @@ class GraphEncoder(nn.Module):
                 + 2 * self.embed_dim
             )
         self.node = GraphMLP(node_in, self.units, str(config.act))
-        origin = torch.as_tensor(
-            getattr(config, "centroid_origin", (0.0, 0.0, 0.0)), dtype=torch.float32
-        ).reshape(3)
-        scale = torch.as_tensor(
-            getattr(config, "centroid_scale", 5.0), dtype=torch.float32
-        ).reshape(-1)
-        if scale.numel() == 1:
-            scale = scale.expand(3).clone()
-        if not bool((scale > 0).all()):
-            raise ValueError(f"graph.centroid_scale must be positive, got {scale}")
+        origin, scale = _centroid_bounds(config)
         self.register_buffer("centroid_origin", origin, persistent=False)
         self.register_buffer("centroid_scale", scale, persistent=False)
 
@@ -578,22 +563,38 @@ class GraphEncoder(nn.Module):
         return GraphEncoding(nodes, token, compact)
 
 
+def _centroid_bounds(config) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fixed world-frame normalisation, shared by the encoder and the decoder
+    query. They address the same node, so they must agree exactly."""
+    origin = torch.as_tensor(
+        getattr(config, "centroid_origin", (0.0, 0.0, 0.0)), dtype=torch.float32
+    ).reshape(3)
+    scale = torch.as_tensor(
+        getattr(config, "centroid_scale", 5.0), dtype=torch.float32
+    ).reshape(-1)
+    if scale.numel() == 1:
+        scale = scale.expand(3).clone()
+    if not bool((scale > 0).all()):
+        raise ValueError(f"graph.centroid_scale must be positive, got {scale}")
+    return origin, scale
+
+
 def _relation_masks(
-    n_rel: int, n_abs: int, contract: str = EDGE_CONTRACT_LEGACY,
+    n_rel: int, n_abs: int,
 ) -> torch.Tensor:
-    """Legal absolute labels per relation, built from the contract's tables.
+    """Legal absolute labels per relation, built from the shared tables.
 
     Derived rather than hardcoded: the packer's ``abs_valid`` already comes
     from ``ABS_LABELS``, so a hand-written mask here is a second source of
-    truth. canonical_v2 also makes support/contain non-contiguous in sigma,
+    truth. Directional support/contain labels are also non-contiguous in sigma,
     which no slice expresses.
     """
-    absolute = build_absolute_vocab(contract)
-    labels = abs_labels_for(contract)
+    absolute = build_absolute_vocab()
+    labels = abs_labels_for()
     want_rel, want_abs = len(RELATION_TYPES) + 1, len(absolute)
     if n_rel != want_rel or n_abs != want_abs:
         raise ValueError(
-            f"edge_contract {contract!r} has relation vocab {want_rel} and "
+            f"relation vocab is {want_rel} and "
             f"absolute vocab {want_abs}; config says n_rel={n_rel}, "
             f"n_abs={n_abs}"
         )
@@ -719,11 +720,20 @@ class SimpleGraphDecoder(nn.Module):
         self.bbox_beta = float(config.bbox_beta)
         act = str(config.act)
 
-        # Box signature. One Linear, no norm and no activation: this addresses a
-        # node, it does not represent one. The narrow output is a deliberate
-        # continuous bottleneck on how much geometry reaches the box head
-        # directly rather than through g.
-        self.query = nn.Linear(5 * self.n_cams, int(config.bbox_query_dim))
+        # Node signature: every camera's box plus the world centroid. One
+        # Linear, no norm and no activation -- this addresses a node, it does
+        # not represent one, and the narrow output is a deliberate bottleneck on
+        # how much geometry reaches the box head directly rather than through g.
+        #
+        # The centroid is what separates nodes the boxes cannot. Under
+        # unconditional retention every node without pixels has an all-zero box
+        # and all-zero visibility bits, so a box-only query is identical for all
+        # of them and the decoder would be asked for several different entities
+        # from one input. Bounds match the encoder's exactly.
+        self.query = nn.Linear(5 * self.n_cams + 3, int(config.bbox_query_dim))
+        origin, scale = _centroid_bounds(config)
+        self.register_buffer("centroid_origin", origin, persistent=False)
+        self.register_buffer("centroid_scale", scale, persistent=False)
         # W_g runs once per frame and broadcasts over the node axis. Projecting
         # the full semantic vector separately for all eight nodes would be the
         # same arithmetic done N times.
@@ -753,7 +763,7 @@ class SimpleGraphDecoder(nn.Module):
         )
         self.register_buffer("progress_relations", relations, persistent=False)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
         )
         # Relation id -> row of the fused progress output, -1 for relations the
         # scorer does not read. Built from the scorer's own relation order,
@@ -767,9 +777,19 @@ class SimpleGraphDecoder(nn.Module):
         self.apply(weight_init_)
 
     def node_features(self, sem: torch.Tensor, compact: CompactGraph) -> torch.Tensor:
-        """(G, N, U) per-node representation conditioned on ``sem`` and the box."""
-        box = compact.bbox_feature(self.query.weight.dtype)
-        query = self.query_proj(self.query(box))
+        """(G, N, U) per-node representation conditioned on ``sem`` and the
+        node's box-and-centroid signature."""
+        dtype = self.query.weight.dtype
+        signature = torch.cat(
+            [
+                compact.bbox_feature(dtype),
+                compact.centroid_feature(
+                    dtype, self.centroid_origin, self.centroid_scale
+                ),
+            ],
+            -1,
+        )
+        query = self.query_proj(self.query(signature))
         frame = self.global_proj(sem.reshape(compact.graph_count, -1).to(query.dtype))
         return self.node_proj(self.act(frame[:, None, :] + query))
 
@@ -1265,7 +1285,7 @@ class SlotGraphDecoder(nn.Module):
         self.abs_head = nn.Linear(self.units, self.n_abs)
         self.temp_head = nn.Linear(self.units, self.n_temp)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
         )
         self.apply(weight_init_)
 
@@ -1460,7 +1480,7 @@ class GraphDecoder(nn.Module):
         self.abs_head = nn.Linear(self.units, self.n_abs)
         self.temp_head = nn.Linear(self.units, self.n_temp)
         self.register_buffer(
-            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs, _edge_contract(config)), persistent=False
+            "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
         )
         self.apply(weight_init_)
 

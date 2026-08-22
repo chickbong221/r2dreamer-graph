@@ -39,7 +39,7 @@ class TemporalBuffer:
         """
         present: Set[Tuple[str, str, str]] = set()
         for e in graph.edges:
-            if e.stale or e.relation not in TEMPORAL_RELATIONS:
+            if e.relation not in TEMPORAL_RELATIONS:
                 continue
             present.add(_edge_key(e.src, e.dst, e.relation))
 
@@ -48,7 +48,7 @@ class TemporalBuffer:
                 del self._values[key]
 
         for e in graph.edges:
-            if e.stale or e.relation not in TEMPORAL_RELATIONS:
+            if e.relation not in TEMPORAL_RELATIONS:
                 continue
             key = _edge_key(e.src, e.dst, e.relation)
             if e.raw_value is None:

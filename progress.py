@@ -31,26 +31,51 @@ from typing import Mapping, Sequence
 
 import torch
 
+from scenegraph.adapters.graph_vocab import (
+    build_absolute_vocab,
+    build_relation_vocab,
+)
 
-# Relation ids, fixed by ``scenegraph.core.relation_rules.RELATION_TYPES`` with
-# index 0 reserved for padding.
-REL_CONTACT = 1
-REL_GRASP = 2
-REL_SUPPORT = 3
-REL_CONTAIN = 4
-REL_PLANAR_DISTANCE = 5
-REL_HEIGHT_OFFSET = 6
-REL_GRASP_COMPAT = 7
-REL_CONTACT_COMPAT = 8
-REL_SUPPORT_COMPAT = 9
-REL_CONTAIN_COMPAT = 10
+# Relation and label ids come from the shared vocabularies, never from literals.
+# They are positions in a table the graph contract owns: adding the directional
+# support/contain labels shifted every id from ``very-near`` upward by two, and
+# a hardcoded table would have gone on scoring the wrong labels without
+# erroring -- ``ProgressScorer`` only checks ``0 < label < n_abs``.
+_REL = build_relation_vocab()
+_ABS = build_absolute_vocab()
 
-# Absolute-label ids, from the shared sigma vocabulary.
-ABS_NOT_HOLDS = 1
-ABS_HOLDS = 2
-ABS_VERY_NEAR, ABS_NEAR, ABS_MEDIUM, ABS_FAR, ABS_VERY_FAR = 3, 4, 5, 6, 7
-ABS_FAR_BELOW, ABS_BELOW, ABS_LEVEL, ABS_ABOVE, ABS_FAR_ABOVE = 8, 9, 10, 11, 12
-ABS_MATCH, ABS_PARTIAL_MATCH, ABS_POOR_MATCH, ABS_UNOBSERVED = 13, 14, 15, 16
+REL_CONTACT = _REL.encode("contact")
+REL_GRASP = _REL.encode("grasp")
+REL_SUPPORT = _REL.encode("support")
+REL_CONTAIN = _REL.encode("contain")
+REL_PLANAR_DISTANCE = _REL.encode("planar-distance")
+REL_HEIGHT_OFFSET = _REL.encode("height-offset")
+REL_GRASP_COMPAT = _REL.encode("grasp-compatibility")
+REL_CONTACT_COMPAT = _REL.encode("contact-compatibility")
+REL_SUPPORT_COMPAT = _REL.encode("support-compatibility")
+REL_CONTAIN_COMPAT = _REL.encode("contain-compatibility")
+
+ABS_NOT_HOLDS = _ABS.encode("not-holds")
+ABS_HOLDS = _ABS.encode("holds")
+ABS_SRC_HOLDS = _ABS.encode("src-holds")
+ABS_DST_HOLDS = _ABS.encode("dst-holds")
+ABS_VERY_NEAR = _ABS.encode("very-near")
+ABS_NEAR = _ABS.encode("near")
+ABS_MEDIUM = _ABS.encode("medium")
+ABS_FAR = _ABS.encode("far")
+ABS_VERY_FAR = _ABS.encode("very-far")
+ABS_FAR_BELOW = _ABS.encode("far-below")
+ABS_BELOW = _ABS.encode("below")
+ABS_LEVEL = _ABS.encode("level")
+ABS_ABOVE = _ABS.encode("above")
+ABS_FAR_ABOVE = _ABS.encode("far-above")
+ABS_MATCH = _ABS.encode("match")
+ABS_PARTIAL_MATCH = _ABS.encode("partial-match")
+ABS_POOR_MATCH = _ABS.encode("poor-match")
+ABS_UNOBSERVED = _ABS.encode("unobserved")
+
+# The width every stage table is validated against.
+N_ABS = len(_ABS)
 
 
 @dataclass(frozen=True)

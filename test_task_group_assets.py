@@ -328,7 +328,7 @@ class TestRuntimeSelection(TempTree):
     def _builder(self, group: str, root: Path) -> GraphBuilder:
         cfg = {
             "temporal": {"K": 2},
-            "selection": {"n_max": 8, "k_persist": -1},
+            "selection": {"n_max": 8},
             "whitelist_dir": whitelist_group_dir(str(root), group),
             "task_group": group,
         }

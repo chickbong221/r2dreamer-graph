@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import torch
 
+import progress
 from dreamer import _masked_std
 from networks import ProgressHead, ReturnEMA
 from progress import (
@@ -24,7 +25,7 @@ from progress import (
     ProgressScorer,
 )
 
-N_ABS = 17
+N_ABS = progress.N_ABS
 N_REL = 11
 
 # The scorer's own relation order, which is the stage table's order of first

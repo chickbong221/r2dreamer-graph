@@ -15,19 +15,19 @@ from scenegraph.adapters.graph_vocab import (
     build_relation_vocab, build_temporal_vocab,
 )
 from scenegraph.core.relation_rules import (
-    EDGE_CONTRACT_LEGACY, RELATION_TYPES, TEMPORAL_RELATIONS, abs_labels_for,
+    RELATION_TYPES, TEMPORAL_RELATIONS, abs_labels_for,
 )
 from scenegraph.core.schema import Graph, Node
 
 N_MAX = 8
 
 
-def _vocab(contract=EDGE_CONTRACT_LEGACY):
+def _vocab():
     keys = [PAD_TOKEN, EE_TOKEN] + [f"actor:o{i}" for i in range(7)]
     entity = EntityVocab(token_to_id={k: i for i, k in enumerate(keys)})
     relation, temporal = build_relation_vocab(), build_temporal_vocab()
-    absolute = build_absolute_vocab(contract)
-    labels = abs_labels_for(contract)
+    absolute = build_absolute_vocab()
+    labels = abs_labels_for()
     abs_valid = np.zeros((len(relation), len(absolute)), dtype=bool)
     temp_valid = np.zeros((len(relation),), dtype=bool)
     for name in RELATION_TYPES:
@@ -77,11 +77,13 @@ class TargetlessPackingTest(unittest.TestCase):
         self.assertEqual(out["graph_node_target"].shape, (N_MAX,))
 
     def test_row_one_returns_to_the_object_pool(self):
-        """With the flag on, an unresolved target wastes row 1; off, it doesn't."""
-        on = _pack(_graph(N_MAX - 1), True)
+        """Reserving row 1 for an unresolved target costs an object row. With
+        the flag off that row is available, so the same scene fits; with it on
+        the scene overflows, which is now an error rather than a silent drop."""
         off = _pack(_graph(N_MAX - 1), False)
-        self.assertEqual(int((on["graph_node_ent"] != 0).sum()), N_MAX - 1)
         self.assertEqual(int((off["graph_node_ent"] != 0).sum()), N_MAX)
+        with self.assertRaises(RuntimeError):
+            _pack(_graph(N_MAX - 1), True)
 
     def test_ee_stays_at_row_zero(self):
         out = _pack(_graph(3), False)

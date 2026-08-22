@@ -87,7 +87,6 @@ def _chip_layout(n_obj: int) -> Dict[str, float]:
 
 # Stale edges override every family chip with the same blue palette used for
 # frozen-pose nodes -- a single visual signal that the data is not fresh.
-_STALE_STYLE = {"bg": "#d9ecff", "edge": "#2f75b5", "text": "#1c3d6e"}
 
 
 def _radial_layout(
@@ -221,7 +220,6 @@ def render_graph(
         u = d / L
         a0 = p0 + u * node_r
         a1 = p1 - u * node_r
-        is_stale = any(e.stale for e in elist)
         is_directed_physical = any(
             e.relation in ("support", "contain") for e in elist
         )
@@ -231,11 +229,6 @@ def render_graph(
             lw = 2.2
             alpha = 0.95
             linestyle = "solid"
-        elif is_stale:
-            edge_color = "#2f75b5"
-            lw = 1.5
-            alpha = 0.9
-            linestyle = (0, (4, 2))
         else:
             edge_color = "#444"
             lw = 1.4
@@ -300,7 +293,7 @@ def render_graph(
                     step_sign = 1.0
                 anchor = anchor + np.array([0.0, chip["nudge_step"] * step_sign])
             placed_chip_centers.append((float(anchor[0]), float(anchor[1])))
-            style = _STALE_STYLE if is_stale else _FAMILY_STYLE[family]
+            style = _FAMILY_STYLE[family]
             ax.text(
                 anchor[0], anchor[1], "\n".join(grouped[family]),
                 fontsize=chip["fontsize"], ha="center", va="center", style="italic",

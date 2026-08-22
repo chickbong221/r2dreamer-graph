@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
+from collections import Counter
+
 import numpy as np
 
 from ..core.relation_rules import (
@@ -49,16 +51,13 @@ _PHYSICAL = frozenset(PHYSICAL_RELATIONS)
 _AFFORDANCE = frozenset(AFFORDANCE_RELATIONS)
 
 
-def _edge_priority(edge) -> Tuple[int, int]:
-    """Truncation order: physical state, then affordance, then spatial.
-    Observed facts outrank retained ones within a family."""
+def _edge_priority(edge) -> int:
+    """Deterministic order: physical state, then affordance, then spatial."""
     if edge.relation in _PHYSICAL:
-        family = 0
-    elif edge.relation in _AFFORDANCE:
-        family = 1
-    else:
-        family = 2
-    return (family, int(edge.stale))
+        return 0
+    if edge.relation in _AFFORDANCE:
+        return 1
+    return 2
 
 
 def _row_assignment(graph, n_max: int, target_id, fixed_rows: bool):
@@ -72,11 +71,17 @@ def _row_assignment(graph, n_max: int, target_id, fixed_rows: bool):
     a fixed row so an occluded one keeps the same identity frame to frame.
 
     Row 1 stays padding until the target is first observed. Reserving it costs
-    one object row in a frame that has more visible whitelisted objects than
-    rows for them; the drop is returned rather than swallowed, because a
-    silently truncated vertex is a fact the model never learns to predict.
+    one object row, so a scene that fills ``n_max`` without the target raises
+    here -- a silently truncated vertex is a fact the model never learns to
+    predict, and retention leaves no vertex that is safe to lose.
     """
     nodes = list(graph.nodes)
+    if len(nodes) > n_max:
+        raise RuntimeError(
+            f"node budget exceeded: {len(nodes)} vertices against n_max="
+            f"{n_max}. env={graph.env_id} frame={graph.frame} "
+            f"nodes={[n.node_id for n in nodes]}. Retention never evicts."
+        )
     if not fixed_rows:
         return list(enumerate(nodes[:n_max])), max(0, len(nodes) - n_max)
 
@@ -95,14 +100,20 @@ def _row_assignment(graph, n_max: int, target_id, fixed_rows: bool):
         rest.append(node)
 
     next_row = 2
-    dropped = 0
     for node in rest:
         if next_row >= n_max:
-            dropped += 1
-            continue
+            # Reserving row 1 for an unseen target costs one object row. Under
+            # retention that is still a vertex nothing can hold, so it raises
+            # like any other overflow rather than vanishing.
+            raise RuntimeError(
+                f"node budget exceeded: {node.node_id!r} has no row. "
+                f"n_max={n_max} with row 1 reserved for target "
+                f"{target_id!r}. env={graph.env_id} frame={graph.frame} "
+                f"nodes={[n.node_id for n in nodes]}."
+            )
         rows.append((next_row, node))
         next_row += 1
-    return rows, dropped
+    return rows, 0
 
 
 def pack_graph(
@@ -214,7 +225,21 @@ def pack_graph(
         if e.src in position and e.dst in position
     ]
     candidates.sort(key=_edge_priority)
-    kept = candidates[:e_max]
+    if len(candidates) > e_max:
+        # Retention makes edge occupancy persistent, so truncation would drop
+        # the same families every frame -- spatial first, by priority -- and
+        # both reconstruction and the progress target would read a graph that
+        # is systematically missing facts rather than occasionally short.
+        by_family = Counter(e.relation for e in candidates)
+        raise RuntimeError(
+            f"edge budget exceeded: {len(candidates)} candidate facts against "
+            f"e_max={e_max}. env={graph.env_id} frame={graph.frame} "
+            f"nodes={n_nodes}. by relation: "
+            f"{dict(sorted(by_family.items()))}. "
+            "Raise model.graph.e_max -- truncation is not a safe fallback "
+            "under unconditional retention."
+        )
+    kept = candidates
 
     edge_src = np.zeros(e_max, dtype=np.uint8)
     edge_dst = np.zeros(e_max, dtype=np.uint8)
