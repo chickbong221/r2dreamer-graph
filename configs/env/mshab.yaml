@@ -28,6 +28,11 @@ split: train
 eval_split: train
 eval_num_build_configs: ${env.num_build_configs}
 eval_time_limit: 200
+
+# Eval video only. `env.render()` returns the task's third-person
+# render_camera, which no policy ever reads, so it is sized for watching rather
+# than for the encoder's 112x112. [] keeps the task default.
+eval_render_size: [512, 512]
 # Eval only. 0 pins the scene set instead of reconfiguring per reset.
 eval_reconfiguration_frequency: 0
 num_build_configs: 10

@@ -218,6 +218,53 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(self._env("mshab")["graph"]["object_object_spatial"])
 
 
+class EvalRenderTest(unittest.TestCase):
+    """The eval video comes from the render camera, not the encoder's sensors.
+
+    Two separate cameras: `sensor_configs` sizes what the policy reads and must
+    stay at the encoder's resolution, `human_render_camera_configs` sizes what
+    a person watches and is free to be much larger. Confusing them either
+    starves the video or silently retrains the encoder on bigger images.
+    """
+
+    def setUp(self):
+        self.ctor = _ctor_source()
+        self.trainer = Path("trainer.py").read_text(encoding="utf-8")
+
+    def test_both_env_configs_declare_a_render_size(self):
+        for name in ("maniskill", "mshab"):
+            with self.subTest(env=name), open(f"configs/env/{name}.yaml") as f:
+                size = yaml.safe_load(f)["eval_render_size"]
+                self.assertEqual(len(size), 2)
+                self.assertTrue(all(int(v) > 0 for v in size))
+
+    def test_the_render_camera_is_eval_only(self):
+        """A training env paying to render a 512x512 view nothing reads would
+        be pure cost."""
+        head, _, tail = self.ctor.partition("if self._eval:")
+        self.assertNotIn("human_render_camera_configs", head)
+        self.assertIn("human_render_camera_configs", tail)
+
+    def test_the_sensors_keep_the_encoder_resolution(self):
+        self.assertIn("sensor_configs=dict(width=size[1], height=size[0])",
+                      self.ctor)
+
+    def test_the_render_frame_is_preferred_with_a_fallback(self):
+        """Suites with no render camera -- dmc, atari -- must still get the
+        observation strip."""
+        body = self.trainer
+        self.assertIn("frame = _render_frame(envs, 0, panel_fn)", body)
+        self.assertIn("frame = _observation_frame(trans, panel_fn)", body)
+        self.assertLess(body.index("_render_frame(envs, 0, panel_fn)"),
+                        body.index("_observation_frame(trans, panel_fn)"))
+
+    def test_the_graph_panel_joins_the_render_frame(self):
+        """The whole point: one video, graph beside the high-resolution view."""
+        start = self.trainer.index("def _render_frame")
+        end = self.trainer.index("def _observation_frame")
+        self.assertIn("_with_panel", self.trainer[start:end])
+
+
 class GraphConfigTest(unittest.TestCase):
     KEYS = mod._GRAPH_CONFIG_KEYS
 

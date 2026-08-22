@@ -8,7 +8,14 @@ defaults:
 # Rooted at the launch directory, so runs land in the repo's own logdir/
 # rather than $HOME. Hydra chdirs into run.dir, so this has to resolve
 # before that happens -- runtime.cwd is where the command was typed.
-logdir: ${hydra:runtime.cwd}/logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}/mshab-graph-simple-size100m-b28-s0
+#
+# The trailing name is the task and the model preset, so a run says what it is
+# without anyone remembering to pass a name. Anything that varies *within* a
+# comparison -- beta, seed -- belongs in an explicit override, not here: it
+# would otherwise read as part of the run's identity rather than as the axis
+# being swept.
+run_name: ${env.task}-${hydra:runtime.choices.model}
+logdir: ${hydra:runtime.cwd}/logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}/${run_name}
 seed: 0
 # Off. Seeding (set_seed_everywhere, always applied) fixes initialisation and
 # sampling; this would additionally fix the *order* of floating-point
@@ -24,8 +31,10 @@ wandb:
   enabled: true
   project: RelRL
   entity: letuanhf-hanoi-university-of-science-and-technology
-  name: graph-simple-size100m-b28-s0
-  group: mshab-prepare-groceries-size100m-b28-s0
+  # Group is task and model, so the arms of a sweep over anything else land
+  # side by side; override `name` to say which arm this one is.
+  name: ${run_name}
+  group: ${run_name}
   mode: online
 
 hydra:

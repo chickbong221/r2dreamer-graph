@@ -17,6 +17,11 @@ seed: ${seed}
 device: ${device}
 
 eval_time_limit: 200
+
+# Eval video only. `env.render()` returns the task's third-person
+# render_camera, which no policy ever reads, so it is sized for watching rather
+# than for the encoder's 112x112. [] keeps the task default.
+eval_render_size: [512, 512]
 obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: ''

@@ -260,6 +260,17 @@ class ManiSkillVecEnv:
             make_kwargs["reconfiguration_freq"] = int(
                 getattr(config, "eval_reconfiguration_frequency", 0)
             )
+            # The third-person "render_camera" that `env.render()` returns, not
+            # an observation sensor: the policy never sees it, so it is free to
+            # be far larger than the 112x112 the encoder reads. Empty keeps the
+            # task's own default.
+            self._render_size = tuple(
+                int(v) for v in (getattr(config, "eval_render_size", None) or ())
+            )
+            if self._render_size:
+                make_kwargs["human_render_camera_configs"] = dict(
+                    width=self._render_size[1], height=self._render_size[0]
+                )
         env = gym.make(**make_kwargs)
         if bool(config.nonprivileged_obs):
             env = NonPrivilegedObsWrapper(env)
@@ -512,6 +523,28 @@ class ManiSkillVecEnv:
             self._episode_logs(info, done),
         )
         return trans, done_t.to(self._device)
+
+    def render(self):
+        """Human-render camera for every env, ``[N, H, W, 3]`` uint8 on CPU.
+
+        Not an observation: this is the separate third-person camera the eval
+        video is made from, so it carries no obligation to match the encoder's
+        resolution. CPU because the frames are only ever stacked and encoded,
+        and a 200-step eval at 512x512 is a third of a gigabyte the training
+        step would otherwise be sharing a device with.
+        """
+        frames = self._env.render()
+        if frames is None:
+            return None
+        if not torch.is_tensor(frames):
+            frames = torch.as_tensor(np.asarray(frames))
+        if frames.ndim == 3:
+            frames = frames[None]
+        if frames.dtype != torch.uint8:
+            # A float render is in [0, 1]; anything already 0-255 stays put.
+            scale = 255.0 if float(frames.max()) <= 1.0 else 1.0
+            frames = (frames * scale).clamp(0, 255).to(torch.uint8)
+        return frames.detach().cpu()
 
     def close(self):
         self._env.close()

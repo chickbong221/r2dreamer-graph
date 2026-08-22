@@ -31,30 +31,14 @@ def _graph_panel(builder, env_idx, height, colormap):
         return None
 
 
-def _observation_frame(trans, panel_fn=None):
-    """First environment's cameras tiled left-to-right as one RGB frame.
+def _with_panel(frames, panel_fn):
+    """Tile ``frames`` left-to-right and append the graph column, if any.
 
-    ``panel_fn(height)`` supplies an extra column -- the graph diagram -- sized
-    from the camera strip itself, so the two views and the graph read as one
-    frame rather than three separate videos.
+    The panel is sized from the strip it joins, so the diagram scales with
+    whatever it is beside -- an encoder-resolution camera strip or a much
+    larger render camera -- and the whole thing stays one video rather than
+    two that have to be watched side by side.
     """
-    if "image" in trans:
-        keys = ["image"]
-    else:
-        preferred = ["image_head", "image_hand"]
-        keys = [key for key in preferred if key in trans]
-        keys += sorted(
-            key for key in trans.keys()
-            if key.startswith("image_") and key not in keys
-        )
-    frames = []
-    for key in keys:
-        frame = trans[key]
-        while frame.ndim > 3:
-            frame = frame[0]
-        if frame.ndim != 3 or frame.shape[-1] not in (1, 3):
-            continue
-        frames.append(frame.detach())
     if not frames:
         return None
     ref = frames[0]
@@ -73,7 +57,66 @@ def _observation_frame(trans, panel_fn=None):
             tile = tile.to(ref.dtype)
         if tile.shape[0] == ref.shape[0] and tile.shape[-1] == ref.shape[-1]:
             frames.append(tile)
-    return torch.cat(frames, dim=1)
+    strip = torch.cat(frames, dim=1)
+    # h264 wants even dimensions, and the panel is scaled to whatever height it
+    # joins, so its width lands wherever it lands. One black column is cheaper
+    # than an eval whose video silently fails to encode.
+    if strip.shape[1] % 2:
+        strip = torch.cat([strip, torch.zeros_like(strip[:, :1])], dim=1)
+    if strip.shape[0] % 2:
+        strip = torch.cat([strip, torch.zeros_like(strip[:1])], dim=0)
+    return strip
+
+
+def _render_frame(envs, env_idx, panel_fn=None):
+    """One env's human-render camera, with the graph beside it.
+
+    Separate from the observation strip because it is a different camera: the
+    encoder reads 112x112 sensors, while this is the task's third-person view
+    at whatever `env.eval_render_size` asks for. None when the suite has no
+    such camera, and the caller falls back to the observations.
+    """
+    render = getattr(envs, "render", None)
+    if render is None:
+        return None
+    try:
+        frames = render()
+    except Exception:
+        # Diagnostic only; a renderer that refuses must not end an eval run.
+        return None
+    if frames is None or len(frames) <= env_idx:
+        return None
+    return _with_panel([frames[env_idx]], panel_fn)
+
+
+def _observation_frame(trans, panel_fn=None):
+    """First environment's cameras tiled left-to-right as one RGB frame.
+
+    ``panel_fn(height)`` supplies an extra column -- the graph diagram -- sized
+    from the camera strip itself, so the two views and the graph read as one
+    frame rather than three separate videos.
+    """
+    if "image" in trans:
+        keys = ["image"]
+    else:
+        # MS-HAB names its fixed view "head", ordinary ManiSkill names it
+        # "base". Naming both keeps the fixed view on the left in either suite;
+        # anything else falls in sorted after them.
+        preferred = ["image_head", "image_base", "image_hand"]
+        keys = [key for key in preferred if key in trans]
+        keys += sorted(
+            key for key in trans.keys()
+            if key.startswith("image_") and key not in keys
+        )
+    frames = []
+    for key in keys:
+        frame = trans[key]
+        while frame.ndim > 3:
+            frame = frame[0]
+        if frame.ndim != 3 or frame.shape[-1] not in (1, 3):
+            continue
+        frames.append(frame.detach())
+    return _with_panel(frames, panel_fn)
 
 
 class OnlineTrainer:
@@ -149,10 +192,16 @@ class OnlineTrainer:
             trans, step_done = envs.step(act.detach(), done)
             # dict of (B, 1, *)
             trans = trans.to(agent.device, non_blocking=True)
-            frame = _observation_frame(
-                trans,
+            panel_fn = (
                 (lambda h: _graph_panel(graph_builder, 0, h, colormap))
-                if graph_builder is not None else None)
+                if graph_builder is not None else None
+            )
+            # The render camera when the suite has one, the observation strip
+            # otherwise. Not both: two videos of the same episode at different
+            # resolutions is worse than one.
+            frame = _render_frame(envs, 0, panel_fn)
+            if frame is None:
+                frame = _observation_frame(trans, panel_fn)
             if frame is not None:
                 video_frames.append(frame)
             # (B,)
