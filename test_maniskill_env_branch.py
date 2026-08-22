@@ -170,21 +170,41 @@ class ConfigTest(unittest.TestCase):
     def test_mshab_still_declares_one(self):
         self.assertIn("instruction_table", self._env("mshab"))
 
+    def _base(self):
+        with open("configs/model/_base_.yaml") as handle:
+            return yaml.safe_load(handle)
+
     def test_ordinary_maniskill_runs_the_task_schedule(self):
-        progress = self._env("maniskill")["progress"]
-        self.assertTrue(progress["enabled"])
-        self.assertEqual(progress["mode"], "task_schedule")
-        self.assertEqual(progress["source"], "world_model")
-        self.assertAlmostEqual(progress["beta"], 0.05)
+        self.assertEqual(self._env("maniskill")["progress_mode"], "task_schedule")
 
     def test_mshab_keeps_the_end_effector_target(self):
-        """The default, and mshab.yaml must not silently inherit the other."""
-        with open("configs/model/_base_.yaml") as handle:
-            base = yaml.safe_load(handle)["progress"]
-        self.assertEqual(base["mode"], "ee_target")
-        self.assertEqual(self._env("mshab").get("progress", {}).get("mode",
-                                                                    "ee_target"),
-                         "ee_target")
+        self.assertEqual(self._env("mshab")["progress_mode"], "ee_target")
+
+    def test_the_model_reads_the_mode_from_the_env(self):
+        """The value has to reach `config.model`, which is all Dreamer sees.
+
+        This is the wiring that was wrong: an env-level `progress:` block reads
+        as configuration and is in fact inert, so a targetless task trained its
+        progress head against the end-effector ladder without a word.
+        """
+        self.assertEqual(self._base()["progress"]["mode"],
+                         "${oc.select:env.progress_mode,ee_target}")
+
+    def test_no_env_declares_a_progress_block(self):
+        """Nothing reads `env.progress`. Declaring one is silently inert."""
+        for path in sorted(Path("configs/env").glob("*.yaml")):
+            with self.subTest(env=path.name), open(path) as handle:
+                self.assertNotIn("progress", yaml.safe_load(handle) or {})
+
+    def test_no_model_preset_pins_the_mode(self):
+        """A literal `mode:` in a preset shadows the interpolation, and picks
+        the shaping target by model size."""
+        for path in sorted(Path("configs/model").glob("*.yaml")):
+            if path.name == "_base_.yaml":
+                continue
+            with self.subTest(model=path.name), open(path) as handle:
+                progress = (yaml.safe_load(handle) or {}).get("progress", {})
+                self.assertNotIn("mode", progress)
 
     def test_the_schedule_directory_is_declared(self):
         with open("configs/model/_base_.yaml") as handle:

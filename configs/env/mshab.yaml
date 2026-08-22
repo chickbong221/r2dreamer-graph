@@ -12,6 +12,10 @@ time_limit: 100
 seed: ${seed}
 device: ${device}
 
+# The end-effector-to-target ladder. MS-HAB designates a subtask target,
+# so the built-in table applies and no compiled schedule is needed.
+progress_mode: ee_target
+
 mshab_task: set_table
 # Names the MS-HAB task-plan file, `task_plans/<mshab_task>/pick/<split>/
 # <mshab_obj>.json`, and through it which whitelist the runtime resolves:

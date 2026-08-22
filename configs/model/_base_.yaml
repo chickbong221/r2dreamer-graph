@@ -50,7 +50,11 @@ progress:
   #   task_schedule: a compiled per-task phase schedule over arbitrary role
   #                  pairs, with cumulative credit. Normal ManiSkill. Needs
   #                  progress.schedule_dir and one file per task.
-  mode: ee_target
+  #
+  # Which one applies is a property of the environment, not the model size, so
+  # it is read from `env.progress_mode`. Envs that never asked for shaping do
+  # not declare it and take the default.
+  mode: ${oc.select:env.progress_mode,ee_target}
   schedule_dir: scenegraph/configs/schedules
   # Weight on the progress advantage inside the actor, after the warm-up.
   beta: 0.05
