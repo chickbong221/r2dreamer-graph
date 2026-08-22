@@ -54,9 +54,17 @@ class Clause:
     relation_id: int
     src_key: str
     dst_key: str
+    src_entity_id: int
+    dst_entity_id: int
     labels: Tuple[str, ...]
     label_ids: Tuple[int, ...]
     weight: float
+
+    @property
+    def slot(self) -> Tuple[int, int, int]:
+        """What the runtime looks up. Rungs on one fact share a slot, so the
+        edge is found once however many rungs read it."""
+        return (self.relation_id, self.src_entity_id, self.dst_entity_id)
 
 
 @dataclass(frozen=True)
@@ -75,9 +83,25 @@ class CompiledSchedule:
     phases: Tuple[Phase, ...]
 
     @property
+    def slots(self) -> Tuple[Tuple[int, int, int], ...]:
+        """Distinct ``(relation, src entity, dst entity)`` facts the schedule
+        reads, in stable order. Several rungs usually share one."""
+        seen: List[Tuple[int, int, int]] = []
+        for phase in self.phases:
+            for clause in (*phase.clauses, phase.completion):
+                if clause.slot not in seen:
+                    seen.append(clause.slot)
+        return tuple(seen)
+
+    @property
     def entity_ids(self) -> Tuple[int, ...]:
         """Every entity id a frame must resolve, in stable order."""
-        return tuple(self.role_entity_ids[r] for r in sorted(self.role_entity_ids))
+        seen: List[int] = []
+        for slot in self.slots:
+            for ent in slot[1:]:
+                if ent not in seen:
+                    seen.append(ent)
+        return tuple(seen)
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +250,9 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
     scorable = scorable_relations(objects, members, bin_edges)
     relations, absolute = build_relation_vocab(), build_absolute_vocab()
 
+    def entity_id(key: str) -> int:
+        return entity_vocab.ee_id if key == EE_KEY else entity_vocab.encode(key)
+
     def key_of(token: str, where: str) -> str:
         if token == EE_ROLE:
             return EE_KEY
@@ -239,7 +266,7 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
         where = f"{env_id}/{name}"
         weight = float(rawphase.get("weight", 0.0))
         clauses = tuple(
-            _clause(c, key_of, scorable, relations, absolute, where)
+            _clause(c, key_of, scorable, relations, absolute, entity_id, where)
             for c in rawphase.get("clauses") or ()
         )
         if not clauses:
@@ -258,7 +285,7 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
         phases.append(Phase(
             name=name, weight=weight, clauses=clauses,
             completion=_clause(completion, key_of, scorable, relations,
-                               absolute, f"{where}/completion"),
+                               absolute, entity_id, f"{where}/completion"),
         ))
 
     if not phases:
@@ -274,7 +301,7 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
 
 
 def _clause(raw: Dict[str, Any], key_of, scorable, relations, absolute,
-            where: str) -> Clause:
+            entity_id, where: str) -> Clause:
     relation = str(raw.get("relation") or "")
     if relation not in relations.token_to_id:
         raise ScheduleError(f"{where}: unknown relation {relation!r}")
@@ -330,7 +357,9 @@ def _clause(raw: Dict[str, Any], key_of, scorable, relations, absolute,
         raise ScheduleError(f"{where}: unknown label {exc.args[0]!r}") from None
     return Clause(
         relation=relation, relation_id=relations.encode(relation),
-        src_key=a_key, dst_key=b_key, labels=labels, label_ids=label_ids,
+        src_key=a_key, dst_key=b_key,
+        src_entity_id=entity_id(a_key), dst_entity_id=entity_id(b_key),
+        labels=labels, label_ids=label_ids,
         weight=float(raw.get("weight", 0.0)),
     )
 

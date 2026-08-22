@@ -54,12 +54,31 @@ _GRAPH_CONFIG_CASTS = {
 }
 
 
-def graph_observation_config(graph_config, camera_names) -> dict:
-    """Flatten the env's graph config into the dict ``build_graph_obs`` reads."""
+def is_mshab_task(task_id: str) -> bool:
+    """MS-HAB subtask envs carry their scene through a ReplicaCAD task plan.
+
+    Ordinary ManiSkill tasks build their own scene from the gym id alone, so
+    everything plan-shaped -- spawn data, scene builder, object split -- is
+    meaningless for them.
+    """
+    return "SubtaskTrain" in str(task_id)
+
+
+def graph_observation_config(graph_config, camera_names,
+                             task_group: str = "") -> dict:
+    """Flatten the env's graph config into the dict ``build_graph_obs`` reads.
+
+    ``task_group`` overrides ``mshab_task``, which names the mined asset tree.
+    For MS-HAB that is the task group (``set_table``) and it comes from config;
+    for ordinary ManiSkill it is the gym id, which the config can only spell as
+    ``maniskill_PickCube-v1`` and the assets are stored under ``PickCube-v1``.
+    """
     out = {
         key: _GRAPH_CONFIG_CASTS.get(key, str)(getattr(graph_config, key))
         for key in _GRAPH_CONFIG_KEYS
     }
+    if task_group:
+        out["mshab_task"] = str(task_group)
     out["cameras"] = list(camera_names)
     for key in ("thresholds_path", "whitelist_dir", "dino_weights"):
         if out[key]:
@@ -105,12 +124,8 @@ class ManiSkillVecEnv:
         constructed identically, so one agent drives both.
         """
         import mani_skill.envs  # noqa: F401 - register ManiSkill tasks
-        import mshab.envs  # noqa: F401 - register MS-HAB tasks
-        from mani_skill import ASSET_DIR
         from mani_skill.utils import gym_utils
         from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
-        from mshab.envs.planner import plan_data_from_file
-        from mshab.envs.wrappers import FetchActionWrapper
 
         from envs.instruction import InstructionReader, InstructionTable
         from envs.maniskill_obs import NamedCameraRGBWrapper, NonPrivilegedObsWrapper
@@ -138,36 +153,8 @@ class ManiSkillVecEnv:
         }
 
         task = str(config.task).split("_", 1)[1]
-        subtask = task.split("SubtaskTrain", 1)[0].lower()
-        # An empty eval_split evaluates on the training scenes, which measures
-        # fit rather than generalisation. Left possible on purpose, but it is
-        # not the default.
-        eval_split = str(getattr(config, "eval_split", "") or "")
-        split = eval_split if (self._eval and eval_split) else str(config.split)
-        rearrange = ASSET_DIR / "scene_datasets/replica_cad_dataset/rearrange"
-        plan_path = (
-            rearrange
-            / "task_plans"
-            / str(config.mshab_task)
-            / subtask
-            / split
-            / f"{config.mshab_obj}.json"
-        )
-        plan_data = plan_data_from_file(plan_path)
-        # Training subsets its split; evaluation takes the whole of its own by
-        # default, so a held-out score is not reported over a sliver of it.
-        task_plans = _select_build_configs(
-            plan_data.plans,
-            int(
-                getattr(config, "eval_num_build_configs", 0)
-                if self._eval
-                else config.num_build_configs
-            ),
-            label="eval" if self._eval else "train",
-        )
-        if not task_plans:
-            raise ValueError(f"MS-HAB task selection produced no plans: {plan_path}")
-
+        self._task_id = task
+        self._is_mshab = is_mshab_task(task)
         size = tuple(map(int, config.size))
         make_kwargs = dict(
             id=task,
@@ -176,17 +163,6 @@ class ManiSkillVecEnv:
             sensor_configs=dict(width=size[1], height=size[0]),
             num_envs=self._num_envs,
             sim_backend=str(config.sim_backend),
-            task_plans=task_plans,
-            scene_builder_cls=plan_data.dataset,
-            spawn_data_fp=(
-                rearrange
-                / "spawn_data"
-                / str(config.mshab_task)
-                / subtask
-                / split
-                / "spawn_data.pt"
-            ),
-            require_build_configs_repeated_equally_across_envs=False,
             reward_mode=str(config.reward_mode),
             max_episode_steps=int(
                 (getattr(config, "eval_time_limit", 0) or config.time_limit)
@@ -195,6 +171,54 @@ class ManiSkillVecEnv:
             ),
             shader_dir=str(config.shader_dir),
         )
+
+        if self._is_mshab:
+            # Imported here, not at the top: an ordinary ManiSkill run should
+            # not need the MS-HAB package installed to build its scene.
+            import mshab.envs  # noqa: F401 - register MS-HAB tasks
+            from mani_skill import ASSET_DIR
+            from mshab.envs.planner import plan_data_from_file
+
+            subtask = task.split("SubtaskTrain", 1)[0].lower()
+            # An empty eval_split evaluates on the training scenes, which
+            # measures fit rather than generalisation. Left possible on
+            # purpose, but it is not the default.
+            eval_split = str(getattr(config, "eval_split", "") or "")
+            split = eval_split if (self._eval and eval_split) else str(config.split)
+            rearrange = ASSET_DIR / "scene_datasets/replica_cad_dataset/rearrange"
+            plan_path = (
+                rearrange
+                / "task_plans"
+                / str(config.mshab_task)
+                / subtask
+                / split
+                / f"{config.mshab_obj}.json"
+            )
+            plan_data = plan_data_from_file(plan_path)
+            # Training subsets its split; evaluation takes the whole of its own
+            # by default, so a held-out score is not reported over a sliver.
+            task_plans = _select_build_configs(
+                plan_data.plans,
+                int(
+                    getattr(config, "eval_num_build_configs", 0)
+                    if self._eval
+                    else config.num_build_configs
+                ),
+                label="eval" if self._eval else "train",
+            )
+            if not task_plans:
+                raise ValueError(
+                    f"MS-HAB task selection produced no plans: {plan_path}")
+            make_kwargs.update(
+                task_plans=task_plans,
+                scene_builder_cls=plan_data.dataset,
+                spawn_data_fp=(
+                    rearrange / "spawn_data" / str(config.mshab_task) / subtask
+                    / split / "spawn_data.pt"
+                ),
+                require_build_configs_repeated_equally_across_envs=False,
+            )
+
         control_mode = str(config.control_mode)
         if control_mode:
             make_kwargs["control_mode"] = control_mode
@@ -213,12 +237,17 @@ class ManiSkillVecEnv:
             env = NonPrivilegedObsWrapper(env)
         named = NamedCameraRGBWrapper(env, self._camera_keys)
         env = named
-        env = FetchActionWrapper(
-            env,
-            stationary_base=False,
-            stationary_torso=False,
-            stationary_head=True,
-        )
+        if self._is_mshab:
+            # Fetch-specific: it pins the mobile base, torso and head joints,
+            # none of which a Panda arm has.
+            from mshab.envs.wrappers import FetchActionWrapper
+
+            env = FetchActionWrapper(
+                env,
+                stationary_base=False,
+                stationary_torso=False,
+                stationary_head=True,
+            )
         self._max_episode_steps = gym_utils.find_max_episode_steps_value(env)
         self._env = ManiSkillVectorEnv(
             env, ignore_terminations=True, record_metrics=True
@@ -226,21 +255,35 @@ class ManiSkillVecEnv:
 
         self._graph = build_graph_obs(
             self._env,
-            graph_observation_config(config.graph, self._camera_names),
+            graph_observation_config(
+                config.graph, self._camera_names,
+                task_group="" if self._is_mshab else task,
+            ),
             num_envs=self._num_envs,
             sensor_source=named,
         )
 
-        instruction_path = _repo_path(str(config.instruction_table))
-        self._instruction = InstructionReader(
-            self._env, InstructionTable(instruction_path), self._num_envs
+        # Optional. An ordinary ManiSkill task has one goal and no language to
+        # disambiguate it, so the key is absent from the observation rather
+        # than present and constant.
+        instruction_path = str(getattr(config, "instruction_table", "") or "")
+        self._instruction = (
+            InstructionReader(
+                self._env,
+                InstructionTable(_repo_path(instruction_path)),
+                self._num_envs,
+            )
+            if instruction_path
+            else None
         )
 
         obs, _ = self._env.reset(seed=self._seed)
         obs = self._obs_to_dict(obs)
         self._graph_obs = self._graph.reset() if self._graph is not None else {}
         self._graph_panel_env: Optional[int] = None
-        self._instruction_obs = self._instruction.step()
+        self._instruction_obs = (
+            self._instruction.step() if self._instruction is not None else None
+        )
         self._observation_space = self._build_observation_space(obs)
         action_dim = int(self._env.action_space.shape[-1])
         self._action_space = gym.spaces.Box(
@@ -269,13 +312,12 @@ class ManiSkillVecEnv:
             "state": gym.spaces.Box(
                 -np.inf, np.inf, shape=(state.shape[-1],), dtype=np.float32
             ),
-            "instruction": gym.spaces.Box(
-                -np.inf,
-                np.inf,
-                shape=(self._instruction.table.dim,),
-                dtype=np.float32,
-            ),
         }
+        if self._instruction is not None:
+            spaces["instruction"] = gym.spaces.Box(
+                -np.inf, np.inf,
+                shape=(self._instruction.table.dim,), dtype=np.float32,
+            )
         for key in self._camera_keys:
             shape = tuple(obs[key].shape[1:])
             spaces[key] = gym.spaces.Box(0, 255, shape=shape, dtype=np.uint8)
@@ -361,8 +403,10 @@ class ManiSkillVecEnv:
             "is_last": torch.as_tensor(done, device=self._device, dtype=torch.bool).reshape(-1, 1),
             "is_terminal": torch.as_tensor(terminated, device=self._device, dtype=torch.bool).reshape(-1, 1),
             "state": self._extract_state(obs).to(self._device),
-            "instruction": torch.as_tensor(self._instruction_obs, device=self._device),
         }
+        if self._instruction_obs is not None:
+            data["instruction"] = torch.as_tensor(
+                self._instruction_obs, device=self._device)
         for key in self._camera_keys:
             data[key] = obs[key].to(self._device, torch.uint8)
         zeros = torch.zeros(self._num_envs, 1, device=self._device)
@@ -414,7 +458,8 @@ class ManiSkillVecEnv:
             self._graph_obs = (
                 self._graph.step(is_first=reset_np) if self._graph is not None else {}
             )
-            self._instruction_obs = self._instruction.step()
+            if self._instruction is not None:
+                self._instruction_obs = self._instruction.step()
             zeros = np.zeros(self._num_envs)
             trans = self._transition(obs, zeros, reset_np & False, reset_np & False, reset_np)
             return trans, torch.zeros(self._num_envs, device=self._device, dtype=torch.bool)
@@ -428,7 +473,8 @@ class ManiSkillVecEnv:
             self._replace_terminal_observation(obs, final, done)
         if self._graph is not None:
             self._graph_obs = self._graph.step(is_last=done)
-        self._instruction_obs = self._instruction.step(is_last=done)
+        if self._instruction is not None:
+            self._instruction_obs = self._instruction.step(is_last=done)
         trans = self._transition(
             obs,
             reward.detach().cpu().numpy(),
@@ -441,6 +487,22 @@ class ManiSkillVecEnv:
 
     def close(self):
         self._env.close()
+
+
+def task_schedule_source(envs):
+    """``(env_id, whitelist_dir)`` for compiling a task schedule, or None.
+
+    The env id is the gym id (``PickCube-v1``), never the config's
+    ``maniskill_`` form, and the whitelist directory is the one the graph
+    adapter actually resolved -- a schedule compiled against a different
+    entity vocabulary than the graph packs would resolve roles to wrong rows.
+    """
+    task_id = getattr(envs, "_task_id", None)
+    graph = getattr(envs, "_graph", None)
+    if task_id and graph is not None and getattr(graph, "whitelist_dir", ""):
+        return str(task_id), str(graph.whitelist_dir)
+    inner = getattr(envs, "env", None) or getattr(envs, "_env", None)
+    return task_schedule_source(inner) if inner is not None else None
 
 
 def graph_panel_source(envs):

@@ -26,7 +26,13 @@ from graph import (
     graph_state_mode,
 )
 from networks import Projector
-from progress import ProgressReward, ProgressScorer, load_stages, target_distribution
+from progress import (
+    ProgressReward,
+    ProgressScorer,
+    TaskScheduleReplayPotential,
+    load_stages,
+    target_distribution,
+)
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
@@ -324,6 +330,27 @@ class Dreamer(nn.Module):
                 "progress.source=relation_head names the pooled fused head; "
                 "slot mode decodes relations per slot and ignores it"
             )
+        self.progress_mode = str(
+            getattr(progress_config, "mode", "ee_target")
+            if progress_config is not None
+            else "ee_target"
+        )
+        if self.progress_mode not in ("ee_target", "task_schedule"):
+            raise ValueError(
+                f"progress.mode={self.progress_mode!r} is not one of "
+                "(ee_target, task_schedule)"
+            )
+        # Built by attach_task_schedule, which is where the task identity and
+        # the resolved whitelist directory live. None keeps the replay target
+        # on the end-effector stage table.
+        self.progress_schedule = None
+        self._schedule_n_abs = int(config.graph.n_abs)
+        self.progress_schedule_dir = str(
+            getattr(progress_config, "schedule_dir", "")
+            if progress_config is not None
+            else ""
+        )
+
         # The stage table is the single source of truth for which relations
         # matter. Both progress sources need it -- one to supervise predicted
         # labels, the other to turn observed labels into a scalar target.
@@ -663,6 +690,45 @@ class Dreamer(nn.Module):
                     ):
                         s.data.copy_(mix * v.data + (1 - mix) * s.data)
         self._slow_value_updates += 1
+
+    def attach_task_schedule(self, envs) -> None:
+        """Compile this task's phase schedule and use it as the replay target.
+
+        Call before ``.to(device)`` so the compiled buffers travel with the
+        module. A no-op unless progress.mode is task_schedule; when it is, a
+        missing or unscorable schedule raises here rather than at the first
+        gradient step -- a schedule that cannot be scored yields a target of
+        zero for the whole run, and nothing downstream would say so.
+        """
+        if self.progress_mode != "task_schedule":
+            return
+        import os
+
+        from envs.maniskill import _repo_path, task_schedule_source
+        from scenegraph.adapters.graph_vocab import build_entity_vocab
+        from scenegraph.core.schedule import compile_from_files
+
+        source = task_schedule_source(envs)
+        if source is None:
+            raise RuntimeError(
+                "progress.mode=task_schedule needs a graph-enabled ManiSkill "
+                "env to read the task id and the whitelist directory from"
+            )
+        env_id, whitelist_dir = source
+        # <configs>/subtask_whitelists/<env_id> -> <configs>
+        configs = os.path.dirname(os.path.dirname(whitelist_dir))
+        schedule = compile_from_files(
+            env_id, str(_repo_path(self.progress_schedule_dir)), configs,
+            build_entity_vocab(whitelist_dir),
+        )
+        self.progress_schedule = TaskScheduleReplayPotential(
+            schedule, self._schedule_n_abs)
+        print(
+            f"[progress] {env_id}: {len(schedule.phases)} phases, "
+            f"{sum(len(p.clauses) for p in schedule.phases)} clauses, "
+            f"{len(schedule.slots)} distinct facts",
+            flush=True,
+        )
 
     def train(self, mode=True):
         super().train(mode)
@@ -1651,14 +1717,25 @@ class Dreamer(nn.Module):
         """
         graph_count = compact.graph_count
         with torch.no_grad():
-            target, valid = self.progress_scorer.replay_potential(
-                compact.edge_rel,
-                compact.edge_abs,
-                compact.edge_src_local,
-                compact.edge_dst_local,
-                compact.edge_graph,
-                graph_count,
-            )
+            if self.progress_schedule is not None:
+                target, valid = self.progress_schedule(
+                    compact.node_ent,
+                    compact.edge_rel,
+                    compact.edge_abs,
+                    compact.edge_src_local,
+                    compact.edge_dst_local,
+                    compact.edge_graph,
+                    graph_count,
+                )
+            else:
+                target, valid = self.progress_scorer.replay_potential(
+                    compact.edge_rel,
+                    compact.edge_abs,
+                    compact.edge_src_local,
+                    compact.edge_dst_local,
+                    compact.edge_graph,
+                    graph_count,
+                )
             # Terminal frames carry a masked graph token, so whatever their
             # edges say is not an observation of anything.
             valid = valid & step_valid.reshape(graph_count)

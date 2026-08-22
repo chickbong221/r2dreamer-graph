@@ -45,6 +45,13 @@ progress:
   # exactly. The `relation_head` path is scheduled for removal once the
   # `world_model` path has a validated run.
   source: world_model
+  # Which target the head is regressed onto.
+  #   ee_target:     the built-in end-effector-to-target stage table. MS-HAB.
+  #   task_schedule: a compiled per-task phase schedule over arbitrary role
+  #                  pairs, with cumulative credit. Normal ManiSkill. Needs
+  #                  progress.schedule_dir and one file per task.
+  mode: ee_target
+  schedule_dir: scenegraph/configs/schedules
   # Weight on the progress advantage inside the actor, after the warm-up.
   beta: 0.05
   # Warm-up window in environment steps: beta is 0 below `beta_warmup_start`,

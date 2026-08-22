@@ -332,6 +332,171 @@ class ProgressScorer(torch.nn.Module):
         return self.potential(probs, hard)
 
 
+class TaskScheduleReplayPotential(torch.nn.Module):
+    """Observed graph labels -> one bounded scalar, for a phase schedule.
+
+    Separate from :class:`ProgressScorer` on purpose. That one is linear in the
+    predicted probabilities because a decoder-driven actor needs a gradient
+    through it. This one only ever sees *observed* one-hot labels in replay, so
+    it is free to be non-linear -- which is what cumulative credit needs -- and
+    it never runs during imagination. The head learns ``[z, g, h] -> Phi`` and
+    imagination reads the head.
+
+    Three things it does that the end-effector scorer does not:
+
+    * **Roles, not rows.** A schedule names ``movable``; the packed graph has a
+      row whose index moves between frames. Rows are resolved per frame by
+      matching entity ids in ``node_ent``, and a role matching no row or several
+      is unresolved rather than guessed.
+    * **Phase-local validity.** A missing relation invalidates the phase that
+      names it, not the frame. ``not-holds`` and ``unobserved`` are present
+      observations with a false value, which is different from no edge at all.
+    * **Cumulative credit.** A satisfied later phase grants every earlier phase
+      its full weight. Without it StackCube's success state -- stacked and
+      released -- would score below its own mid-episode peak, because the grasp
+      it needed is over.
+    """
+
+    def __init__(self, schedule, n_abs: int):
+        super().__init__()
+        self.env_id = schedule.env_id
+        self.n_abs = int(n_abs)
+        slots = list(schedule.slots)
+        entities = list(schedule.entity_ids)
+        self.n_slots, self.n_phases = len(slots), len(schedule.phases)
+
+        ent_row = {ent: i for i, ent in enumerate(entities)}
+        long_buf = lambda values: torch.tensor(values, dtype=torch.long)
+        self.register_buffer("entities", long_buf(entities), persistent=False)
+        self.register_buffer("slot_rel", long_buf([s[0] for s in slots]),
+                             persistent=False)
+        self.register_buffer("slot_src", long_buf([ent_row[s[1]] for s in slots]),
+                             persistent=False)
+        self.register_buffer("slot_dst", long_buf([ent_row[s[2]] for s in slots]),
+                             persistent=False)
+
+        index = {slot: i for i, slot in enumerate(slots)}
+        clause_slot, clause_phase, clause_weight, clause_mask = [], [], [], []
+        done_slot, done_mask, phase_weight = [], [], []
+        phase_uses = torch.zeros(self.n_phases, self.n_slots, dtype=torch.bool)
+        for p, phase in enumerate(schedule.phases):
+            phase_weight.append(phase.weight)
+            for clause in phase.clauses:
+                slot = index[clause.slot]
+                clause_slot.append(slot)
+                clause_phase.append(p)
+                clause_weight.append(clause.weight)
+                clause_mask.append(_label_mask(clause.label_ids, self.n_abs))
+                phase_uses[p, slot] = True
+            slot = index[phase.completion.slot]
+            done_slot.append(slot)
+            done_mask.append(_label_mask(phase.completion.label_ids, self.n_abs))
+            phase_uses[p, slot] = True
+
+        self.register_buffer("clause_slot", long_buf(clause_slot), persistent=False)
+        self.register_buffer("clause_phase", long_buf(clause_phase), persistent=False)
+        self.register_buffer(
+            "clause_weight", torch.tensor(clause_weight, dtype=torch.float32),
+            persistent=False)
+        self.register_buffer("clause_mask", torch.stack(clause_mask), persistent=False)
+        self.register_buffer("done_slot", long_buf(done_slot), persistent=False)
+        self.register_buffer("done_mask", torch.stack(done_mask), persistent=False)
+        self.register_buffer(
+            "phase_weight", torch.tensor(phase_weight, dtype=torch.float32),
+            persistent=False)
+        self.register_buffer("phase_uses", phase_uses, persistent=False)
+
+    def resolve_rows(self, node_ent: torch.Tensor):
+        """``(rows, resolved)`` per graph and scheduled entity.
+
+        Exactly one row must carry the entity id. None means the object has not
+        been admitted yet; several means the scene holds indistinguishable
+        instances, and picking one would be a guess.
+        """
+        match = node_ent[..., None].eq(self.entities)
+        count = match.sum(1)
+        rows = match.float().argmax(1)
+        return rows, count.eq(1)
+
+    def observe(self, node_ent, edge_rel, edge_abs, edge_src_local,
+                edge_dst_local, edge_graph, graph_count: int):
+        """``(onehot, present)`` per graph and slot.
+
+        ``present`` is exactly-one-edge, so a missing fact and a duplicated one
+        are both unresolved -- a duplicate would double-count in the scatter and
+        read as a label neither edge carries.
+        """
+        device = self.phase_weight.device
+        shape = (int(graph_count), self.n_slots)
+        rows, resolved = self.resolve_rows(node_ent)
+        want_src = rows.index_select(1, self.slot_src)
+        want_dst = rows.index_select(1, self.slot_dst)
+        ok = (resolved.index_select(1, self.slot_src)
+              & resolved.index_select(1, self.slot_dst))
+
+        onehot = torch.zeros((*shape, self.n_abs), device=device,
+                             dtype=torch.float32)
+        count = torch.zeros(shape, device=device, dtype=torch.float32)
+        if edge_graph.numel():
+            hit = (
+                edge_rel[:, None].eq(self.slot_rel)
+                & edge_src_local[:, None].eq(want_src[edge_graph])
+                & edge_dst_local[:, None].eq(want_dst[edge_graph])
+            )
+            slot_ix = torch.arange(self.n_slots, device=device)
+            g = edge_graph[:, None].expand_as(hit)[hit]
+            s = slot_ix[None, :].expand_as(hit)[hit]
+            a = edge_abs[:, None].expand_as(hit)[hit]
+            onehot[g, s, a] = 1.0
+            count.index_put_((g, s), torch.ones_like(g, dtype=torch.float32),
+                             accumulate=True)
+        return onehot, count.eq(1.0) & ok
+
+    def forward(self, node_ent, edge_rel, edge_abs, edge_src_local,
+                edge_dst_local, edge_graph, graph_count: int):
+        """``(potential, valid)`` per frame from observed labels."""
+        onehot, present = self.observe(
+            node_ent, edge_rel, edge_abs, edge_src_local, edge_dst_local,
+            edge_graph, graph_count)
+
+        satisfied = (onehot.index_select(1, self.clause_slot)
+                     * self.clause_mask).sum(-1)
+        satisfied = satisfied * present.index_select(1, self.clause_slot).float()
+        quality = torch.zeros(int(graph_count), self.n_phases,
+                              device=satisfied.device, dtype=satisfied.dtype)
+        quality.index_add_(1, self.clause_phase, satisfied * self.clause_weight)
+
+        done = (onehot.index_select(1, self.done_slot) * self.done_mask).sum(-1)
+        done = (done > 0) & present.index_select(1, self.done_slot)
+
+        # OR over strictly later phases, so a completed settle carries the grasp
+        # that is no longer held.
+        back = done.flip(-1).cummax(-1).values.flip(-1)
+        later = torch.zeros_like(done)
+        later[:, :-1] = back[:, 1:]
+
+        # A phase is readable when every slot it names resolved this frame.
+        missing = (~present)[:, None, :] & self.phase_uses
+        phase_valid = ~missing.any(-1)
+
+        credit = torch.maximum(quality * phase_valid,
+                               self.phase_weight * later.float())
+        # An unreadable phase is still resolvable when a later one completed:
+        # cumulative credit gives it its full weight regardless of its own
+        # facts, so nothing about it is unknown.
+        valid = (phase_valid | later).all(-1)
+        return credit.sum(-1) * valid.float(), valid
+
+
+def _label_mask(label_ids, n_abs: int) -> torch.Tensor:
+    mask = torch.zeros(n_abs, dtype=torch.float32)
+    for label in label_ids:
+        if not 0 < int(label) < n_abs:
+            raise ValueError(f"label id {label} outside [1, {n_abs})")
+        mask[int(label)] = 1.0
+    return mask
+
+
 def target_distribution(target_logits, slot_alive, null_logit: float = 0.0):
     """Predicted target identity over object slots plus one null class.
 

@@ -1,9 +1,10 @@
 # Normal ManiSkill (non-MS-HAB) tabletop tasks.
 #
 # Two things differ from mshab.yaml and nothing else does: there is no language
-# instruction, and there is no subtask target. The second is load-bearing --
-# progress.py scores EE-to-target facts only, so a targetless run has no
-# shaping signal and trains on the environment reward alone.
+# instruction, and there is no subtask target. The second used to mean no
+# shaping at all, because the only scorer read end-effector-to-target facts.
+# progress.mode=task_schedule replaces that with a compiled phase schedule over
+# whichever role pair each phase names, so a targetless run is shaped after all.
 task: maniskill_PickCube-v1
 steps: 1e7
 env_num: 126
@@ -34,10 +35,13 @@ decoder:
   mlp_keys: '^state$'
   cnn_keys: '^image_(base|hand)$'
 
-# Targetless: no progress head, no progress critic, no shaping.
+# Targetless, but not shaping-free: the schedule scores arbitrary role pairs
+# rather than end-effector-to-target, so no goal row is needed.
 progress:
-  enabled: false
-  beta: 0.0
+  enabled: true
+  source: world_model
+  mode: task_schedule
+  beta: 0.05
 
 graph:
   enabled: ${model.graph.enabled}

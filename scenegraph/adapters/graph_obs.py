@@ -171,6 +171,11 @@ class GraphObsBuilder:
         self.sensor_source = sensor_source
         self.num_envs = int(num_envs)
         self.vocab = vocab
+        # Where this run's mined assets came from. A task schedule is compiled
+        # against the same entity vocabulary the graph packs, so it has to read
+        # the directory that was actually resolved, not re-derive it.
+        self.whitelist_dir = str(teemo_cfg.get("whitelist_dir") or "")
+        self.task_group = str(teemo_cfg.get("task_group") or "")
         self.use_target_flag = bool(use_target_flag)
         self.n_max = int(n_max)
         self.e_max = int(e_max)

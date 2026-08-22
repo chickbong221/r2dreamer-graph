@@ -47,7 +47,11 @@ def main(config):
         config.model,
         obs_space,
         act_space,
-    ).to(config.device)
+    )
+    # Before .to(): the compiled schedule registers buffers, and they have to
+    # move with the module.
+    agent.attach_task_schedule(train_envs)
+    agent = agent.to(config.device)
 
     policy_trainer = OnlineTrainer(config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs)
     policy_trainer.begin(agent)

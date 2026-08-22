@@ -6,7 +6,11 @@ Every test here is a way a schedule can look right and score nothing.
 
 import unittest
 
-from scenegraph.adapters.graph_vocab import EntityVocab
+from scenegraph.adapters.graph_vocab import (
+    EE_TOKEN,
+    PAD_TOKEN,
+    EntityVocab,
+)
 from scenegraph.core.schedule import (
     ScheduleError,
     compile_schedule,
@@ -27,7 +31,7 @@ MEMBERS = {
 }
 BINS = {"planar-distance": [0.1, 0.2, 0.3, 0.4],
         "height-offset": [-0.2, -0.1, 0.1, 0.2]}
-VOCAB = EntityVocab(token_to_id={"<pad>": 0, "ee": 1, "actor:cubeA": 2,
+VOCAB = EntityVocab(token_to_id={PAD_TOKEN: 0, EE_TOKEN: 1, "actor:cubeA": 2,
                                  "actor:cubeB": 3, "actor:table": 4})
 
 
