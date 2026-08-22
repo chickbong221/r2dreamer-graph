@@ -25,6 +25,10 @@ shader_dir: minimal
 nonprivileged_obs: false
 sim_config: {}
 size: [112, 112]
+# Ordinary ManiSkill tasks default to a bare Panda, which renders base_camera
+# only. The wrist view is what makes fine alignment learnable, and it comes
+# from the robot uid rather than a sensor config.
+robot_uids: panda_wristcam
 cameras: [base_camera, hand_camera]
 
 # No instruction key: the encoder reads state only.

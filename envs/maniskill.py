@@ -54,6 +54,23 @@ _GRAPH_CONFIG_CASTS = {
 }
 
 
+def camera_obs_key(camera: str) -> str:
+    """Observation key for a named sensor.
+
+    Two naming conventions meet here. ManiSkill names cameras by position with
+    a ``_camera`` suffix (``base_camera``, ``hand_camera``); MS-HAB names them
+    ``<robot>_<position>`` (``fetch_head``). Stripping the suffix where there is
+    one and taking the last segment otherwise gives ``image_base`` /
+    ``image_hand`` / ``image_head`` from either -- and, more to the point, keeps
+    ``base_camera`` and ``hand_camera`` distinct, which the last-segment rule
+    alone does not.
+    """
+    suffix = "_camera"
+    short = (camera[: -len(suffix)] if camera.endswith(suffix)
+             else camera.rsplit("_", 1)[-1])
+    return "image_" + short
+
+
 def is_mshab_task(task_id: str) -> bool:
     """MS-HAB subtask envs carry their scene through a ReplicaCAD task plan.
 
@@ -146,11 +163,16 @@ class ManiSkillVecEnv:
         self._seed = int(config.seed)
         self._camera_names = list(config.cameras)
         if not self._camera_names:
-            raise ValueError("MS-HAB needs at least one named camera")
+            raise ValueError("a graph run needs at least one named camera")
         self._camera_keys = {
-            "image_" + camera.rsplit("_", 1)[-1]: camera
-            for camera in self._camera_names
+            camera_obs_key(camera): camera for camera in self._camera_names
         }
+        if len(self._camera_keys) != len(self._camera_names):
+            raise ValueError(
+                f"cameras {self._camera_names} collapse to "
+                f"{sorted(self._camera_keys)}; two cameras sharing an "
+                "observation key would silently drop one"
+            )
 
         task = str(config.task).split("_", 1)[1]
         self._task_id = task
@@ -171,6 +193,12 @@ class ManiSkillVecEnv:
             ),
             shader_dir=str(config.shader_dir),
         )
+        # Ordinary ManiSkill tasks default to a Panda with no wrist camera, so
+        # a hand view has to be asked for by robot uid rather than configured
+        # as a sensor.
+        robot_uids = str(getattr(config, "robot_uids", "") or "")
+        if robot_uids:
+            make_kwargs["robot_uids"] = robot_uids
 
         if self._is_mshab:
             # Imported here, not at the top: an ordinary ManiSkill run should

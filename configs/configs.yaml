@@ -5,7 +5,10 @@ defaults:
   - override hydra/job_logging: disabled
   - _self_
 
-logdir: ${oc.env:HOME}/logdir/r2dreamer-graph/${now:%Y-%m-%d}/${now:%H-%M-%S}/mshab-graph-simple-size100m-b28-s0
+# Rooted at the launch directory, so runs land in the repo's own logdir/
+# rather than $HOME. Hydra chdirs into run.dir, so this has to resolve
+# before that happens -- runtime.cwd is where the command was typed.
+logdir: ${hydra:runtime.cwd}/logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}/mshab-graph-simple-size100m-b28-s0
 seed: 0
 # Off. Seeding (set_seed_everywhere, always applied) fixes initialisation and
 # sampling; this would additionally fix the *order* of floating-point
