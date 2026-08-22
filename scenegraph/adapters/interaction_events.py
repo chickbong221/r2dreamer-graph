@@ -105,10 +105,14 @@ class BucketStore:
         self.episode_presence: Dict[BucketKey, int] = defaultdict(int)
         # Buckets rejected because discovery had already frozen.
         self.late: Dict[BucketKey, int] = defaultdict(int)
+        self._min_presence_seen: float = 0.0
         # Buckets frozen out as incidental. Reported, never chased: an object
         # the gripper brushes in one episode of twenty cannot reach target, and
         # waiting for it would stall the whole run.
         self.excluded: Dict[BucketKey, float] = {}
+        # Episodes a late bucket appeared in, so the report can say whether it
+        # would have survived the presence gate had discovery seen it.
+        self.late_presence: Dict[BucketKey, int] = defaultdict(int)
 
     def add(self, event: InteractionEvent) -> bool:
         bucket = event.bucket
@@ -128,6 +132,8 @@ class BucketStore:
         for bucket in buckets or ():
             if self.frozen is None or bucket in self.frozen:
                 self.episode_presence[bucket] += 1
+            elif bucket not in self.excluded:
+                self.late_presence[bucket] += 1
 
     def presence(self, bucket: BucketKey) -> float:
         """Fraction of committed episodes this bucket appeared in.
@@ -165,6 +171,7 @@ class BucketStore:
                 if rate < min_presence:
                     self.excluded[bucket] = rate
         self.frozen = known - set(self.excluded)
+        self._min_presence_seen = min_presence
 
     def buckets(self) -> List[BucketKey]:
         return sorted(set(self.samples) | set(self.seen_counts))
@@ -201,7 +208,12 @@ class BucketStore:
         for b, rate in sorted(self.excluded.items()):
             lines.append(f"  SKIP  incidental at {rate:.0%} of episodes: {b}")
         for b, n in sorted(self.late.items()):
-            lines.append(f"  LATE  discovered after freeze, {n} events: {b}")
+            rate = self.late_presence[b] / self.episodes if self.episodes else 0.0
+            note = ("below the presence gate, would have been dropped anyway"
+                    if rate < self._min_presence_seen
+                    else "ABOVE the presence gate -- real, and it was missed")
+            lines.append(
+                f"  LATE  {n} events in {rate:.1%} of episodes; {note}: {b}")
         return "\n".join(lines)
 
 
@@ -369,3 +381,52 @@ class GroupAccumulator:
         return InteractionEvent(
             bucket, group.first_frame, reduce_group(group, self.mode,
                                                     self.window))
+
+
+# --------------------------------------------------------------------------- #
+# Spatial statistics for relation bin derivation
+# --------------------------------------------------------------------------- #
+class BinStats:
+    """Running maxima over every pair, every step.
+
+    Relation bins must describe the range a run actually spans. Sampling only
+    when a predicate fires would calibrate every bin against contact distance
+    alone, so "far" would never be reachable and the token would mean nothing.
+    """
+
+    def __init__(self) -> None:
+        self.maxes: Dict[str, float] = defaultdict(float)
+        self._prev: Dict[Tuple[str, str], Tuple[float, float]] = {}
+
+    def new_episode(self) -> None:
+        self._prev.clear()
+
+    def observe(self, poses: Dict[str, Any], frame: int) -> None:
+        import itertools as _it
+
+        import numpy as np
+
+        keys = sorted(poses)
+        for a, b in _it.combinations(keys, 2):
+            pa = np.asarray(poses[a], dtype=float)
+            pb = np.asarray(poses[b], dtype=float)
+            planar = float(np.linalg.norm(pa[:2] - pb[:2]))
+            height = float(pa[2] - pb[2])
+            self.maxes["planar_distance"] = max(
+                self.maxes["planar_distance"], planar)
+            self.maxes["height_offset"] = max(
+                self.maxes["height_offset"], abs(height))
+            prev = self._prev.get((a, b))
+            if prev is not None:
+                self.maxes["planar_distance_change"] = max(
+                    self.maxes["planar_distance_change"], abs(planar - prev[0]))
+                self.maxes["height_offset_change"] = max(
+                    self.maxes["height_offset_change"], abs(height - prev[1]))
+            self._prev[(a, b)] = (planar, height)
+
+    def merge(self, other: Dict[str, float]) -> None:
+        for key, value in (other or {}).items():
+            self.maxes[key] = max(self.maxes[key], float(value))
+
+    def as_dict(self) -> Dict[str, float]:
+        return {k: float(v) for k, v in self.maxes.items()}

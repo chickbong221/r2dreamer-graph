@@ -557,3 +557,39 @@ class ExcludedReportingTest(unittest.TestCase):
         store, _, brush = self._store()
         self.assertIn(brush, store.excluded)
         self.assertEqual(store.incidental(0.2), [])
+
+
+class LatePresenceTest(unittest.TestCase):
+    """A late bucket must say whether it mattered, not just how many events."""
+
+    def _store(self, late_every):
+        store = BucketStore(target=5)
+        known = make_bucket("grasp", EE_KEY, "actor:cubeA")
+        late = make_bucket("support", "actor:peg", "actor:box")
+        for i in range(10):
+            ep = EpisodeEvidence()
+            ep.add(InteractionEvent(known, i))
+            ep.observe_success(True)
+            ep.commit(store)
+        store.freeze(min_presence=0.2)
+        for i in range(100):
+            ep = EpisodeEvidence()
+            ep.add(InteractionEvent(known, i))
+            if i % late_every == 0:
+                ep.add(InteractionEvent(late, i))
+            ep.observe_success(True)
+            ep.commit(store)
+        return store, late
+
+    def test_rare_late_bucket_is_marked_droppable(self):
+        store, late = self._store(late_every=50)     # ~2% of episodes
+        self.assertIn("would have been dropped anyway", store.report())
+        self.assertGreater(store.late[late], 0)
+
+    def test_frequent_late_bucket_is_flagged_as_missed(self):
+        store, _ = self._store(late_every=1)         # every episode
+        self.assertIn("ABOVE the presence gate", store.report())
+
+    def test_late_presence_is_counted_per_episode_not_per_event(self):
+        store, late = self._store(late_every=50)
+        self.assertEqual(store.late_presence[late], 2)

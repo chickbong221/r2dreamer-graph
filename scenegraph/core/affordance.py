@@ -441,6 +441,30 @@ def transform_approach_dir(
     return transform_dir(obj_pose_world, component.approach_dir_obj_frame)
 
 
+def approach_dirs_world(
+    obj_pose_world: Optional[List[float]],
+    components: List[AffordanceComponent],
+) -> Optional[np.ndarray]:
+    """``[n, 3]`` world approach directions, NaN where a component has none.
+
+    One rotation applied to the whole bank instead of once per component.
+    """
+    if not components or obj_pose_world is None:
+        return None
+    rot = _quat_wxyz_to_rotmat(
+        np.asarray(obj_pose_world, dtype=float)[3:7])
+    if rot is None:
+        return None
+    local = np.full((len(components), 3), np.nan, dtype=float)
+    for i, comp in enumerate(components):
+        if comp.approach_dir_obj_frame is not None:
+            local[i] = np.asarray(comp.approach_dir_obj_frame, dtype=float)
+    world = local @ rot.T
+    norms = np.linalg.norm(world, axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return world / np.where(norms > 0, norms, np.nan)
+
+
 def select_active_component(
     tcp_xyz_world: np.ndarray,
     anchors_world: Optional[np.ndarray],
@@ -474,13 +498,16 @@ def select_active_component(
                 tcp_R @ np.asarray(tcp_axis_local, dtype=float).reshape(3)
             )
             if tcp_dir is not None:
-                for idx, comp in enumerate(components[: len(scores)]):
-                    aff_dir = transform_approach_dir(obj_pose_world, comp)
-                    if aff_dir is None:
-                        continue
-                    cos = float(np.clip(np.dot(tcp_dir, aff_dir), -1.0, 1.0))
-                    angle = float(np.arccos(cos))
-                    scores[idx] += orientation_weight * (angle / np.pi)
+                # One matmul over the whole bank. Mined banks are 300 deep now,
+                # so a Python loop here runs per pair per frame per env.
+                dirs = approach_dirs_world(obj_pose_world,
+                                           components[: len(scores)])
+                if dirs is not None:
+                    valid = np.isfinite(dirs).all(axis=1)
+                    cos = np.clip(dirs @ tcp_dir, -1.0, 1.0)
+                    angles = np.arccos(cos)
+                    scores[valid] += (
+                        orientation_weight * (angles[valid] / np.pi))
 
     return int(np.argmin(scores))
 
