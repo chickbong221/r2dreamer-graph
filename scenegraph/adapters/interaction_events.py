@@ -244,14 +244,17 @@ class DiscoveryWindow:
 # Grouping
 # --------------------------------------------------------------------------- #
 # Payload fields averaged across a group's selected frames.
-AVERAGED_VECTORS = ("contact_position", "force_vector")
-# Averaged and then renormalized to unit length.
-NORMALIZED_VECTORS = ("contact_normal", "normal_a", "normal_b")
-# Taken from the peak frame alone: an average of two orientations is not an
-# orientation.
-PEAK_FRAME_FIELDS = (
-    "obj_pose", "pose_a", "pose_b", "tcp_pose", "gripper_width",
+AVERAGED_VECTORS = (
+    "contact_position", "force_vector", "anchor_a_local", "anchor_b_local",
 )
+# Averaged and then renormalized to unit length.
+NORMALIZED_VECTORS = ("contact_normal", "normal_a_local", "normal_b_local")
+# Everything else rides through from the anchor frame rather than an allowlist.
+# An allowlist silently drops any field added upstream, and the drop surfaces
+# only as an empty component list several stages later.
+_REDUCED_KEYS = frozenset(AVERAGED_VECTORS) | frozenset(NORMALIZED_VECTORS) | {
+    "force",
+}
 
 GROUP_GAP = 5      # observed steps without the predicate before a group ends
 GROUP_WINDOW = 5   # positive frames averaged, centred on the peak
@@ -330,9 +333,9 @@ def reduce_group(group: "_OpenGroup", mode: str,
         value = _unit(_mean([p.get(key) for p in picked]))
         if value is not None:
             out[key] = value
-    for key in PEAK_FRAME_FIELDS:
-        if key in anchor:
-            out[key] = anchor[key]
+    for key, value in anchor.items():
+        if key not in _REDUCED_KEYS and key not in out:
+            out[key] = value
     return out
 
 

@@ -269,3 +269,71 @@ class MergeTest(MinerTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FinalPresenceTest(MinerTestBase):
+    """A bucket can pass the freeze gate and drift below it by the end."""
+
+    def _drifted(self):
+        drifter = "support / actor:cube / actor:tool"
+        self.write_shard("PullCubeTool-v1", {
+            f"grasp / {EE_KEY} / actor:tool": _grasp(),
+            drifter: _support(),
+        })
+        # Freeze kept it; the full run says 16%.
+        path = next((self.shards / "PullCubeTool-v1").glob("*.pkl"))
+        with open(path, "rb") as f:
+            shard = pickle.load(f)
+        shard["presence"][drifter] = 0.16
+        with open(path, "wb") as f:
+            pickle.dump(shard, f)
+        return drifter
+
+    def test_drifted_bucket_is_dropped_by_the_miner(self):
+        self._drifted()
+        _, wl = self.mine("PullCubeTool-v1")
+        self.assertNotIn("actor:cube", wl["members"])
+
+    def test_it_would_have_been_mined_without_the_recheck(self):
+        drifter = self._drifted()
+        merged = miner.load_shards("PullCubeTool-v1", self.shards)
+        self.assertIn(drifter, miner.usable_buckets(merged, 300, 0.0))
+        self.assertNotIn(drifter, miner.usable_buckets(merged, 300, 0.2))
+
+
+class SilentLossTest(MinerTestBase):
+    """A bucket with evidence but no components means a payload field was
+    lost upstream. Emitting anyway yields a runtime that scores the relation
+    unobserved forever."""
+
+    def test_contact_without_anchors_is_refused(self):
+        stripped = [_sample({k: v for k, v in s["payload"].items()
+                             if not k.startswith("anchor_")})
+                    for s in _obj_contact()]
+        self.write_shard("StackCube-v1", {
+            f"grasp / {EE_KEY} / actor:cubeA": _grasp(),
+            "contact / actor:cubeA / actor:cubeB": stripped,
+        })
+        with self.assertRaises(SystemExit):
+            self.mine("StackCube-v1")
+
+    def test_support_without_endpoint_keys_is_refused(self):
+        stripped = [_sample({k: v for k, v in s["payload"].items()
+                             if k not in ("key_a", "key_b")})
+                    for s in _support()]
+        self.write_shard("StackCube-v1", {
+            f"grasp / {EE_KEY} / actor:cubeA": _grasp(),
+            "support / actor:cubeB / actor:cubeA": stripped,
+        })
+        with self.assertRaises(SystemExit):
+            self.mine("StackCube-v1")
+
+    def test_contain_without_hole_pose_is_refused(self):
+        stripped = [_sample({k: v for k, v in s["payload"].items()
+                             if k != "hole_pose"}) for s in _contain()]
+        self.write_shard("PegInsertionSide-v1", {
+            f"grasp / {EE_KEY} / actor:peg": _grasp(),
+            "contain / actor:box / actor:peg": stripped,
+        })
+        with self.assertRaises(SystemExit):
+            self.mine("PegInsertionSide-v1")

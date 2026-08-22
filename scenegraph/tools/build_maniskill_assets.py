@@ -88,12 +88,23 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
     return merged
 
 
-def usable_buckets(merged: Dict[str, Any], target: int) -> Dict[str, List[Dict]]:
-    """Complete, non-incidental buckets only."""
+def usable_buckets(merged: Dict[str, Any], target: int,
+                   min_presence: float = 0.0) -> Dict[str, List[Dict]]:
+    """Complete, non-incidental buckets only.
+
+    Presence is re-checked here against the whole run. The collector can only
+    judge it at freeze time, over the few dozen episodes discovery took, and a
+    bucket that looked frequent then can drift well below the gate by the end
+    while still filling to target.
+    """
     out, dropped = {}, []
     for bucket, samples in merged["samples"].items():
+        presence = float(merged["presence"].get(bucket, 1.0))
         if bucket in merged["excluded"]:
-            dropped.append((bucket, "incidental"))
+            dropped.append((bucket, "incidental at freeze"))
+        elif min_presence > 0.0 and presence < min_presence:
+            dropped.append(
+                (bucket, f"final presence {presence:.0%} < {min_presence:.0%}"))
         elif len(samples) < target:
             dropped.append((bucket, f"only {len(samples)}/{target}"))
         else:
@@ -314,6 +325,7 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         lambda: {"roles": set(), "interaction_types": set(), "kind": "actor"})
     symmetry = merged["symmetry"]
 
+    empty: List[str] = []
     counts = orientation_counts(merged)
     support_roles = _dominant_orientation(counts, "support")
     contain_roles = _dominant_orientation(counts, "contain")
@@ -332,6 +344,8 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
             members[dst]["roles"].add("interacted")
         elif rel == "contact":
             a_comps, b_comps = _paired_contact(samples)
+            if not a_comps:
+                empty.append(f"{bucket} (no anchor_a_local in payload)")
             objects[src]["contact_components"].extend(a_comps)
             objects[dst]["contact_components"].extend(b_comps)
             for key in (src, dst):
@@ -340,6 +354,8 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         elif rel == "support":
             if support_roles.get(pair) != (src, dst):
                 continue
+            if samples and "key_a" not in samples[0].get("payload", {}):
+                empty.append(f"{bucket} (no key_a in payload)")
             surface, bottom = _support_components(samples, src)
             if surface:
                 objects[src]["support_components"].append(surface)
@@ -352,12 +368,25 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
             if contain_roles.get(pair) != (src, dst):
                 continue
             entry, key_comp = _contain_components(samples)
+            if not entry:
+                empty.append(f"{bucket} (no hole_pose/container_pose)")
             if entry:
                 objects[src]["contain_components"].append(entry)
             if key_comp:
                 objects[dst]["key_components"].append(key_comp)
             for key in (src, dst):
                 members[key]["interaction_types"].add("contain")
+
+    # A bucket with 300 samples that yields no component means the payload
+    # lost a field between collection and here. Emitting the asset anyway
+    # produces a runtime that quietly scores every such relation "unobserved".
+    if empty:
+        raise SystemExit(
+            "these buckets had evidence but produced no components, so "
+            "the payload is missing fields the miner reads: "
+            + "; ".join(empty)
+            + ". Re-collect with the current collector before mining."
+        )
 
     for key, sym in symmetry.items():
         if key in objects and sym.get("symmetry") != "none":
@@ -408,6 +437,9 @@ def parse_args(argv=None):
     p.add_argument("--configs", default=str(CONFIGS))
     p.add_argument("--target", type=int, default=0,
                    help="0 uses the target recorded in the shard")
+    p.add_argument("--min-presence", type=float, default=0.2,
+                   help="drop buckets appearing in fewer than this fraction "
+                        "of successful episodes, measured over the whole run")
     return p.parse_args(argv)
 
 
@@ -415,7 +447,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     merged = load_shards(args.env_id, Path(args.shards))
     target = args.target or merged["target"]
-    buckets = usable_buckets(merged, target)
+    buckets = usable_buckets(merged, target, args.min_presence)
     if not buckets:
         raise SystemExit("no complete buckets; nothing to mine")
     affordances, whitelist = build_assets(merged, buckets, args.env_id)
