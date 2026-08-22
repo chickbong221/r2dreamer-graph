@@ -355,6 +355,7 @@ def collect(args):
     symmetry = dict(recorder.symmetry or {})
     capability = recorder.capability
     bin_stats = recorder.bins.as_dict()
+    bin_samples = recorder.bins.reservoir()
     env.close()
     print(f"\nattempts={attempts} successes={successes} "
           f"rate={successes / max(attempts, 1):.1%}")
@@ -371,11 +372,12 @@ def collect(args):
               "-- likely brushes, not task interactions:")
         for b in incidental:
             print(f"  {store.presence(b):.0%}  {b}")
-    return store, symmetry, capability, bin_stats
+    return store, symmetry, capability, bin_stats, bin_samples
 
 
 def write_shard(store: BucketStore, args, symmetry=None,
-                capability=None, bin_stats=None) -> Path:
+                capability=None, bin_stats=None,
+                bin_samples=None) -> Path:
     out = Path(args.out) / args.env_id
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"shard_{args.shard:03d}.pkl"
@@ -395,6 +397,7 @@ def write_shard(store: BucketStore, args, symmetry=None,
         "complete": [str(b) for b in store.complete_buckets()],
         "symmetry": symmetry or {},
         "bin_stats": bin_stats or {},
+        "bin_samples": bin_samples or {},
         "capability": capability,
         "late": {str(b): n for b, n in store.late.items()},
     }
@@ -434,9 +437,10 @@ def main(argv=None) -> int:
     if args.pilot:
         args.max_attempts = min(args.max_attempts, 25)
         args.patience = 10 ** 6      # never freeze; report what appears
-    store, symmetry, capability, bin_stats = collect(args)
+    store, symmetry, capability, bin_stats, bin_s = collect(args)
     if not args.pilot:
-        write_shard(store, args, symmetry, capability, bin_stats)
+        write_shard(store, args, symmetry, capability, bin_stats,
+                    bin_s)
     return 0
 
 

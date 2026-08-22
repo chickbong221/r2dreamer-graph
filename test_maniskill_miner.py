@@ -353,3 +353,78 @@ class PairedComparisonTest(MinerTestBase):
         self.assertTrue(all(c["partner"] == "actor:cubeB" for c in a))
         b = aff["objects"]["actor:cubeB"]["contact_components"]
         self.assertTrue(all(c["partner"] == "actor:cubeA" for c in b))
+
+
+class QuantileBinTest(MinerTestBase):
+    """Equal-width bins over a max collapse a bimodal distribution; the table
+    origin sits ~0.9m below its own surface, so heights are bimodal."""
+
+    def _bimodal(self):
+        import random
+        rng = random.Random(0)
+        # Half the pairs are object-object (near zero), half object-table.
+        return [rng.gauss(0.03, 0.01) for _ in range(500)] + \
+               [rng.gauss(0.92, 0.02) for _ in range(500)]
+
+    def _mine_with(self, samples, height_max=0.4):
+        self.write_shard("StackCube-v1", {
+            f"grasp / {EE_KEY} / actor:cubeA": _grasp()},
+            bin_stats={"planar_distance": 0.8, "height_offset": height_max,
+                       "planar_distance_change": 0.05,
+                       "height_offset_change": 0.03})
+        path = next((self.shards / "StackCube-v1").glob("*.pkl"))
+        with open(path, "rb") as f:
+            shard = pickle.load(f)
+        shard["bin_samples"] = samples
+        with open(path, "wb") as f:
+            pickle.dump(shard, f)
+        return self.mine("StackCube-v1")[1]["bin_edges"]
+
+    def _labels(self, edges, values):
+        from scenegraph.core.relation_rules import SPATIAL_LABELS, bin_label
+        labels = SPATIAL_LABELS["height-offset"]
+        return [bin_label(v, edges, labels) for v in values]
+
+    def test_quantile_edges_resolve_within_the_object_mode(self):
+        import numpy as np
+        edges = self._mine_with(
+            {"height_offset": np.asarray(self._bimodal(), dtype=np.float32)}
+        )["height-offset"]
+        # A stacked cube (0.02) and an adjacent one (0.05) must differ.
+        stacked, adjacent = self._labels(edges, [0.02, 0.05])
+        self.assertNotEqual(stacked, adjacent)
+
+    def test_max_derived_edges_collapse_the_object_mode(self):
+        """Why this needed fixing: StackCube measured height_offset max 1.134,
+        because the table origin sits 0.92m below its own surface."""
+        edges = self._mine_with({}, height_max=1.134)["height-offset"]
+        stacked, adjacent = self._labels(edges, [0.02, 0.05])
+        self.assertEqual(stacked, adjacent)
+        self.assertEqual(stacked, "level")
+
+    def test_degenerate_statistic_keeps_the_max_scale(self):
+        import numpy as np
+        flat = np.zeros(500, dtype=np.float32)
+        edges = self._mine_with({"height_offset": flat})["height-offset"]
+        self.assertGreater(max(edges), 0.0)
+
+    def test_too_few_samples_keeps_the_max_scale(self):
+        """A thin reservoir gives unstable quantiles, so fall back."""
+        import numpy as np
+        tiny = np.asarray(self._bimodal()[:50], dtype=np.float32)
+        got = self._mine_with({"height_offset": tiny})["height-offset"]
+        self.assertEqual(got, self._mine_with({})["height-offset"])
+
+    def test_reservoirs_concatenate_across_shards(self):
+        import numpy as np
+        from scenegraph.adapters.interaction_events import BinStats
+        b = BinStats()
+        for _ in range(3):
+            b.observe({"a": [0, 0, 0, 1, 0, 0, 0],
+                       "b": [1, 0, 0.5, 1, 0, 0, 0]}, 0)
+        self.assertEqual(len(b.reservoir()["height_offset"]), 3)
+
+    def test_missing_quantiles_fall_back(self):
+        edges = self._mine_with({})
+        self.assertTrue(edges["planar-distance"])
+        self.assertTrue(edges["height-offset"])

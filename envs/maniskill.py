@@ -8,7 +8,7 @@ MS-HAB and ManiSkill remain external simulator dependencies.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -239,6 +239,7 @@ class ManiSkillVecEnv:
         obs, _ = self._env.reset(seed=self._seed)
         obs = self._obs_to_dict(obs)
         self._graph_obs = self._graph.reset() if self._graph is not None else {}
+        self._graph_panel_env: Optional[int] = None
         self._instruction_obs = self._instruction.step()
         self._observation_space = self._build_observation_space(obs)
         action_dim = int(self._env.action_space.shape[-1])
@@ -440,3 +441,17 @@ class ManiSkillVecEnv:
 
     def close(self):
         self._env.close()
+
+
+def graph_panel_source(envs):
+    """The graph builder behind an env stack, or None.
+
+    Eval video only. Returns the object holding ``last_graph_by_env``, which
+    is populated only for envs listed in ``record_env_indices``.
+    """
+    for attr in ("_graph", "graph"):
+        builder = getattr(envs, attr, None)
+        if builder is not None and hasattr(builder, "last_graph_by_env"):
+            return builder
+    inner = getattr(envs, "env", None) or getattr(envs, "_env", None)
+    return graph_panel_source(inner) if inner is not None else None

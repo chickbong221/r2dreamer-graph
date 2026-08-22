@@ -46,7 +46,7 @@ progress:
   # `world_model` path has a validated run.
   source: world_model
   # Weight on the progress advantage inside the actor, after the warm-up.
-  beta: 0.01
+  beta: 0.05
   # Warm-up window in environment steps: beta is 0 below `beta_warmup_start`,
   # ramps linearly to `beta` across the window, and holds `beta` after
   # `beta_warmup_end`. Only beta is scheduled. The progress head and the

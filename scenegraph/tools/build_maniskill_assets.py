@@ -30,6 +30,15 @@ from scenegraph.adapters.contact_geometry import directions_to_local, to_local
 from scenegraph.adapters.interaction_events import EE_KEY
 from scenegraph.core.whitelist import WHITELIST_SCHEMA_VERSION, derive_bin_edges
 
+# Equal-population edges for the five-label scales.
+_EDGE_PROBS = (0.2, 0.4, 0.6, 0.8)
+_QUANTILE_RELATIONS = {
+    "planar_distance": "planar-distance",
+    "height_offset": "height-offset",
+    "planar_distance_change": "planar-distance-change",
+    "height_offset_change": "height-offset-change",
+}
+
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
 AFFORDANCE_SCHEMA_VERSION = 3
@@ -66,6 +75,7 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         "env_id": env_id, "episodes": 0, "target": 0,
         "samples": defaultdict(list), "presence": {}, "excluded": {},
         "symmetry": {}, "bin_stats": defaultdict(float), "capability": None,
+        "bin_samples": defaultdict(list),
         "complete": set(),
     }
     for path in paths:
@@ -78,6 +88,8 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         merged["presence"].update(shard.get("presence") or {})
         merged["excluded"].update(shard.get("excluded") or {})
         merged["complete"] |= set(shard.get("complete") or [])
+        for key, arr in (shard.get("bin_samples") or {}).items():
+            merged["bin_samples"][key].append(np.asarray(arr))
         for key, value in (shard.get("bin_stats") or {}).items():
             merged["bin_stats"][key] = max(merged["bin_stats"][key],
                                            float(value))
@@ -414,10 +426,34 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
                 "kind": "link" if k.startswith("link:") else "actor"}
             for k, v in sorted(members.items())
         },
-        "bin_edges": derive_bin_edges(dict(merged["bin_stats"])),
+        "bin_edges": _bin_edges(merged),
         "episodes": merged["episodes"],
     }
     return affordances, whitelist
+
+
+def _bin_edges(merged: Dict[str, Any]) -> Dict[str, List[float]]:
+    """Quantile edges where the distribution was recorded, max-derived else.
+
+    Equal-width bins over a maximum are wrong for these scenes: the table
+    origin sits ~0.9m below its own surface, so height offsets are bimodal and
+    every object pair lands in one bin. Equal-population edges separate the
+    modes instead of collapsing them, and outliers stop setting the scale.
+    """
+    edges = derive_bin_edges(dict(merged["bin_stats"]))
+    for stat, relation in _QUANTILE_RELATIONS.items():
+        chunks = merged.get("bin_samples", {}).get(stat) or []
+        if not len(chunks):
+            continue
+        values = np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
+        if values.size < 100:
+            continue
+        cut = sorted(float(np.quantile(values, p)) for p in _EDGE_PROBS)
+        # Degenerate when a statistic barely varies; keep the max-derived scale.
+        if len(set(round(c, 9) for c in cut)) < len(cut):
+            continue
+        edges[relation] = cut
+    return edges
 
 
 def write_assets(affordances, whitelist, env_id: str, configs: Path) -> None:

@@ -4,8 +4,40 @@ import tools
 from rssm import LATENT_STATE_KEYS
 
 
-def _observation_frame(trans):
-    """First environment's cameras tiled left-to-right as one RGB frame."""
+def _graph_builder(envs):
+    """Graph builder behind the env stack, or None for non-graph runs."""
+    try:
+        from envs.maniskill import graph_panel_source
+    except Exception:
+        return None
+    try:
+        return graph_panel_source(envs)
+    except Exception:
+        return None
+
+
+def _graph_panel(builder, env_idx, height, colormap):
+    """The node-link diagram for one env as an RGB uint8 array, or None."""
+    if builder is None:
+        return None
+    graph = getattr(builder, "last_graph_by_env", {}).get(env_idx)
+    if graph is None:
+        return None
+    try:
+        from scenegraph.viz.graph_draw import render_graph_array
+        return render_graph_array(graph, colormap=colormap, height=height)
+    except Exception:
+        # Rendering is diagnostic; a broken panel must not end an eval run.
+        return None
+
+
+def _observation_frame(trans, panel_fn=None):
+    """First environment's cameras tiled left-to-right as one RGB frame.
+
+    ``panel_fn(height)`` supplies an extra column -- the graph diagram -- sized
+    from the camera strip itself, so the two views and the graph read as one
+    frame rather than three separate videos.
+    """
     if "image" in trans:
         keys = ["image"]
     else:
@@ -23,7 +55,25 @@ def _observation_frame(trans):
         if frame.ndim != 3 or frame.shape[-1] not in (1, 3):
             continue
         frames.append(frame.detach())
-    return torch.cat(frames, dim=1) if frames else None
+    if not frames:
+        return None
+    ref = frames[0]
+    panel = panel_fn(int(ref.shape[0])) if panel_fn is not None else None
+    if panel is not None:
+        import numpy as np
+
+        arr = np.asarray(panel, dtype=np.uint8)
+        tile = torch.from_numpy(arr).to(ref.device)
+        if ref.dtype.is_floating_point:
+            # Cameras arrive normalised; match them or the panel saturates.
+            tile = tile.to(ref.dtype) / 255.0
+            if float(ref.max()) <= 0.5:
+                tile = tile - 0.5
+        else:
+            tile = tile.to(ref.dtype)
+        if tile.shape[0] == ref.shape[0] and tile.shape[-1] == ref.shape[-1]:
+            frames.append(tile)
+    return torch.cat(frames, dim=1)
 
 
 class OnlineTrainer:
@@ -75,6 +125,17 @@ class OnlineTrainer:
         # cache is only used for video logging / open-loop prediction.
         cache = []
         video_frames = []
+        # Graph panel: masks are only built for envs listed here, so recording
+        # is scoped to the one env whose video is logged.
+        graph_builder = _graph_builder(envs)
+        colormap = None
+        if graph_builder is not None:
+            try:
+                from scenegraph.viz.palette import ColorMap
+                colormap = ColorMap()      # shared, so colours stay stable
+                graph_builder.record_env_indices = {0}
+            except Exception:
+                graph_builder = None
         agent_state = agent.get_initial_state(envs.env_num)
         # (B, A)
         act = agent_state["prev_action"].clone()
@@ -88,7 +149,10 @@ class OnlineTrainer:
             trans, step_done = envs.step(act.detach(), done)
             # dict of (B, 1, *)
             trans = trans.to(agent.device, non_blocking=True)
-            frame = _observation_frame(trans)
+            frame = _observation_frame(
+                trans,
+                (lambda h: _graph_panel(graph_builder, 0, h, colormap))
+                if graph_builder is not None else None)
             if frame is not None:
                 video_frames.append(frame)
             # (B,)
@@ -113,6 +177,10 @@ class OnlineTrainer:
                     log_sums[key] += frame
                     log_maxima[key] = torch.maximum(log_maxima[key], frame)
             once_done |= done
+        if graph_builder is not None:
+            graph_builder.record_env_indices = set()
+            graph_builder.last_graph_by_env.clear()
+            graph_builder.last_masks_by_env.clear()
         # dict of (B, T, *)
         cache = torch.stack(cache, dim=1) if len(cache) else None
         # Its own ``eval/`` namespace rather than ``episode/eval_*``: the two

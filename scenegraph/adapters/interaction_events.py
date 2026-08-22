@@ -397,9 +397,28 @@ class BinStats:
     alone, so "far" would never be reachable and the token would mean nothing.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, reservoir: int = 20000, seed: int = 0) -> None:
         self.maxes: Dict[str, float] = defaultdict(float)
+        # A max alone cannot bin a bimodal distribution: tabletop scenes put
+        # object pairs near zero and table pairs near the table origin, 0.9m
+        # below its own surface, so equal-width bins over the max collapse
+        # both modes into one label. Quantiles adapt to where the data is.
+        self.samples: Dict[str, List[float]] = defaultdict(list)
+        self.seen: Dict[str, int] = defaultdict(int)
+        self.capacity = int(reservoir)
+        self._rng = __import__("random").Random(seed)
         self._prev: Dict[Tuple[str, str], Tuple[float, float]] = {}
+
+    def _record(self, key: str, value: float) -> None:
+        self.maxes[key] = max(self.maxes[key], abs(value))
+        self.seen[key] += 1
+        bucket = self.samples[key]
+        if len(bucket) < self.capacity:
+            bucket.append(float(value))
+            return
+        j = self._rng.randrange(self.seen[key])
+        if j < self.capacity:
+            bucket[j] = float(value)
 
     def new_episode(self) -> None:
         self._prev.clear()
@@ -415,16 +434,12 @@ class BinStats:
             pb = np.asarray(poses[b], dtype=float)
             planar = float(np.linalg.norm(pa[:2] - pb[:2]))
             height = float(pa[2] - pb[2])
-            self.maxes["planar_distance"] = max(
-                self.maxes["planar_distance"], planar)
-            self.maxes["height_offset"] = max(
-                self.maxes["height_offset"], abs(height))
+            self._record("planar_distance", planar)
+            self._record("height_offset", height)
             prev = self._prev.get((a, b))
             if prev is not None:
-                self.maxes["planar_distance_change"] = max(
-                    self.maxes["planar_distance_change"], abs(planar - prev[0]))
-                self.maxes["height_offset_change"] = max(
-                    self.maxes["height_offset_change"], abs(height - prev[1]))
+                self._record("planar_distance_change", planar - prev[0])
+                self._record("height_offset_change", height - prev[1])
             self._prev[(a, b)] = (planar, height)
 
     def merge(self, other: Dict[str, float]) -> None:
@@ -433,3 +448,15 @@ class BinStats:
 
     def as_dict(self) -> Dict[str, float]:
         return {k: float(v) for k, v in self.maxes.items()}
+
+    def reservoir(self) -> Dict[str, Any]:
+        """The raw sample per statistic, as float32.
+
+        The samples travel rather than precomputed quantiles: quantiles cannot
+        be merged across shards -- averaging or overwriting them both give a
+        distribution no worker observed -- while reservoirs concatenate.
+        """
+        import numpy as np
+
+        return {k: np.asarray(v, dtype=np.float32)
+                for k, v in self.samples.items() if v}

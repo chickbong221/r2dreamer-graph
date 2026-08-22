@@ -37,7 +37,7 @@ progress:
   # are both fitted by the time either can move the actor. The control arm for
   # this is `beta: 0.0` with the same losses on, which trains the identical
   # heads and never exposes the actor.
-  beta: 0.01
+  beta: 0.05
   beta_warmup_start: 400000
   beta_warmup_end: 700000
   soft: True
