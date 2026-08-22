@@ -307,3 +307,38 @@ class BundleTest(MinerTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpatialDestinationTest(MinerTestBase):
+    """A goal marker appears in no bucket and therefore in no trace, so the
+    milestone-driven role proposal can never see it."""
+
+    def _with_goal(self):
+        self._write_assets()
+        aff = json.load(open(self.configs / "affordances" / f"{self.ENV}.json"))
+        wl_path = self.configs / "subtask_whitelists" / self.ENV / "task_all.json"
+        wl = json.load(open(wl_path))
+        wl["members"]["actor:goal_site"] = {"interaction_types": []}
+        json.dump(wl, open(wl_path, "w"))
+        return self._bundle([_episode() for _ in range(50)])
+
+    def test_it_is_reported_as_spatial_only(self):
+        bundle = self._with_goal()
+        self.assertEqual(bundle["scorable_clauses"]["spatial_only"],
+                         ["actor:goal_site"])
+
+    def test_it_becomes_a_destination_candidate(self):
+        bundle = self._with_goal()
+        self.assertIn("actor:goal_site",
+                      bundle["proposed_roles"]["destination_candidates"])
+
+    def test_only_spatial_relations_are_scorable_against_it(self):
+        scorable = self._with_goal()["scorable_clauses"]["scorable"]
+        pair = scorable["actor:cubeA / actor:goal_site"]
+        self.assertTrue(pair["planar-distance"])
+        self.assertFalse(pair["contact"])
+        self.assertFalse(pair["support"])
+
+    def test_an_interacting_member_is_not_listed_spatial_only(self):
+        bundle = self._with_goal()
+        self.assertNotIn("actor:cubeA", bundle["scorable_clauses"]["spatial_only"])

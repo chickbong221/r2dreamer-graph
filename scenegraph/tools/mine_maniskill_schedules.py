@@ -398,6 +398,9 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
             }
     return {
         "members": {k: sorted(types(k)) for k in keys},
+        # Admitted for their position only -- a goal marker has no collision
+        # geometry, so it appears in no interaction bucket and no trace.
+        "spatial_only": [k for k in keys if not types(k)],
         "components": {
             k: sorted(field for field in
                       ("grasp_components", "contact_components",
@@ -414,7 +417,8 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # bundle
 # --------------------------------------------------------------------------- #
-def propose_roles(stats: Dict[str, Any]) -> Dict[str, Any]:
+def propose_roles(stats: Dict[str, Any],
+                  spatial_only: Sequence[str] = ()) -> Dict[str, Any]:
     """Candidate roles from the interaction structure alone.
 
     ``movable`` is whatever the end effector grasps; ``destination`` is what the
@@ -440,6 +444,12 @@ def propose_roles(stats: Dict[str, Any]) -> Dict[str, Any]:
         for key in (src, dst):
             if key not in movable and key not in destinations:
                 destinations.append(key)
+    # A spatial-only member produces no milestone, so nothing above can find
+    # it -- and for a task whose goal is a marker it is the only destination
+    # there is.
+    for key in spatial_only:
+        if key not in movable and key not in destinations:
+            destinations.append(key)
     return {
         "movable": movable,
         "destination_candidates": destinations,
@@ -459,6 +469,7 @@ def build_bundle(env_id: str, merged: Dict[str, Any], configs: Path,
         for e in stats.values() if e["is_candidate"]
     ]
     candidates.sort(key=lambda m: stats[" / ".join(m)]["onset"].get("median", 0.0))
+    inventory = clause_inventory(env_id, configs)
     return {
         "_schema_version": BUNDLE_SCHEMA_VERSION,
         "env_id": env_id,
@@ -469,11 +480,12 @@ def build_bundle(env_id: str, merged: Dict[str, Any], configs: Path,
         "candidate_order": [" / ".join(m) for m in candidates],
         "ordering": ordering_stats(traces, candidates, min_order),
         "proposed_phases": propose_phases(traces, stats),
-        "proposed_roles": propose_roles(stats),
+        "proposed_roles": propose_roles(
+            stats, inventory.get("spatial_only", ())),
         "environment_predicates": predicate_stats(traces),
         "environment_scalars": scalar_stats(traces),
         "detector_agreement": detector_agreement(traces, candidates),
-        "scorable_clauses": clause_inventory(env_id, configs),
+        "scorable_clauses": inventory,
         "example_traces": [
             {"interactions": [list(e) for e in (r.get("interactions") or ())],
              "predicates": {k: [list(s) for s in v]

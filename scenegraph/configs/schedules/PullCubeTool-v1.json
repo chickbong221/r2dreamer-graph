@@ -7,8 +7,10 @@
     "reference": "actor:table-workspace"
   },
   "notes": [
-    "No goal entity exists; success is the cube's coordinate passing a threshold. planar-distance(cube, table-workspace) is a proxy: the table origin sits at XY ~(-0.12, 0), essentially the robot base, so the cube closing on it is the pull making progress. Dense signal only, never a success detector -- the environment's dense reward remains responsible for completion. If TableSceneBuilder moves the table origin this clause silently stops meaning anything.",
-    "support-compatibility(cube, l_shape_tool) is deliberately absent: the support bucket was excluded at 15.7% presence, so no components back it and it would score unobserved forever.",
+    "No goal entity exists; success is the cube's coordinate passing a threshold. planar-distance(cube, table-workspace) is a proxy: the table origin sits at XY ~(-0.12, 0), essentially the robot base, so the cube closing on it is the pull making progress. Dense signal only, never a success detector.",
+    "Measured over 5 successful demonstrations, the proxy moves monotonically inward every time but its absolute level does not track success: episodes start at 0.252-0.332 m (4/5 'far', 1/5 already 'medium') and succeed anywhere from 0.245 m ('medium') to 0.065 m ('very-near'). So the pull phase carries only 0.15 -- at the 0.45 it was first given, two equally successful episodes would have differed by 0.30 in terminal Phi*, teaching the head that some successes are worth a third of others. The weight moved to reach_cube, where contact at 99.9% presence makes the endpoint unambiguous.",
+    "The 'medium' rung is deliberately the smallest: one episode in five starts there, so it is partly a starting condition rather than an achievement.",
+    "support-compatibility(cube, l_shape_tool) is absent: the support bucket was excluded at 15.7% presence, so no components back it and it would score unobserved forever.",
     "height-offset is not used for the pull: the cube slides along the table, so its height never changes."
   ],
   "phases": [
@@ -16,7 +18,7 @@
       "name": "approach_tool",
       "src": "ee",
       "dst": "movable",
-      "weight": 0.2,
+      "weight": 0.25,
       "clauses": [
         {
           "relation": "planar-distance",
@@ -28,7 +30,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03
+          "weight": 0.0375
         },
         {
           "relation": "planar-distance",
@@ -39,7 +41,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03
+          "weight": 0.0375
         },
         {
           "relation": "planar-distance",
@@ -49,7 +51,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03
+          "weight": 0.0375
         },
         {
           "relation": "planar-distance",
@@ -58,7 +60,7 @@
           "labels": [
             "very-near"
           ],
-          "weight": 0.03
+          "weight": 0.0375
         },
         {
           "relation": "grasp-compatibility",
@@ -69,7 +71,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.026667
+          "weight": 0.033333
         },
         {
           "relation": "grasp-compatibility",
@@ -79,7 +81,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.026667
+          "weight": 0.033333
         },
         {
           "relation": "grasp-compatibility",
@@ -88,7 +90,7 @@
           "labels": [
             "match"
           ],
-          "weight": 0.026666
+          "weight": 0.033334
         }
       ],
       "completion": {
@@ -125,7 +127,7 @@
       "name": "reach_cube",
       "src": "movable",
       "dst": "destination",
-      "weight": 0.25,
+      "weight": 0.5,
       "clauses": [
         {
           "relation": "planar-distance",
@@ -137,7 +139,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.0625
+          "weight": 0.08
         },
         {
           "relation": "planar-distance",
@@ -148,7 +150,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.0625
+          "weight": 0.08
         },
         {
           "relation": "planar-distance",
@@ -158,7 +160,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.0625
+          "weight": 0.08
         },
         {
           "relation": "planar-distance",
@@ -167,7 +169,37 @@
           "labels": [
             "very-near"
           ],
-          "weight": 0.0625
+          "weight": 0.08
+        },
+        {
+          "relation": "contact-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.06
+        },
+        {
+          "relation": "contact-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.06
+        },
+        {
+          "relation": "contact-compatibility",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.06
         }
       ],
       "completion": {
@@ -181,7 +213,7 @@
       "name": "pull",
       "src": "destination",
       "dst": "reference",
-      "weight": 0.45,
+      "weight": 0.15,
       "clauses": [
         {
           "relation": "planar-distance",
@@ -192,7 +224,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.15
+          "weight": 0.03
         },
         {
           "relation": "planar-distance",
@@ -202,7 +234,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.15
+          "weight": 0.06
         },
         {
           "relation": "planar-distance",
@@ -211,7 +243,7 @@
           "labels": [
             "very-near"
           ],
-          "weight": 0.15
+          "weight": 0.06
         }
       ],
       "completion": {
