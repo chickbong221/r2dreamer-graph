@@ -189,6 +189,7 @@ def spaces():
         "reward": gym.spaces.Box(-np.inf, np.inf, (1,), np.float32),
         "graph_node_ent": gym.spaces.Box(0, 65535, (8,), np.uint16),
         "graph_node_bbox": gym.spaces.Box(-np.inf, np.inf, (8, 2, 4), np.float16),
+        "graph_node_centroid": gym.spaces.Box(-np.inf, np.inf, (8, 3), np.float32),
         "graph_node_target": gym.spaces.Box(0, 1, (8,), np.uint8),
         "graph_edge_src": gym.spaces.Box(0, 7, (168,), np.uint8),
         "graph_edge_dst": gym.spaces.Box(0, 7, (168,), np.uint8),
@@ -432,6 +433,7 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
 
     def test_single_switch_constructs_graph_free_dreamer(self):
         config = make_config(False)
+        config.progress.enabled = False
         obs_space, act_space = spaces()
         model = Dreamer(config, obs_space, act_space).to("cpu")
         self.assertIsNone(model.graph_encoder)

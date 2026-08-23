@@ -316,7 +316,7 @@ class Dreamer(nn.Module):
         # labels, the other to turn observed labels into a scalar target.
         self.progress_scorer = (
             ProgressScorer(
-                load_stages(str(progress_config.stages) if progress_config else ""),
+                load_stages(),
                 int(config.graph.n_abs),
                 int(config.graph.n_rel),
             )

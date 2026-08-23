@@ -167,6 +167,38 @@ class ConfigKeysExistTest(unittest.TestCase):
         self.assertEqual(stale, [])
 
 
+class ModelReadsDeclaredKeysTest(unittest.TestCase):
+    """`progress_config.stages` outlived the key it reads.
+
+    The model reaches into the config through several names -- `config`,
+    `progress_config`, `graph_config` -- so checking only `config.X` missed it.
+    """
+
+    SUBCONFIG = {"progress_config": "progress", "graph_config": "graph",
+                 "rssm_config": "rssm"}
+
+    def test_every_subconfig_read_is_declared(self):
+        base = yaml.safe_load(
+            (CONFIGS / "model" / "_base_.yaml").read_text(encoding="utf-8"))
+        missing = []
+        for name in ("dreamer.py", "graph.py", "rssm.py"):
+            path = ROOT / name
+            for node in ast.walk(tree_of(path)):
+                if not (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)):
+                    continue
+                block = self.SUBCONFIG.get(node.value.id)
+                if block is None:
+                    continue
+                if node.attr.startswith("_"):
+                    continue
+                if node.attr not in base.get(block, {}):
+                    missing.append(f"{name}:{node.lineno}: "
+                                   f"{node.value.id}.{node.attr} "
+                                   f"(not in model.{block})")
+        self.assertEqual(sorted(set(missing)), [])
+
+
 class PresetsExistTest(unittest.TestCase):
     def test_every_selected_group_resolves_to_a_file(self):
         missing = []
