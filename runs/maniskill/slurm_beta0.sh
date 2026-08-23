@@ -2,7 +2,6 @@
 #SBATCH --job-name=r2d-msk-b0
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
-#SBATCH --nodelist=worker-2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=0
