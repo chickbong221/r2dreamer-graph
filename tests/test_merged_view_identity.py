@@ -109,7 +109,7 @@ class MergedViewIdentityTest(unittest.TestCase):
         self.assertIn("actor:frl_apartment_table_02", keys)
 
     def test_canonical_actor_key_still_splits_numbered_assets(self):
-        """Guards against 'fixing' this with a global _\d+$ strip instead."""
+        r"""Guards against 'fixing' this with a global _\d+$ strip instead."""
         self.assertNotEqual(canonical_actor_key("frl_apartment_table_01"),
                             canonical_actor_key("frl_apartment_table_02"))
 

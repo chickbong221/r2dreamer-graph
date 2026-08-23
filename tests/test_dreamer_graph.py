@@ -46,6 +46,10 @@ def make_config(enabled):
 SLOT_EDGES = 16
 
 
+POOLED_NODES = 8
+POOLED_EDGES = 16
+
+
 def make_pooled_config(
     progress=True, progress_scale=1.0, beta=0.05
 ):
@@ -399,7 +403,7 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             config = compose(
                 config_name="configs",
-                overrides=["env=dmc_vision", "model=size50M_graph"],
+                overrides=["env=dmc_vision", "model=size50M_graph_simple"],
             ).model
         self.assertEqual(config.graph.n_max, 8)
         self.assertEqual(config.graph.e_max, 168)
@@ -438,12 +442,12 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         posterior, _ = model._cal_grad(model.preprocess(sequence()), model.rssm.initial(2))
         self.assertEqual(len(posterior), 2)
 
-    def test_progress_requires_a_graph_simple_mode(self):
-        # Full mode has neither a slot table to decode per-candidate relations
-        # from nor a pooled g to run the fused head on.
-        config = make_config(True)
+    def test_progress_requires_the_graph(self):
+        """The potential is read off the graph state; there is nothing to read
+        it from with the graph off."""
+        config = make_config(False)
         config.progress.enabled = True
-        with self.assertRaisesRegex(ValueError, "graph-simple"):
+        with self.assertRaisesRegex(ValueError, "requires graph.enabled"):
             Dreamer(config, *spaces())
 
     def test_preprocess_is_shallow_and_non_mutating(self):

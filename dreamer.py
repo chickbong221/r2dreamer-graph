@@ -281,13 +281,10 @@ class Dreamer(nn.Module):
         self.progress_enabled = bool(
             progress_config is not None and progress_config.enabled
         )
-        if self.progress_enabled and not (
-            self.graph_pooled_simple
-        ):
+        if self.progress_enabled and not self.graph_enabled:
             raise ValueError(
-                "progress.enabled requires a graph-simple mode: slots read "
-                "predicted per-slot relations, pooled reads the fused "
-                "EE->target head on g_hat"
+                "progress.enabled requires graph.enabled: the potential is "
+                "read off the graph state"
             )
         self.progress = None
         self.progress_value = None
