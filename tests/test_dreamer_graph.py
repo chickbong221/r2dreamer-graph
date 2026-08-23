@@ -14,7 +14,7 @@ from tests.test_graph import graph_batch
 
 
 def make_config(enabled):
-    config_dir = str(pathlib.Path(__file__).resolve().parent / "configs")
+    config_dir = str(pathlib.Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base=None, config_dir=config_dir):
         config = compose(
             config_name="configs",
@@ -29,12 +29,9 @@ def make_config(enabled):
                 "model.units=8",
                 "model.depth=2",
                 "model.rssm.blocks=4",
-                "model.rssm.hybrid_stoch=2",
-                "model.rssm.sem_stoch=2",
-                "model.rssm.sem_discrete=3",
+                "model.rssm.stoch=4",
                 "model.graph.units=8",
                 "model.graph.layers=1",
-                "model.graph.app_dim=8",
                 "model.encoder.cnn.depth=2",
                 "model.decoder.cnn.depth=2",
                 "model.encoder.cnn.minres=1",
@@ -50,10 +47,10 @@ SLOT_EDGES = 16
 
 
 def make_pooled_config(
-    progress=True, progress_scale=1.0
+    progress=True, progress_scale=1.0, beta=0.05
 ):
     """The pooled graph-simple preset, shrunk but structurally identical."""
-    config_dir = str(pathlib.Path(__file__).resolve().parent / "configs")
+    config_dir = str(pathlib.Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base=None, config_dir=config_dir):
         config = compose(
             config_name="configs",
@@ -79,6 +76,7 @@ def make_pooled_config(
                 "model.encoder.cnn.minres=1",
                 "model.decoder.cnn.minres=1",
                 f"model.progress.enabled={str(progress).lower()}",
+                f"model.progress.beta={beta}",
                 f"model.loss_scales.progress_model={progress_scale}",
             ],
         ).model
@@ -397,7 +395,7 @@ class PooledGraphSimpleTest(unittest.TestCase):
 
 class DreamerGraphIntegrationTest(unittest.TestCase):
     def test_real_graph_preset_has_capacity_matched_latents(self):
-        config_dir = str(pathlib.Path(__file__).resolve().parent / "configs")
+        config_dir = str(pathlib.Path(__file__).resolve().parents[1] / "configs")
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             config = compose(
                 config_name="configs",

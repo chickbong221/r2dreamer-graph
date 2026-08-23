@@ -33,7 +33,7 @@ import pathlib
 import sys
 from collections import Counter, defaultdict
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scenegraph.core.affordance import canonical_affordance_key  # noqa: E402

@@ -12,7 +12,7 @@ import torch
 from hydra import compose, initialize_config_dir
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from dreamer import Dreamer  # noqa: E402

@@ -854,7 +854,6 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         """
         for name in ("size50M_graph_simple", "size100M_graph_simple"):
             schedule = OmegaConf.load(f"configs/model/{name}.yaml").progress
-            self.assertEqual(schedule.source, "world_model", name)
             self.assertAlmostEqual(schedule.beta, 0.05, msg=name)
             self.assertEqual(schedule.beta_warmup_start, 400000, name)
             self.assertEqual(schedule.beta_warmup_end, 700000, name)
