@@ -159,45 +159,42 @@ class RSSM(nn.Module):
 
         self._obs_net = None
         self._img_net = None
-        # Simple mode's z is stock DreamerV3: q(z | h, o) and p(z | h). g is
-        # excluded from both, so graph information reaches z only through the
-        # transition, one step later.
-        z_sem = 0
-        if True:
-            self._obs_net = nn.Sequential()
-            inp_dim = self._deter + embed_size + z_sem
-            for i in range(self._obs_layers):
-                self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-                self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
-                self._obs_net.add_module(f"obs_net_a_{i}", act())
-                inp_dim = self._hidden
-            self._obs_net.add_module(
-                "obs_net_logit",
-                nn.Linear(inp_dim, self._stoch * self._discrete, bias=True),
-            )
-            self._obs_net.add_module(
-                "obs_net_lambda",
-                LambdaLayer(
-                    lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
-                ),
-            )
+        # z is stock DreamerV3: q(z | h, o) and p(z | h). g is excluded from
+        # both, so graph information reaches z only through the transition.
+        self._obs_net = nn.Sequential()
+        inp_dim = self._deter + embed_size
+        for i in range(self._obs_layers):
+            self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
+            self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._obs_net.add_module(f"obs_net_a_{i}", act())
+            inp_dim = self._hidden
+        self._obs_net.add_module(
+            "obs_net_logit",
+            nn.Linear(inp_dim, self._stoch * self._discrete, bias=True),
+        )
+        self._obs_net.add_module(
+            "obs_net_lambda",
+            LambdaLayer(
+                lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
+            ),
+        )
 
-            self._img_net = nn.Sequential()
-            inp_dim = self._deter + z_sem
-            for i in range(self._img_layers):
-                self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-                self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
-                self._img_net.add_module(f"img_net_a_{i}", act())
-                inp_dim = self._hidden
-            self._img_net.add_module(
-                "img_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete)
-            )
-            self._img_net.add_module(
-                "img_net_lambda",
-                LambdaLayer(
-                    lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
-                ),
-            )
+        self._img_net = nn.Sequential()
+        inp_dim = self._deter
+        for i in range(self._img_layers):
+            self._img_net.add_module(f"img_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
+            self._img_net.add_module(f"img_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._img_net.add_module(f"img_net_a_{i}", act())
+            inp_dim = self._hidden
+        self._img_net.add_module(
+            "img_net_logit", nn.Linear(inp_dim, self._stoch * self._discrete)
+        )
+        self._img_net.add_module(
+            "img_net_lambda",
+            LambdaLayer(
+                lambda x: x.reshape(*x.shape[:-1], self._stoch, self._discrete)
+            ),
+        )
         if self.semantic:
             # Q(h, c) and P(h). Neither reads g_{t-1}: it is already in h.
             self._sem_obs = self._deterministic_head(
@@ -435,15 +432,6 @@ class RSSM(nn.Module):
         dyn = (prior - post.detach()).square().mean(-1)
         rep = (post - prior.detach()).square().mean(-1)
         return dyn, rep
-
-    def semantic_prior_logits(self, deter, post_sem, initial_sem, reset):
-        shifted = torch.cat([initial_sem[:, None], post_sem[:, :-1]], 1)
-        shifted = torch.where(
-            rpad(reset, shifted.dim() - reset.dim()), torch.zeros_like(shifted), shifted
-        )
-        return self._sem_img(
-            torch.cat([deter, shifted.reshape(*shifted.shape[:-2], self.flat_sem)], -1)
-        )
 
     def kl_loss(self, post_logit, prior_logit, free):
         kld = dists.kl

@@ -437,11 +437,43 @@ class Dreamer(nn.Module):
             self._loss_scales.update(
                 {key: recon for key in self.decoder.all_keys})
             modules.update({"decoder": self.decoder})
-        elif self.rep_loss == "r2dreamer":
+        elif self.rep_loss == "r2dreamer" or self.rep_loss == "infonce":
             # add projector for latent to embedding
             self.prj = Projector(self.rssm.feat_size, self.embed_size)
             modules.update({"projector": self.prj})
             self.barlow_lambd = float(config.r2dreamer.lambd)
+        elif self.rep_loss == "dreamerpro":
+            dpc = config.dreamer_pro
+            self.warm_up = int(dpc.warm_up)
+            self.num_prototypes = int(dpc.num_prototypes)
+            self.proto_dim = int(dpc.proto_dim)
+            self.temperature = float(dpc.temperature)
+            self.sinkhorn_eps = float(dpc.sinkhorn_eps)
+            self.sinkhorn_iters = int(dpc.sinkhorn_iters)
+            self.ema_update_every = int(dpc.ema_update_every)
+            self.ema_update_fraction = float(dpc.ema_update_fraction)
+            self.freeze_prototypes_iters = int(dpc.freeze_prototypes_iters)
+            self.aug_max_delta = float(dpc.aug.max_delta)
+            self.aug_same_across_time = bool(dpc.aug.same_across_time)
+            self.aug_bilinear = bool(dpc.aug.bilinear)
+
+            self._prototypes = nn.Parameter(torch.randn(self.num_prototypes, self.proto_dim))
+            self.obs_proj = nn.Linear(self.embed_size, self.proto_dim)
+            self.feat_proj = nn.Linear(self.rssm.feat_size, self.proto_dim)
+            self._ema_encoder = copy.deepcopy(self.encoder)
+            self._ema_obs_proj = copy.deepcopy(self.obs_proj)
+            for param in self._ema_encoder.parameters():
+                param.requires_grad = False
+            for param in self._ema_obs_proj.parameters():
+                param.requires_grad = False
+            self._ema_updates = 0
+            modules.update({
+                "prototypes": self._prototypes,
+                "obs_proj": self.obs_proj,
+                "feat_proj": self.feat_proj,
+                "ema_encoder": self._ema_encoder,
+                "ema_obs_proj": self._ema_obs_proj,
+            })
         # count number of parameters in each module
         for key, module in modules.items():
             if isinstance(module, nn.Parameter):
@@ -509,33 +541,6 @@ class Dreamer(nn.Module):
             if self.progress_schedule is None and self.progress_mode == "task_schedule":
                 progress += " (schedule not attached yet)"
         return (f"rep_loss={self.rep_loss} | graph={graph} | progress={progress}")
-
-    @staticmethod
-    def _presence_metrics(logit, born, persistent, inactive):
-        """Birth calibration that is cheap enough for the update loop.
-
-        Brier, recall at 0.5, the base rate, and the separation between positive
-        and negative probabilities. Ranking metrics (AUROC, AUPRC) and the
-        calibration curve need sorting over accumulated samples and belong in a
-        periodic dump, not here -- they would cost more than the model.
-        """
-        with torch.no_grad():
-            probability = torch.sigmoid(logit.float())
-            positive = born | persistent
-            scored = positive | inactive
-            target = positive.float()
-            weight = scored.float()
-            total = weight.sum().clamp_min(1)
-            return {
-                "presence_brier": (
-                    ((probability - target).square() * weight).sum() / total
-                ),
-                "presence_base_rate": positive.float().sum() / total,
-                "presence_birth_recall": _masked_mean(probability.gt(0.5), born),
-                "presence_birth_prob": _masked_mean(probability, born),
-                "presence_alive_prob": _masked_mean(probability, persistent),
-                "presence_dead_prob": _masked_mean(probability, inactive),
-            }
 
     def _note_optimizer_step(self, stepped):
         """Tolerate warm-up back-off; fail on a loss-scale collapse.
@@ -955,6 +960,8 @@ class Dreamer(nn.Module):
         self._trace_stage_start("preprocess and target update")
         p_data = self.preprocess(data)
         self._update_slow_target()
+        if self.rep_loss == "dreamerpro":
+            self.ema_update()
         self._trace_stage_done("preprocess and target update")
         metrics = {}
         self._diagnose_finite = self._finite_diagnostic_updates > 0
@@ -993,6 +1000,8 @@ class Dreamer(nn.Module):
                 _check_finite_tensors(
                     "gradients before clipping/optimizer step", grads
                 )
+        if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
+            self._prototypes.grad.zero_()
         if self._log_grads:
             old_params = [p.data.clone().detach() for p in self._named_params.values()]
             grads = [p.grad for p in self._named_params.values() if p.grad is not None]  # log grads before clipping
@@ -1167,6 +1176,51 @@ class Dreamer(nn.Module):
             off_diag_mask = ~torch.eye(x1.shape[-1], dtype=torch.bool, device=x1.device)
             redundancy_loss = c[off_diag_mask].pow(2).sum()
             losses["barlow"] = invariance_loss + self.barlow_lambd * redundancy_loss
+        elif self.rep_loss == "infonce":
+            # Contrastive (InfoNCE) objective between projected latent features and encoder embeddings.
+            # (B, T, F) -> (B*T, F)
+            x1 = self.prj(feat[:, :].reshape(B * T, -1))
+            # (B, T, E) -> (B*T, E)
+            x2 = embed.reshape(B * T, -1).detach()  # this detach is important
+            logits = torch.matmul(x1, x2.T)
+            norm_logits = logits - torch.max(logits, 1)[0][:, None]
+            labels = torch.arange(norm_logits.shape[0]).long().to(self.device)
+            losses["infonce"] = torch.nn.functional.cross_entropy(norm_logits, labels)
+        elif self.rep_loss == "dreamerpro":
+            # DreamerPro uses augmentation + EMA targets + Sinkhorn assignment.
+            with torch.no_grad():
+                data_aug = self.augment_data(data)
+                initial_aug = (
+                    # (B, ...) -> (2B, ...)
+                    torch.cat([initial[0], initial[0]], dim=0),
+                    torch.cat([initial[1], initial[1]], dim=0),
+                )
+                ema_proj = self.ema_proj(data_aug)
+
+            embed_aug = self.encoder(data_aug)
+            post_stoch_aug, post_deter_aug, _ = self.rssm.observe(
+                embed_aug, data_aug["action"], initial_aug, data_aug["is_first"]
+            )
+            proto_losses = self.proto_loss(post_stoch_aug, post_deter_aug, embed_aug, ema_proj)
+            losses.update(proto_losses)
+        else:
+            raise NotImplementedError
+        self._trace_stage_done("representation and reconstruction losses")
+
+        # === Reward, continuation and progress heads ===
+        self._trace_stage_start("reward and continuation losses")
+        losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
+        if self._progress_model:
+            losses["progress_model"], progress_model_metrics = self._progress_model_loss(
+                feat, graph_encoding.compact, step_valid
+            )
+            metrics.update(progress_model_metrics)
+        cont = 1.0 - to_f32(data["is_terminal"])
+        losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
+        metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
+        metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
+        self._trace_stage_done("reward and continuation losses")
+
         # === Imagination rollout for actor-critic ===
         # (B*T, S, K), (B*T, D)
         start = (
@@ -1477,12 +1531,119 @@ class Dreamer(nn.Module):
                 data[key] = to_f32(data[key]) / 255.0
         return data
 
+    @torch.no_grad()
+    def augment_data(self, data):
+        data_aug = {k: torch.cat([v, v], axis=0) for k, v in data.items()}
+        # (B, T, H, W, C) -> (B, T, C, H, W)
+        image = data_aug["image"].permute(0, 1, 4, 2, 3)
+        data_aug["image"] = self.random_translate(
+            image,
+            self.aug_max_delta,
+            same_across_time=self.aug_same_across_time,
+            bilinear=self.aug_bilinear,
+        )
+        # (B, T, C, H, W) -> (B, T, H, W, C)
+        data_aug["image"] = data_aug["image"].permute(0, 1, 3, 4, 2)
+        return data_aug
+
+    @torch.no_grad()
+    def ema_update(self):
+        prototypes = F.normalize(self._prototypes, p=2, dim=-1)
+        self._prototypes.data.copy_(prototypes)
+        if self._ema_updates % self.ema_update_every == 0:
+            mix = self.ema_update_fraction if self._ema_updates > 0 else 1.0
+            for s, d in zip(self.encoder.parameters(), self._ema_encoder.parameters()):
+                d.data.copy_(mix * s.data + (1 - mix) * d.data)
+            for s, d in zip(self.obs_proj.parameters(), self._ema_obs_proj.parameters()):
+                d.data.copy_(mix * s.data + (1 - mix) * d.data)
+        self._ema_updates += 1
+
+    def sinkhorn(self, scores):
+        """Sinkhorn-Knopp normalization.
+
+        Notes
+        -----
+        Given a score matrix, we iteratively normalize rows and columns in log
+        space so that the resulting assignment matrix is approximately doubly
+        stochastic.
+        """
+        shape = scores.shape
+        K = shape[0]
+        scores = scores.reshape(-1)
+        log_Q = F.log_softmax(scores / self.sinkhorn_eps, dim=0)
+        log_Q = log_Q.reshape(K, -1)
+        N = log_Q.shape[1]
+        for _ in range(self.sinkhorn_iters):
+            log_row_sums = torch.logsumexp(log_Q, dim=1, keepdim=True)
+            log_Q = log_Q - log_row_sums - math.log(K)
+            log_col_sums = torch.logsumexp(log_Q, dim=0, keepdim=True)
+            log_Q = log_Q - log_col_sums - math.log(N)
+        log_Q = log_Q + math.log(N)
+        Q = torch.exp(log_Q)
+        return Q.reshape(shape)
+
+    def proto_loss(self, post_stoch, post_deter, embed, ema_proj):
+        prototypes = F.normalize(self._prototypes, p=2, dim=-1)
+
+        obs_proj = self.obs_proj(embed)
+        obs_norm = torch.norm(obs_proj, dim=-1)
+        obs_proj = F.normalize(obs_proj, p=2, dim=-1)
+
+        B, T = obs_proj.shape[:2]
+        # (B, T, P) -> (B*T, P)
+        obs_proj = obs_proj.reshape(B * T, -1)
+        obs_scores = torch.matmul(obs_proj, prototypes.T)
+        # (B*T, K) -> (B, T, K) -> (K, B, T)
+        obs_scores = obs_scores.reshape(B, T, -1).permute(2, 0, 1)
+        obs_scores = obs_scores[:, :, self.warm_up :]
+        obs_logits = F.log_softmax(obs_scores / self.temperature, dim=0)
+        obs_logits_1, obs_logits_2 = torch.chunk(obs_logits, 2, dim=1)
+
+        # (B, T, P) -> (B*T, P)
+        ema_proj = ema_proj.reshape(B * T, -1)
+        ema_scores = torch.matmul(ema_proj, prototypes.T)
+        # (B*T, K) -> (B, T, K) -> (K, B, T)
+        ema_scores = ema_scores.reshape(B, T, -1).permute(2, 0, 1)
+        ema_scores = ema_scores[:, :, self.warm_up :]
+        ema_scores_1, ema_scores_2 = torch.chunk(ema_scores, 2, dim=1)
+
+        with torch.no_grad():
+            ema_targets_1 = self.sinkhorn(ema_scores_1)
+            ema_targets_2 = self.sinkhorn(ema_scores_2)
+        ema_targets = torch.cat([ema_targets_1, ema_targets_2], dim=1)
+
+        feat = self.rssm.get_feat(post_stoch, post_deter)
+        feat_proj = self.feat_proj(feat)
+        feat_norm = torch.norm(feat_proj, dim=-1)
+        feat_proj = F.normalize(feat_proj, p=2, dim=-1)
+
+        # (B, T, P) -> (B*T, P)
+        feat_proj = feat_proj.reshape(B * T, -1)
+        feat_scores = torch.matmul(feat_proj, prototypes.T)
+        # (B*T, K) -> (B, T, K) -> (K, B, T)
+        feat_scores = feat_scores.reshape(B, T, -1).permute(2, 0, 1)
+        feat_scores = feat_scores[:, :, self.warm_up :]
+        feat_logits = F.log_softmax(feat_scores / self.temperature, dim=0)
+
+        swav_loss = -0.5 * torch.mean(torch.sum(ema_targets_2 * obs_logits_1, dim=0)) - 0.5 * torch.mean(
+            torch.sum(ema_targets_1 * obs_logits_2, dim=0)
+        )
+        temp_loss = -torch.mean(torch.sum(ema_targets * feat_logits, dim=0))
+        norm_loss = torch.mean(torch.square(obs_norm - 1)) + torch.mean(torch.square(feat_norm - 1))
+
+        return {
+            "swav": swav_loss,
+            "temp": temp_loss,
+            "norm": norm_loss,
+        }
+
     def ema_proj(self, data):
         with torch.no_grad():
             embed = self._ema_encoder(data)
             proj = self._ema_obs_proj(embed)
         return F.normalize(proj, p=2, dim=-1)
 
+    @torch.no_grad()
     def random_translate(self, x, max_delta, same_across_time=False, bilinear=False):
         B, T, C, H, W = x.shape
         x_flat = x.reshape(B * T, C, H, W)

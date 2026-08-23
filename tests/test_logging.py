@@ -39,7 +39,7 @@ class LoggingTest(unittest.TestCase):
             [
                 ("episode/score", 1.0),
                 ("train/loss/dyn", 2.0),
-                ("train/semdyn_raw", 3.0),
+                ("train/graph_align_cos", 3.0),
                 ("train/node_target_acc", 3.5),
                 ("train/node_target_frac", 3.75),
                 ("fps/policy", 4.0),
@@ -55,7 +55,7 @@ class LoggingTest(unittest.TestCase):
         self.assertEqual(
             set(selected),
             {
-                "episode/score", "train/loss/dyn", "train/semdyn_raw",
+                "episode/score", "train/loss/dyn", "train/graph_align_cos",
                 "train/node_target_acc", "train/node_target_frac",
                 "fps/policy", "fps/train", "system/process_ram_gib",
                 "system/process_peak_ram_gib",

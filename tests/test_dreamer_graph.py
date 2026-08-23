@@ -32,6 +32,7 @@ def make_config(enabled):
                 "model.rssm.stoch=4",
                 "model.graph.units=8",
                 "model.graph.layers=1",
+                "model.graph.semantic_dim=8",
                 "model.encoder.cnn.depth=2",
                 "model.decoder.cnn.depth=2",
                 "model.encoder.cnn.minres=1",
@@ -419,15 +420,15 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         action, state = model.act(raw[:, 0].clone(), model.get_initial_state(2))
         self.assertEqual(action.shape, (2, 3))
         self.assertIn("sem", state)
-        self.assertEqual(model.rssm.flat_stoch, 8)
-        self.assertEqual(model.rssm.flat_sem, 6)
+        self.assertEqual(model.rssm.flat_stoch, 16)
+        self.assertEqual(model.rssm.flat_sem, 8)
         self.assertEqual(model._loss_scales["image"], 1.0)
         self.assertEqual(model._loss_scales["state"], 1.0)
         data = model.preprocess(raw)
         initial = model.rssm.initial(2)
         posterior, metrics = model._cal_grad(data, initial)
         self.assertEqual(len(posterior), 3)
-        for key in ("loss/node", "loss/nodetgt", "loss/relabs", "loss/reltemp", "loss/semdyn", "loss/semrep"):
+        for key in ("loss/node", "loss/nodetgt", "loss/relabs", "loss/reltemp", "loss/graphdyn", "loss/graphrep"):
             self.assertIn(key, metrics)
             self.assertTrue(torch.isfinite(metrics[key]))
 
@@ -438,7 +439,9 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         model = Dreamer(config, obs_space, act_space).to("cpu")
         self.assertIsNone(model.graph_encoder)
         self.assertFalse(model.rssm.semantic)
-        self.assertEqual(model.rssm._stoch, 32)
+        self.assertEqual(model.rssm._stoch, 4)
+        self.assertEqual(model.rssm.flat_stoch, 16)
+        self.assertEqual(model.rssm.flat_sem, 0)
         self.assertEqual(model._loss_scales["image"], 1.0)
         self.assertFalse(any(name.startswith("graph_") for name in model._named_params))
         posterior, _ = model._cal_grad(model.preprocess(sequence()), model.rssm.initial(2))

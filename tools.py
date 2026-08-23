@@ -154,12 +154,14 @@ class CudaBenchmark:
 
 
 _WANDB_DIAGNOSTICS = {
-    "train/semdyn_raw",
-    "train/semrep_raw",
-    "train/sem_entropy",
-    "train/node_app_cos",
-    "train/node_bbox_iou",
-    "train/node_vis_acc",
+    # Collapse shows up here first: cosine near one with both variances
+    # falling means the two branches agreed on a constant, not on the graph.
+    "train/graph_align_mse",
+    "train/graph_align_cos",
+    "train/graph_sem_post_var",
+    "train/graph_sem_prior_var",
+    "train/node_ent_acc",
+    "train/node_bbox_loss",
     "train/relabs_acc",
     "train/reltemp_acc",
     "train/node_target_acc",
