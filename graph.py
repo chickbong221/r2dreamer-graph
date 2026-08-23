@@ -207,7 +207,6 @@ class GraphEncoder(nn.Module):
         self.units = int(config.simple_units)
         self.layers = int(config.layers)
         self.n_cams = int(config.n_cams)
-        self.app_dim = int(config.app_dim)
         self.embed_dim = int(config.embed)
         self.reverse_edges = bool(config.reverse_edges)
 
