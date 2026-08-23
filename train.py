@@ -14,7 +14,10 @@ from trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
 sys.path.append(str(pathlib.Path(__file__).parent))
-# torch.backends.cudnn.benchmark = True
+# Conv shapes are fixed here -- one encoder shape, two decoder shapes -- so
+# autotuning pays for itself and does not re-benchmark. Off under
+# `deterministic_run`, which sets it back to False.
+torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision("high")
 
 
