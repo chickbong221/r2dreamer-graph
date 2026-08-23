@@ -378,6 +378,11 @@ class Dreamer(nn.Module):
         self._trace_update = False
         self._trace_update_started = 0.0
         self._trace_stage_started = 0.0
+        # The first update deliberately runs Python timing, printing and finite
+        # checks inside _cal_grad. Dynamo cannot trace those diagnostics (and in
+        # particular may try to format symbolic values), so compile only after
+        # that eager diagnostic update has completed.
+        self._compile_update_pending = bool(config.compile and not self.graph_enabled)
 
         modules = {
             "rssm": self.rssm,
@@ -500,12 +505,19 @@ class Dreamer(nn.Module):
 
         self.train()
         self.clone_and_freeze()
-        if config.compile and not self.graph_enabled:
-            print("Compiling update function with torch.compile...")
-            self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
+        if self._compile_update_pending:
+            print("First update runs eagerly for diagnostics; subsequent updates use torch.compile...")
         elif config.compile and self.graph_enabled:
             print("graph.enabled uses eager real-edge execution; skipping whole-update torch.compile")
         print(f"[arm] {self.arm_summary()}", flush=True)
+
+    def _compile_update_after_diagnostics(self):
+        """Compile the graph-free update after its one eager diagnostic pass."""
+        if not self._compile_update_pending:
+            return
+        print("Compiling subsequent updates with torch.compile...", flush=True)
+        self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
+        self._compile_update_pending = False
 
     def arm_summary(self) -> str:
         """One line naming what this run actually is, read off the resolved
@@ -1025,6 +1037,7 @@ class Dreamer(nn.Module):
                 flush=True,
             )
             self._trace_update = False
+            self._compile_update_after_diagnostics()
         return metrics
 
     def _cal_grad(self, data, initial):

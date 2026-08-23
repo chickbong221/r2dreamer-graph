@@ -1,5 +1,6 @@
 import pathlib
 import unittest
+from unittest import mock
 
 import gymnasium as gym
 import numpy as np
@@ -400,6 +401,23 @@ class PooledGraphSimpleTest(unittest.TestCase):
 
 
 class DreamerGraphIntegrationTest(unittest.TestCase):
+    def test_graph_free_compile_waits_for_the_eager_diagnostic_update(self):
+        config = make_config(False)
+        config.progress.enabled = False
+        config.compile = True
+        with mock.patch("torch.compile") as compile_fn:
+            model = Dreamer(config, *spaces())
+            compile_fn.assert_not_called()
+            eager = model._cal_grad
+            compiled = mock.Mock(name="compiled_cal_grad")
+            compile_fn.return_value = compiled
+
+            model._compile_update_after_diagnostics()
+
+            compile_fn.assert_called_once_with(eager, mode="reduce-overhead")
+            self.assertIs(model._cal_grad, compiled)
+            self.assertFalse(model._compile_update_pending)
+
     def test_real_graph_preset_has_capacity_matched_latents(self):
         config_dir = str(pathlib.Path(__file__).resolve().parents[1] / "configs")
         with initialize_config_dir(version_base=None, config_dir=config_dir):
