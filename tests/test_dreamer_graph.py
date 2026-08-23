@@ -421,7 +421,7 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         self.assertIn("sem", state)
         self.assertEqual(model.rssm.flat_stoch, 8)
         self.assertEqual(model.rssm.flat_sem, 6)
-        self.assertEqual(model._loss_scales["image"], 0.5)
+        self.assertEqual(model._loss_scales["image"], 1.0)
         self.assertEqual(model._loss_scales["state"], 1.0)
         data = model.preprocess(raw)
         initial = model.rssm.initial(2)

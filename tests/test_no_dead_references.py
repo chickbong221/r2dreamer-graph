@@ -199,6 +199,43 @@ class ModelReadsDeclaredKeysTest(unittest.TestCase):
         self.assertEqual(sorted(set(missing)), [])
 
 
+class ConfigDictLiteralKeysTest(unittest.TestCase):
+    """`self._loss_scales.pop("graph_image_recon")` after the key was deleted.
+
+    A config dict copied onto an attribute is read by string literal, which
+    the attribute check above cannot see.
+    """
+
+    DICTS = {"_loss_scales": "loss_scales"}
+
+    def test_every_literal_dict_key_is_declared(self):
+        base = yaml.safe_load(
+            (CONFIGS / "model" / "_base_.yaml").read_text(encoding="utf-8"))
+        missing = []
+        for name in ("dreamer.py", "graph.py", "rssm.py"):
+            path = ROOT / name
+            for node in ast.walk(tree_of(path)):
+                owner = key = None
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("pop", "get")
+                        and isinstance(node.func.value, ast.Attribute)
+                        and node.args
+                        and isinstance(node.args[0], ast.Constant)):
+                    owner, key = node.func.value.attr, node.args[0].value
+                elif (isinstance(node, ast.Subscript)
+                      and isinstance(node.value, ast.Attribute)
+                      and isinstance(node.slice, ast.Constant)):
+                    owner, key = node.value.attr, node.slice.value
+                block = self.DICTS.get(owner)
+                if block is None or not isinstance(key, str):
+                    continue
+                if key not in base.get(block, {}):
+                    missing.append(f"{name}:{node.lineno}: {owner}[{key!r}] "
+                                   f"(not in model.{block})")
+        self.assertEqual(sorted(set(missing)), [])
+
+
 class PresetsExistTest(unittest.TestCase):
     def test_every_selected_group_resolves_to_a_file(self):
         missing = []

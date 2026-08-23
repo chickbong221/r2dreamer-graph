@@ -430,29 +430,12 @@ class Dreamer(nn.Module):
                 self.rssm.flat_stoch,
                 decoder_shapes,
                 flat_sem=self.rssm.flat_sem,
-                # Slot mode passes the attention readout here. Pixels may read
-                # it, never reshape it: reconstruction is the highest-bandwidth
-                # signal in the model and would turn slots into a second visual
-                # latent.
+                # Pixels read the semantic state, never reshape it.
                 detach_sem_cnn=self.graph_simple,
             )
             recon = self._loss_scales.pop("recon")
-            graph_image_recon = self._loss_scales.pop("graph_image_recon")
-            # Simple mode detaches g from the CNN, so pixels can no longer
-            # distort the semantic state and the downweight that protected it
-            # is unnecessary. Keeping stock 1.0 also makes the graph-free arm
-            # directly comparable.
-            use_graph_image_scale = self.graph_enabled and not (
-                self.graph_simple
-            )
-            self._loss_scales.update({
-                key: (
-                    graph_image_recon
-                    if use_graph_image_scale and key in self.decoder.cnn_shapes
-                    else recon
-                )
-                for key in self.decoder.all_keys
-            })
+            self._loss_scales.update(
+                {key: recon for key in self.decoder.all_keys})
             modules.update({"decoder": self.decoder})
         elif self.rep_loss == "r2dreamer":
             # add projector for latent to embedding
@@ -516,22 +499,13 @@ class Dreamer(nn.Module):
         print(f"[arm] {self.arm_summary()}", flush=True)
 
     def arm_summary(self) -> str:
-        """One line naming what this run actually is.
-
-        Which arm you get is spread over four switches -- `graph.enabled`,
-        `progress.enabled` -- and reading
-        them back from a config dump means knowing how they combine. Reading
-        them back from the object that resolved them does not.
-        """
-        if not self.graph_enabled:
-            graph = "off"
-        else:
-            graph = "on"
+        """One line naming what this run actually is, read off the resolved
+        object rather than the config dump."""
+        graph = "on" if self.graph_enabled else "off"
         if not self.progress_enabled:
             progress = "off"
         else:
-            progress = str(self.progress_mode)
-            progress += f" beta={self.progress_beta:g}"
+            progress = f"{self.progress_mode} beta={self.progress_beta:g}"
             if self.progress_schedule is None and self.progress_mode == "task_schedule":
                 progress += " (schedule not attached yet)"
         return (f"rep_loss={self.rep_loss} | graph={graph} | progress={progress}")
