@@ -11,7 +11,7 @@ from scenegraph.adapters.interaction_events import (
 )
 from scenegraph.adapters.maniskill_scene import scene_entities, scene_entity_keys
 from scenegraph.adapters.privileged_state import set_merged_view_aliasing
-from test_merged_view_identity import Actor, _Body, _Scene, _merge
+from tests.test_merged_view_identity import Actor, _Body, _Scene, _merge
 
 
 def _env(scene, actors, ground=None, table=None, robot_links=(), views=()):

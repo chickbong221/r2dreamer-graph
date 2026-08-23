@@ -31,7 +31,7 @@ _GRAPH_CONFIG_KEYS = (
     # ``simple`` alone no longer picks a contract: pooled graph-simple emits
     # boxes and no identity code, slot graph-simple the reverse, so the env has
     # to know the state mode too.
-    "enabled", "simple", "state_mode", "uid_vocab", "mshab_task", "entity_vocab",
+    "enabled", "mshab_task", "entity_vocab",
     "use_target_flag", "object_object_spatial",
     "thresholds_path", "whitelist_dir", "n_max", "e_max",
     "app_dim", "dino_model", "dino_res", "dino_weights", "visibility_policy",
@@ -69,6 +69,44 @@ def camera_obs_key(camera: str) -> str:
     short = (camera[: -len(suffix)] if camera.endswith(suffix)
              else camera.rsplit("_", 1)[-1])
     return "image_" + short
+
+
+def rendered_cameras(env) -> list:
+    """Sensor names this task actually renders, in the task's own order.
+
+    The camera set is a property of the task and the robot it registers -- a
+    bare ``panda`` renders ``base_camera`` alone, ``panda_wristcam`` adds
+    ``hand_camera`` -- so pinning it in config means one number per task to
+    keep in step with ManiSkill, and a silent mismatch when it drifts.
+
+    Read from the initial observation rather than from the sensor registry:
+    that is the same dict ``NamedCameraRGBWrapper`` validates against, so
+    discovery and validation cannot disagree.
+    """
+    base = getattr(env, "unwrapped", env)
+    obs = getattr(base, "_init_raw_obs", None)
+    sensors = (obs or {}).get("sensor_data", None) if obs is not None else None
+    if not sensors:
+        sensors = getattr(base, "_sensors", None)
+    names = [str(name) for name in (sensors or {})]
+    if not names:
+        raise RuntimeError(
+            f"{getattr(base, 'spec', None) and base.spec.id!r} renders no "
+            "sensors, so the graph has no pixels to build nodes from. Name "
+            "cameras explicitly in env.cameras if this task is unusual"
+        )
+    return names
+
+
+def _camera_keys(cameras) -> dict:
+    """``observation key -> camera``, rejecting a set that would lose one."""
+    keys = {camera_obs_key(camera): camera for camera in cameras}
+    if len(keys) != len(cameras):
+        raise ValueError(
+            f"cameras {list(cameras)} collapse to {sorted(keys)}; two cameras "
+            "sharing an observation key would silently drop one"
+        )
+    return keys
 
 
 def is_mshab_task(task_id: str) -> bool:
@@ -136,9 +174,11 @@ class ManiSkillVecEnv:
 
         It differs from training in three ways and nothing else: it reads
         ``eval_split`` rather than ``split``, it takes every build config in
-        that split rather than a prefix, and it runs to ``eval_time_limit``.
-        The observation contract, the graph adapter and the action space are
-        constructed identically, so one agent drives both.
+        that split rather than a prefix, and it runs to ``eval_time_limit``
+        when that is set -- 0 leaves the task's registered horizon alone, so
+        training and evaluation share it. The observation contract, the graph
+        adapter and the action space are constructed identically, so one agent
+        drives both.
         """
         import mani_skill.envs  # noqa: F401 - register ManiSkill tasks
         from mani_skill.utils import gym_utils
@@ -161,18 +201,10 @@ class ManiSkillVecEnv:
             )
         self._device = torch.device(config.device)
         self._seed = int(config.seed)
-        self._camera_names = list(config.cameras)
-        if not self._camera_names:
-            raise ValueError("a graph run needs at least one named camera")
-        self._camera_keys = {
-            camera_obs_key(camera): camera for camera in self._camera_names
-        }
-        if len(self._camera_keys) != len(self._camera_names):
-            raise ValueError(
-                f"cameras {self._camera_names} collapse to "
-                f"{sorted(self._camera_keys)}; two cameras sharing an "
-                "observation key would silently drop one"
-            )
+        # Empty means "whatever this task renders", resolved from the built env
+        # below. Naming cameras here is the override, and MS-HAB uses it: its
+        # scenes carry sensors the graph has no use for.
+        self._camera_names = [str(c) for c in (config.cameras or [])]
 
         task = str(config.task).split("_", 1)[1]
         self._task_id = task
@@ -186,16 +218,25 @@ class ManiSkillVecEnv:
             num_envs=self._num_envs,
             sim_backend=str(config.sim_backend),
             reward_mode=str(config.reward_mode),
-            max_episode_steps=int(
-                (getattr(config, "eval_time_limit", 0) or config.time_limit)
-                if self._eval
-                else config.time_limit
-            ),
             shader_dir=str(config.shader_dir),
         )
-        # Ordinary ManiSkill tasks default to a Panda with no wrist camera, so
-        # a hand view has to be asked for by robot uid rather than configured
-        # as a sensor.
+        # 0 leaves the horizon to the task's own registration -- PickCube's 50,
+        # PegInsertionSide's 100 -- which is what a comparison against a
+        # published ManiSkill number needs. MS-HAB sets both explicitly instead,
+        # because its 100/200 come from mshab's own configs and not from the
+        # registration. `find_max_episode_steps_value` below reads back whichever
+        # applied, so nothing downstream has to know which way it went.
+        horizon = int(
+            (getattr(config, "eval_time_limit", 0) or config.time_limit)
+            if self._eval
+            else config.time_limit
+        )
+        if horizon > 0:
+            make_kwargs["max_episode_steps"] = horizon
+        # Likewise the robot: empty takes the task's default agent, which for
+        # the tabletop tasks is a bare `panda` that renders base_camera only.
+        # A wrist view is a different robot, not a sensor config, so asking for
+        # one here also changes the action space.
         robot_uids = str(getattr(config, "robot_uids", "") or "")
         if robot_uids:
             make_kwargs["robot_uids"] = robot_uids
@@ -272,6 +313,9 @@ class ManiSkillVecEnv:
                     width=self._render_size[1], height=self._render_size[0]
                 )
         env = gym.make(**make_kwargs)
+        if not self._camera_names:
+            self._camera_names = rendered_cameras(env)
+        self._camera_keys = _camera_keys(self._camera_names)
         if bool(config.nonprivileged_obs):
             env = NonPrivilegedObsWrapper(env)
         named = NamedCameraRGBWrapper(env, self._camera_keys)

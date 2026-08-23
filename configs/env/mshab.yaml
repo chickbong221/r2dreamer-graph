@@ -1,9 +1,6 @@
 task: maniskill_PickSubtaskTrain-v0
 steps: 1e7
 env_num: 126
-# Doubles as the eval env count: the eval loop runs exactly one episode per
-# env, so this is also the episode count. Match it to the number of build
-# configs to cover each scene once. 0 builds no eval env and skips evaluation.
 eval_episode_num: 10
 action_repeat: 1
 train_ratio: 64
@@ -12,28 +9,16 @@ time_limit: 100
 seed: ${seed}
 device: ${device}
 
-# The end-effector-to-target ladder. MS-HAB designates a subtask target,
-# so the built-in table applies and no compiled schedule is needed.
 progress_mode: ee_target
 
 mshab_task: set_table
-# Names the MS-HAB task-plan file, `task_plans/<mshab_task>/pick/<split>/
-# <mshab_obj>.json`, and through it which whitelist the runtime resolves:
-# `024_bowl` binds `pick_024_bowl.json`, which admits the bowl and the counter
-# drawer it sits in. `all` widens the scene set to every pick target in the
-# group. Relation bins always come from the union file regardless, so the two
-# share one interpretation of "near".
 mshab_obj: 024_bowl
 split: train
 eval_split: train
 eval_num_build_configs: ${env.num_build_configs}
 eval_time_limit: 200
 
-# Eval video only. `env.render()` returns the task's third-person
-# render_camera, which no policy ever reads, so it is sized for watching rather
-# than for the encoder's 112x112. [] keeps the task default.
 eval_render_size: [512, 512]
-# Eval only. 0 pins the scene set instead of reconfiguring per reset.
 eval_reconfiguration_frequency: 0
 num_build_configs: 10
 obs_mode: rgb+segmentation
@@ -42,7 +27,7 @@ control_mode: ''
 reward_mode: normalized_dense
 shader_dir: minimal
 nonprivileged_obs: false
-sim_config: {}  # merged into ManiSkill's SimConfig, e.g. gpu_memory_config
+sim_config: {}
 size: [112, 112]
 cameras: [fetch_head, fetch_hand]
 instruction_table: scenegraph/configs/instructions.npz
@@ -56,42 +41,13 @@ decoder:
 
 graph:
   enabled: ${model.graph.enabled}
-  # True: relation-only contract. No appearance or bbox keys are produced,
-  # stored or sampled, and DINO is never constructed.
-  simple: ${model.graph_simple}
-  # Which simple contract. pooled emits graph_node_bbox and no UID; slots emit
-  # graph_node_uid and no boxes. The adapter cannot derive this from `simple`.
-  state_mode: ${model.graph.state_mode}
-  uid_vocab: ${model.graph.uid_vocab}
-  # Which task group's mined assets to load. The affordance file and the
-  # whitelist directory are both namespaced by it, so this must track
-  # env.mshab_task or the run reads another task's scene description.
   mshab_task: ${env.mshab_task}
-  # Checked against the mined whitelist vocabulary at startup. The model sizes
-  # its entity embedding from this, and re-mining a task group changes how many
-  # entities exist, so a stale value shows up as a device-side assert deep in
-  # the RSSM rather than anywhere near the cause.
   entity_vocab: ${model.graph.entity_vocab}
   thresholds_path: ''
   whitelist_dir: ''
-  # The node/edge contract follows the model config. Every arm pins the same
-  # 8/168. Overflow now raises rather than truncating, so these have to be
-  # large enough for the scene, not merely plausible.
-  # False: no subtask target. Row 1 is not reserved,
-  # graph_node_target stays zero, and the progress critic must
-  # be disabled with it.
   use_target_flag: true
-  # Off: the MS-HAB ladder is end-effector-to-target, so these would be new
-  # facts in a branch nothing asked to change.
   object_object_spatial: false
-  # projected_camera: a retained node stays relational while a camera covers
-  # the space it occupies, whether or not pixels survived the robot arm.
-  # Outside both frustums it keeps its row and centroid but emits no facts.
   visibility_policy: projected_camera
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
-  app_dim: ${model.graph.app_dim}
-  dino_model: dinov2_vits14_reg
-  dino_res: 112
-  dino_weights: ''
   bypass_teemo: false

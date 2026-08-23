@@ -36,8 +36,7 @@ def main():
 
     overrides = [
         "env=mshab",
-        "model=size50M_graph",
-        "model.graph.enabled=false",
+        "model=size50M",
         f"env.obs_mode={args.obs_mode}",
         f"env.env_num={args.num_envs}",
         f"env.num_build_configs={args.build_configs}",

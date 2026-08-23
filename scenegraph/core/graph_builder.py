@@ -37,75 +37,9 @@ VISIBILITY_PROJECTED = "projected_camera"
 VISIBILITY_KEEP = "keep_tabletop"
 VISIBILITY_POLICIES = frozenset({VISIBILITY_PROJECTED, VISIBILITY_KEEP})
 
-UID_PAD = 0
-UID_EE = 1
-_UID_FIRST_OBJECT = 2
-# UIDs are packed as uint8, the narrowest dtype holding the vocabulary and the
-# one the replay buffer can index. Wider integer types are not universally
-# supported there -- torchrl's index_put has no uint16 kernel.
-UID_VOCAB_MAX = 256
-
 # Targetless (normal ManiSkill) whitelist: <dir>/task_all.json.
 TASK_LEVEL_SUBTASK = "task"
 TASK_LEVEL_TARGET = "all"
-
-
-class EpisodeUIDs:
-    """Episode-scoped object identity, independent of the compact slot.
-
-    The vertex registry releases and reuses slots, so a slot cannot name an
-    object across frames. A UID can: it is allocated on first sight, survives
-    the object leaving the view, and is never handed to a second object before
-    the episode ends.
-
-    Codes are drawn in a per-episode random order so a UID carries no meaning
-    beyond "the same object as before" -- a fixed mapping would let the model
-    memorise simulator identities across episodes.
-    """
-
-    def __init__(self, uid_vocab: int, seed: int = 0):
-        self.uid_vocab = int(uid_vocab)
-        if self.uid_vocab <= _UID_FIRST_OBJECT:
-            raise ValueError(
-                f"uid_vocab={self.uid_vocab} leaves no object codes; "
-                f"codes {UID_PAD} and {UID_EE} are reserved"
-            )
-        if self.uid_vocab > UID_VOCAB_MAX:
-            raise ValueError(
-                f"uid_vocab={self.uid_vocab} exceeds {UID_VOCAB_MAX}; "
-                "graph_node_uid is packed as uint8. Widening it means "
-                "changing the packed dtype, and the replay buffer has no "
-                "uint16 index_put kernel -- use int32 if you truly need more."
-            )
-        self._rng = np.random.default_rng(seed)
-        self._codes: Dict[str, int] = {}
-        self._free: List[int] = []
-        self.reset()
-
-    def reset(self) -> None:
-        self._codes.clear()
-        pool = np.arange(_UID_FIRST_OBJECT, self.uid_vocab)
-        self._free = [int(code) for code in self._rng.permutation(pool)]
-
-    def __len__(self) -> int:
-        return len(self._codes)
-
-    def uid_for(self, node_id: str, *, is_ee: bool = False) -> int:
-        if is_ee:
-            return UID_EE
-        uid = self._codes.get(node_id)
-        if uid is not None:
-            return uid
-        if not self._free:
-            raise RuntimeError(
-                f"episode exhausted uid_vocab={self.uid_vocab}; raise "
-                "model.graph.uid_vocab above the peak "
-                "episode/graph_episode_entities. Reusing a code would "
-                "silently merge two objects."
-            )
-        uid = self._free.pop()
-        self._codes[node_id] = uid
-        return uid
 
 
 class GraphBuilder:
@@ -119,10 +53,6 @@ class GraphBuilder:
         camera: Optional[str] = None,
         camera_order: Optional[List[str]] = None,
         visibility_policy: str = VISIBILITY_KEEP,
-        uid_vocab: int = 256,
-        appearance_enabled: bool = True,
-        bbox_enabled: bool = True,
-        uids_enabled: bool = True,
         use_target_flag: bool = True,
     ):
         self.env = env
@@ -139,16 +69,12 @@ class GraphBuilder:
         self.visibility_policy = visibility_policy
         # Two switches, not one. The pooled relation contract wants boxes and
         # no patch coverage; appearance implies both.
-        self.appearance_enabled = bool(appearance_enabled)
-        self.bbox_enabled = bool(bbox_enabled)
         # Episode-random identity codes exist for slot alignment only. The
         # pooled contract addresses nodes by their box, so nothing assigns or
         # packs a UID there.
-        self.uids_enabled = bool(uids_enabled)
         # False: no subtask target exists, so no whitelist is
         # bound per target and no row is reserved.
         self.use_target_flag = bool(use_target_flag)
-        self.uids = EpisodeUIDs(uid_vocab, seed=1000 + int(env_idx))
 
         self.temporal = TemporalBuffer(K=cfg["temporal"]["K"])
         self.selector = NodeSelector(cfg)
@@ -176,9 +102,6 @@ class GraphBuilder:
         # Last frame's relation-eligible vertex count, for logging only.
         self.last_in_frame: int = 0
 
-    def _uid_for(self, node: Node) -> int:
-        return self.uids.uid_for(node.node_id, is_ee=node.node_type == "ee")
-
     def reset_episode(self) -> None:
         self.selector.reset_episode()
         self.registry.reset_episode()
@@ -191,7 +114,6 @@ class GraphBuilder:
             self._coverage.invalidate()
         self.cfg.setdefault("_affordance_selection_cache", {}).clear()
         self._whitelist_key = None
-        self.uids.reset()
 
     def _bind_global_bin_edges(self, subtask: str) -> None:
         """One relation-bin set per subtask, taken from the union asset.
@@ -486,8 +408,7 @@ class GraphBuilder:
             camera_order=self.camera_order,
             need_masks=need_masks,
             patch_grid=patch_grid,
-            appearance=self.appearance_enabled,
-            bbox=self.bbox_enabled,
+            appearance=False,
             # Recording paths keep full masks/nodes for overlays; the training
             # hot path skips node construction for never-admissible entities.
             admit=None if need_masks else self._entity_admitted,
@@ -537,11 +458,6 @@ class GraphBuilder:
                 active_subtask=state.active_subtask_type,
                 active_obj_id=state.active_obj_id,
                 active_target_node_id=active_target_node_id,
-                node_uids=(
-                    {n.node_id: self._uid_for(n) for n in ordered}
-                    if self.uids_enabled
-                    else {}
-                ),
                 n_objects=sum(1 for n in ordered if n.node_type == "object"),
                 n_visible=sum(1 for n in ordered if n.visible),
                 n_in_frame=sum(1 for n in ordered if n.in_frame),

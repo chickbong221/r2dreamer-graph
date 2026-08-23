@@ -18,6 +18,6 @@ do
         device=cuda:0 \
         buffer.storage_device=cuda:0 \
         model.rep_loss=${METHOD} \
-        model=size200M \
+        model=size100M \
         seed=$seed
 done

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-msk-b0
+#SBATCH --job-name=r2d-msk-base
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --nodelist=worker-2
@@ -9,9 +9,18 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Control arm. Every loss is on and both progress heads train exactly as
-# in the other arm; beta=0 only keeps the progress advantage out of the
-# actor, so any difference between the arms is the shaping and nothing else.
+# Graph-free control: pure DreamerV3.
+#
+# `size50M` and `size50M_graph_simple` are identical on every RSSM setting
+# -- deter, hidden, units, depth, discrete, act, norm -- so the plain preset
+# is already the matched control and needs no graph overrides at all. It
+# carries no graph block and no progress block, so both are off by
+# construction rather than by being switched off.
+#
+# rep_loss defaults to `dreamer`. Add model.rep_loss=r2dreamer to this
+# command for the relational-contrastive variant instead.
+#
+# obs_mode drops to rgb: nothing here consumes segmentation.
 #
 # Six tabletop tasks, one after another. No plans, no spawn data, no scene
 # builder: ordinary ManiSkill, so the robot, the camera set and the episode
@@ -23,7 +32,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: beta=0 (progress heads train, actor never sees them)"
+echo "Arm: baseline (pure DreamerV3, no graph, no progress)"
 echo "================================="
 
 # Activate conda
@@ -75,57 +84,57 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_PlaceSphere-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PlaceSphere-v1 \
-  wandb.name=PlaceSphere-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlaceSphere-v1-beta0
+  wandb.name=PlaceSphere-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlaceSphere-v1-baseline
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_PullCubeTool-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PullCubeTool-v1 \
-  wandb.name=PullCubeTool-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-beta0
+  wandb.name=PullCubeTool-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-baseline
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_PickCube-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PickCube-v1 \
-  wandb.name=PickCube-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-beta0
+  wandb.name=PickCube-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-baseline
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_StackCube-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_StackCube-v1 \
-  wandb.name=StackCube-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-beta0
+  wandb.name=StackCube-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-baseline
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_PegInsertionSide-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PegInsertionSide-v1 \
-  wandb.name=PegInsertionSide-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-beta0
+  wandb.name=PegInsertionSide-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-baseline
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
   env.task=maniskill_PlugCharger-v1 \
-  model.progress.beta=0.0 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PlugCharger-v1 \
-  wandb.name=PlugCharger-v1-beta0 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-beta0
+  wandb.name=PlugCharger-v1-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-baseline
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

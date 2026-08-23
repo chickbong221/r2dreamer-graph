@@ -1,78 +1,46 @@
-# Normal ManiSkill (non-MS-HAB) tabletop tasks.
-#
-# Two things differ from mshab.yaml and nothing else does: there is no language
-# instruction, and there is no subtask target. The second used to mean no
-# shaping at all, because the only scorer read end-effector-to-target facts.
-# progress.mode=task_schedule replaces that with a compiled phase schedule over
-# whichever role pair each phase names, so a targetless run is shaped after all.
 task: maniskill_PickCube-v1
-steps: 1e7
-env_num: 126
+steps: 4e6
+env_num: 200
 eval_episode_num: 10
 action_repeat: 1
 train_ratio: 64
-time_limit: 100
+time_limit: 0
 
 seed: ${seed}
 device: ${device}
 
-eval_time_limit: 200
+eval_time_limit: 0
 
-# Eval video only. `env.render()` returns the task's third-person
-# render_camera, which no policy ever reads, so it is sized for watching rather
-# than for the encoder's 112x112. [] keeps the task default.
 eval_render_size: [512, 512]
 obs_mode: rgb+segmentation
 sim_backend: gpu
-control_mode: ''
+control_mode: pd_joint_delta_pos
 reward_mode: normalized_dense
 shader_dir: minimal
 nonprivileged_obs: false
 sim_config: {}
 size: [112, 112]
-# Ordinary ManiSkill tasks default to a bare Panda, which renders base_camera
-# only. The wrist view is what makes fine alignment learnable, and it comes
-# from the robot uid rather than a sensor config.
-robot_uids: panda_wristcam
-cameras: [base_camera, hand_camera]
+robot_uids: ''
+cameras: []
 
-# No instruction key: the encoder reads state only.
 encoder:
   mlp_keys: '^state$'
-  cnn_keys: '^image_(base|hand)$'
+  cnn_keys: '^image_'
 decoder:
   mlp_keys: '^state$'
-  cnn_keys: '^image_(base|hand)$'
+  cnn_keys: '^image_'
 
-# Targetless, but not shaping-free: the schedule scores arbitrary role pairs
-# rather than end-effector-to-target, so no goal row is needed. Read by
-# model.progress.mode; the rest of the progress block lives with the model
-# because it is about the head, not the task.
 progress_mode: task_schedule
 
 graph:
   enabled: ${model.graph.enabled}
-  simple: ${model.graph_simple}
-  state_mode: ${model.graph.state_mode}
-  uid_vocab: ${model.graph.uid_vocab}
-  # Names the mined asset tree, not an MS-HAB task plan.
   mshab_task: ${env.task}
   entity_vocab: ${model.graph.entity_vocab}
   use_target_flag: false
-  # Object-to-object planar distance and height offset. A carry phase is
-  # "cube A approaches cube B"; without these the only distance in the graph
-  # is from the gripper, which stops tracking the object once it is released.
   object_object_spatial: true
   thresholds_path: ''
   whitelist_dir: ''
-  # keep_tabletop: every retained node is relational. These scenes are small
-  # and fully covered, and an object hidden inside a hole is the state the task
-  # is about -- its position comes from the simulator, not from the pixels.
   visibility_policy: keep_tabletop
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}
-  app_dim: ${model.graph.app_dim}
-  dino_model: dinov2_vits14_reg
-  dino_res: 112
-  dino_weights: ''
   bypass_teemo: false

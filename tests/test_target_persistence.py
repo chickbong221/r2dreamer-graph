@@ -13,7 +13,6 @@ from typing import Optional
 import numpy as np
 
 from scenegraph.adapters.graph_pack import (
-    SCHEMA_SIMPLE_POOLED,
     _row_assignment,
     pack_graph,
 )
@@ -96,8 +95,7 @@ def _vocab(names):
 
 def _pack(graph, names, n_max=N_MAX):
     return pack_graph(
-        graph, _vocab(names), n_max=n_max, e_max=E_MAX, n_cams=2, app_dim=4,
-        schema=SCHEMA_SIMPLE_POOLED, uid_vocab=256,
+        graph, _vocab(names), n_max=n_max, e_max=E_MAX, n_cams=2,
     )
 
 

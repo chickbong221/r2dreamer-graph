@@ -4,86 +4,20 @@ imag_horizon: 15
 horizon: 333
 lamb: 0.95
 compile: True
-# bfloat16 keeps float32's exponent range and spends the difference out of the
-# mantissa, so gradients cannot leave the representable range and no loss
-# scaling is needed. Tensor cores accumulate in float32 either way and run both
-# dtypes at the same throughput, so the coarser mantissa costs nothing
-# measurable here while the scaler's skipped steps and collapse floor go away.
 amp_dtype: bfloat16
-# float16 only. GradScaler's initial loss scale; lower it to skip the warm-up
-# back-off. Ignored under bfloat16, which builds no scaler at all.
 grad_scale_init: 65536
 log_grads: False
 device: ${device}
-rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
-graph_only_latent: False
-# Relation-only graph: no appearance/bbox anywhere, deterministic g that never
-# gates z, and a stock DreamerV3 z branch. Drops the app/bbox replay keys.
-graph_simple: False
-
-# End-effector-to-target shaping, read from *predicted* slot relations. Kept off
-# by default: it is a separate contribution from slot dynamics and the paper
-# comparison needs the two measured apart.
+rep_loss: dreamer
 progress:
   enabled: False
-  # Where the imagined potential comes from. Both paths read the same stage
-  # table and both produce a potential in [0, 1]; they differ in what is
-  # learned and what it is learned from.
-  #
-  #   world_model:   one bounded scalar head on the world-model feature,
-  #                  regressed onto the potential computed from the *observed*
-  #                  EE->target labels in replay. Continuity comes from the
-  #                  regression, and an occluded target still has a target
-  #                  because the graph builder retains it.
-  #   relation_head: the original fused EE->target relation head on g_hat,
-  #                  scored through the stage table during imagination.
-  #                  Continuity comes from label uncertainty, and an occluded
-  #                  target supervises nothing.
-  #
-  # Kept side by side rather than swapped so the two can be compared in one
-  # codebase, and so `beta: 0` under `relation_head` reproduces the old runs
-  # exactly. The `relation_head` path is scheduled for removal once the
-  # `world_model` path has a validated run.
-  source: world_model
-  # Which target the head is regressed onto.
-  #   ee_target:     the built-in end-effector-to-target stage table. MS-HAB.
-  #   task_schedule: a compiled per-task phase schedule over arbitrary role
-  #                  pairs, with cumulative credit. Normal ManiSkill. Needs
-  #                  progress.schedule_dir and one file per task.
-  #
-  # Which one applies is a property of the environment, not the model size, so
-  # it is read from `env.progress_mode`. Envs that never asked for shaping do
-  # not declare it and take the default.
   mode: ${oc.select:env.progress_mode,ee_target}
   schedule_dir: scenegraph/configs/schedules
-  # Weight on the progress advantage inside the actor, after the warm-up.
   beta: 0.05
-  # Warm-up window in environment steps: beta is 0 below `beta_warmup_start`,
-  # ramps linearly to `beta` across the window, and holds `beta` after
-  # `beta_warmup_end`. Only beta is scheduled. The progress head and the
-  # progress critic train from step 0; both read detached inputs on the actor
-  # path, so a warm-up spent fitting them costs the actor nothing. The window
-  # is there to let them fit before either can steer behaviour.
-  # `start == end` disables the warm-up.
   beta_warmup_start: 400000
   beta_warmup_end: 700000
-  # Floor on the inter-quantile spread the progress advantage is divided by.
-  # The environment critic's floor of 1.0 is wrong here: the progress return
-  # is a potential in [0, 1], so its spread is far below one and a floor of
-  # one would rescale the term rather than normalise it. This value only binds
-  # when the potential is nearly constant, which is when the advantage should
-  # be small anyway -- set it from `progress/target_std` on a beta-zero
-  # diagnostic run rather than from the nominal range.
   return_min_scale: 0.01
-  # Empty uses the built-in Pick stages. A path loads a compiled JSON stage
-  # table instead; there are no runtime LLM calls either way.
-  stages: ''
-  # Only meaningful under `source: relation_head`, where the potential is a
-  # contraction over predicted label distributions. The world-model head
-  # predicts the scalar directly and has no hard/soft distinction.
   soft: True
-  # Bounded scalar head on the world-model feature. Sits beside the reward
-  # head and mirrors its trunk; one sigmoid output instead of a twohot.
   head:
     layers: 1
     units: ${model.units}
@@ -104,9 +38,7 @@ slow_target_fraction: 0.02
 
 loss_scales:
   barlow: 0.05
-  infonce: 1.0
   recon: 1.0
-  graph_image_recon: 0.5
   rew: 1.0
   con: 1.0
   dyn: 1.0
@@ -114,53 +46,19 @@ loss_scales:
   policy: 1.0
   value: 1.0
   repval: 0.3
-  swav: 1.0
-  temp: 1.0
-  norm: 1.0
   node: 1.0
   relabs: 1.0
   reltemp: 1.0
   nodetgt: 1.0
-  # Categorical semantic mode.
-  semdyn: 1.0
-  semrep: 0.1
-  # Deterministic semantic mode. Same forward value; the asymmetry is the
-  # weighting, and graphrep is small because it also reaches the encoder.
   graphdyn: 1.0
   graphrep: 0.05
-  # Slot mode. graphdyn/graphrep have no meaning here: there is no single g to
-  # align, so the dynamics are supervised slot-wise instead.
-  slotdyn: 1.0
-  slotalive: 1.0
-  prior_nodetgt: 1.0
-  prior_progress_relabs: 1.0
   progress_value: 1.0
-  # Regression of the bounded progress head onto the observed stage ladder.
-  # Zero switches the world-model progress path off entirely, the same way
-  # every other head here is keyed by its scale rather than by a flag.
   progress_model: 1.0
-
 r2dreamer:
   lambd: 5e-4
 
-dreamer_pro:
-  warm_up: 1
-  num_prototypes: 2500
-  proto_dim: 32
-  temperature: 0.1
-  sinkhorn_eps: 0.05
-  sinkhorn_iters: 3
-  ema_update_every: 1
-  ema_update_fraction: 0.05
-  freeze_prototypes_iters: 10000
-  aug:
-    max_delta: 3.0
-    same_across_time: True
-    bilinear: True
-
 rssm:
   stoch: 32
-  hybrid_stoch: 14
   deter: ${model.deter}
   hidden: ${model.hidden}
   discrete: ${model.discrete}
@@ -173,77 +71,30 @@ rssm:
   unimix_ratio: 0.01
   initial: 'learned'
   device: ${device}
-  sem_stoch: 18
-  sem_discrete: ${model.discrete}
-  graph_only_stoch: 32
-  graph_only_discrete: ${model.discrete}
   sem_layers: 1
 
 graph:
   enabled: False
-  simple: ${model.graph_simple}
-  # pooled: the frozen comparison baseline. One attention-pooled token becomes
-  # the single semantic vector g, exactly as shipped.
-  # slots: no pooling anywhere in the dynamics. The GNN's n_max node vectors are
-  # the semantic state, aligned across time by UID. Requires simple=True.
-  state_mode: pooled
-  n_max: 8    # end effector plus seven object slots
-  # Not a full-graph ceiling. With object-object planar distance and height
-  # offset a saturated graph needs C(7,2)*8 + 7*6 = 210; 168 covers the scenes
-  # actually run, since MS-HAB whitelists admit a handful of entities and the
-  # tabletop tasks hold a table plus two objects. Overflow raises, so a wrong
-  # value fails loudly rather than silently dropping facts.
+  n_max: 8
   e_max: 168
-  # Slot mode only. Six 256-wide slots are 1,536 values -- small enough to feed
-  # the deterministic transition directly instead of a summary of them.
-  slot_dim: 256
-  slot_mixer_layers: 1
-  slot_heads: 4
-  # False: presence is predicted and supervised but never consumed, so
-  # imagination carries occupancy forward unchanged -- the persistent-only
-  # baseline. True: birth proposals, observation matching, and straight-through
-  # predicted presence during imagination.
-  slot_births: False
   n_cams: 2
-  app_dim: 384
   entity_vocab: 14
   n_rel: 11
-  n_abs: 19          # 17 physical/spatial/affordance + 2 directional
+  n_abs: 19
   n_temp: 6
   layers: 2
   units: ${model.units}
   embed: 64
-  app: 64
   bbox: 8
   bbox_beta: 0.1
-  # World-frame normalisation for graph_node_centroid, pooled schema only:
-  # (centroid - origin) / scale. Fixed bounds, not batch statistics -- the same
-  # object in the same place has to encode identically in every episode, and a
-  # running normaliser would make a stationary target's position drift as the
-  # batch changes. The default spans a ReplicaCAD-sized apartment; a scalar is
-  # broadcast to all three axes.
   centroid_origin: [0.0, 0.0, 0.0]
   centroid_scale: 5.0
   reverse_edges: True
   act: ${model.act}
-  # Simple modes. simple_units is the GNN width and also the pooled token
-  # width; the posterior Q([h, c]) projects that token to semantic_dim, so the
-  # two are already independent and simple_units can be lowered on its own.
   simple_units: 512
   semantic_dim: 512
-  # Pooled graph-simple auxiliary decoder. Narrower than the GNN on purpose:
-  # it runs over every node and every real edge, which is where the auxiliary
-  # path spends most of its arithmetic.
   decoder_units: 256
-  # Width of the per-node box signature that addresses g. A deliberate
-  # continuous bottleneck on how much geometry can reach the box head without
-  # passing through the global vector.
   bbox_query_dim: 4
-  # Episode-scoped object identity. Codes are permuted per episode so a UID
-  # means "same object as before" and nothing more. Size this above the peak
-  # episode/graph_episode_entities; overflow raises rather than aliasing.
-  uid_vocab: 256
-  uid_embed: 64
 
 encoder:
   mlp_keys: ${env.encoder.mlp_keys}

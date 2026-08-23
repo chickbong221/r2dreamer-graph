@@ -10,7 +10,7 @@ import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from graph import GraphDecoder, GraphEncoder  # noqa: E402
+from graph import GraphEncoder, SimpleGraphDecoder  # noqa: E402
 
 
 def make_config(args):
@@ -38,9 +38,9 @@ def make_graph(args, edge_width, device):
     shape = (args.batch, args.length)
     graph = {
         "graph_node_ent": torch.zeros(*shape, args.nodes, dtype=torch.uint16, device=device),
-        "graph_node_app": torch.zeros(*shape, args.nodes, 2, 384, dtype=torch.float16, device=device),
         "graph_node_bbox": torch.zeros(*shape, args.nodes, 2, 4, dtype=torch.float16, device=device),
         "graph_node_target": torch.zeros(*shape, args.nodes, dtype=torch.uint8, device=device),
+        "graph_node_centroid": torch.zeros(*shape, args.nodes, 3, dtype=torch.float32, device=device),
         "graph_edge_src": torch.zeros(*shape, edge_width, dtype=torch.uint8, device=device),
         "graph_edge_dst": torch.zeros(*shape, edge_width, dtype=torch.uint8, device=device),
         "graph_edge_rel": torch.zeros(*shape, edge_width, dtype=torch.uint8, device=device),
@@ -50,9 +50,6 @@ def make_graph(args, edge_width, device):
     valid_nodes = min(args.valid_nodes, args.nodes)
     ids = torch.arange(1, valid_nodes + 1, device=device).to(torch.uint16)
     graph["graph_node_ent"][..., :valid_nodes] = ids
-    graph["graph_node_app"][..., :valid_nodes, :, :] = torch.randn(
-        *shape, valid_nodes, 2, 384, dtype=torch.float16, device=device
-    )
     graph["graph_node_bbox"][..., :valid_nodes, :, :] = torch.tensor(
         [0.1, 0.4, 0.2, 0.6], dtype=torch.float16, device=device
     )
@@ -117,7 +114,8 @@ def main():
     device = torch.device("cuda")
     cfg = make_config(args)
     encoder = GraphEncoder(cfg).to(device)
-    decoder = GraphDecoder(cfg).to(device)
+    decoder = SimpleGraphDecoder(cfg, int(cfg.semantic_dim),
+                                torch.arange(1, 6)).to(device)
     results = []
     for width in args.edge_widths:
         milliseconds, count = measure(args, encoder, decoder, width, device)

@@ -41,7 +41,7 @@ hydra:
   run:
     dir: ${logdir}
 
-batch_size: 28
+batch_size: 32
 batch_length: 64
 
 buffer:
@@ -59,7 +59,7 @@ trainer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
   train_ratio: ${env.train_ratio}
-  video_pred_log: False
+  video_pred_log: True
   video_every: 1e6
   video_fps: 15
   params_hist_log: False

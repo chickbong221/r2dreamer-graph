@@ -74,12 +74,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 python train.py \
   env=mshab \
-  model=size100M_graph \
-  model.graph.enabled=false \
-  model.graph_simple=false \
-  model.graph_only_latent=false \
-  model.graph.n_max=8 \
-  model.graph.e_max=168 \
+  model=size100M \
   model.amp_dtype=bfloat16 \
   env.obs_mode=rgb \
   batch_size=28 \

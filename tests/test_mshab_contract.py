@@ -16,7 +16,6 @@ from trainer import _observation_frame
 class _FakeGraph:
     obs_spec_shapes = {
         "graph_node_ent": (8,),
-        "graph_node_app": (8, 2, 384),
         "graph_node_bbox": (8, 2, 4),
         "graph_node_centroid": (8, 3),
         "graph_node_target": (8,),
@@ -28,7 +27,6 @@ class _FakeGraph:
     }
     obs_spec_dtypes = {
         "graph_node_ent": np.uint8,
-        "graph_node_app": np.float16,
         "graph_node_bbox": np.float16,
         "graph_node_centroid": np.float32,
         "graph_node_target": np.uint8,
@@ -104,7 +102,6 @@ class MSHABContractTest(unittest.TestCase):
         self.assertIn("log_graph_in_frame_nodes", transition.keys())
         self.assertIn("log_graph_episode_entities", transition.keys())
         self.assertEqual(transition["graph_node_ent"].dtype, torch.uint8)
-        self.assertEqual(transition["graph_node_app"].dtype, torch.float16)
         self.assertEqual(transition["is_first"].shape, (2, 1))
 
     def test_terminal_graph_token_is_zeroed(self):

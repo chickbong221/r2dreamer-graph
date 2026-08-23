@@ -9,16 +9,10 @@ units: 512
 act: 'SiLU'
 norm: True
 
-rep_loss: dreamer
 compile: False
-
-# Pooled graph-simple: one global g, no slot table, no UID anywhere in replay
-# or the model. Nodes are addressed by the box they currently occupy.
-graph_simple: True
 
 graph:
   enabled: True
-  state_mode: pooled
   n_max: 8
   e_max: 168
   simple_units: 512
@@ -26,32 +20,19 @@ graph:
   decoder_units: 256
   bbox_query_dim: 4
 
-# Bounded EE->target shaping on its own critic and its own normalisation. The
-# reported task return, the reward head and the environment critic are
-# untouched.
 progress:
   enabled: True
-  source: world_model
-  # Held at 0 for the first 400k environment steps, ramped linearly over the
-  # next 300k and constant after: the progress head and the progress critic
-  # are both fitted by the time either can move the actor. The control arm for
-  # this is `beta: 0.0` with the same losses on, which trains the identical
-  # heads and never exposes the actor.
   beta: 0.05
   beta_warmup_start: 400000
   beta_warmup_end: 700000
   soft: True
 
 loss_scales:
-  # Node reconstruction: entity class and every valid camera's box, averaged
-  # per valid node and then per frame. Not comparable with full mode's `node`,
-  # which averages appearance, boxes and visibility instead.
   node: 1.0
   nodetgt: 1.0
   relabs: 1.0
   reltemp: 1.0
   graphdyn: 1.0
   graphrep: 0.05
-  prior_progress_relabs: 1.0
   progress_value: 1.0
   progress_model: 1.0

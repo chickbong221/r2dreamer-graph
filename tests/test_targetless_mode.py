@@ -57,8 +57,8 @@ def _graph(n_objects, target_id=None):
 
 def _pack(graph, use_target_flag):
     return gp.pack_graph(
-        graph, _vocab(), n_max=N_MAX, e_max=168, n_cams=2, app_dim=384,
-        schema=gp.SCHEMA_SIMPLE_POOLED, use_target_flag=use_target_flag,
+        graph, _vocab(), n_max=N_MAX, e_max=168, n_cams=2,
+        use_target_flag=use_target_flag,
     )
 
 

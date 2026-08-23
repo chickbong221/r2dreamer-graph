@@ -15,15 +15,11 @@ import rssm
 import tools
 from graph import (
     RESERVED_GRAPH_KEYS,
-    GraphDecoder,
     GraphEncoder,
     SimpleGraphDecoder,
-    SlotGraphDecoder,
     compact_graph,
     graph_from,
     graph_keys,
-    graph_schema,
-    graph_state_mode,
 )
 from networks import Projector
 from progress import (
@@ -31,7 +27,6 @@ from progress import (
     ProgressScorer,
     TaskScheduleReplayPotential,
     load_stages,
-    target_distribution,
 )
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
@@ -132,6 +127,30 @@ def _step_valid(is_last):
     return ~_frame_flag(is_last)
 
 
+def _sync_camera_count(graph_config, obs_space) -> None:
+    """Size the per-camera layers from the packed graph, not from config.
+
+    How many cameras a ManiSkill task renders is a property of the task and the
+    robot it registers, so it is only known once the environment exists -- which
+    is after config composition and before this. The builder has already packed
+    ``graph_node_bbox`` as ``[n_max, n_cams, 4]``, and that is the shape these
+    layers have to match, so read it from there and let config supply only the
+    default for suites with no packed graph at all.
+    """
+    box = obs_space.get("graph_node_bbox", None) if obs_space else None
+    shape = getattr(box, "shape", None)
+    if not shape or len(shape) != 3:
+        return
+    observed = int(shape[1])
+    if observed != int(graph_config.n_cams):
+        print(
+            f"[graph] n_cams {int(graph_config.n_cams)} -> {observed}, "
+            "taken from the task's rendered cameras",
+            flush=True,
+        )
+        graph_config.n_cams = observed
+
+
 class Dreamer(nn.Module):
     def __init__(self, config, obs_space, act_space):
         super().__init__()
@@ -145,34 +164,13 @@ class Dreamer(nn.Module):
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         self.graph_enabled = bool(config.graph.enabled)
-        self.graph_only = bool(getattr(config, "graph_only_latent", False))
-        self.graph_simple = bool(getattr(config, "graph_simple", False))
-        self.graph_slots = (
-            self.graph_enabled and graph_state_mode(config.graph) == "slots"
-        )
-        # One pooled g, no slot table. This is the arm the progress head, the
-        # box-addressed decoder and the masked-mean readout all belong to.
-        self.graph_pooled_simple = self.graph_simple and not self.graph_slots
-        if self.graph_only and not self.graph_enabled:
-            raise ValueError("graph_only_latent=true requires graph.enabled=true")
-        if self.graph_simple and not self.graph_enabled:
-            raise ValueError("graph_simple=true requires graph.enabled=true")
-        if self.graph_slots and not self.graph_simple:
-            raise ValueError(
-                "graph.state_mode=slots is a relation-only mode; set "
-                "model.graph_simple=true as well"
-            )
-        if self.graph_slots and self.graph_only:
-            raise ValueError("graph.state_mode=slots and graph_only_latent conflict")
-        if self.graph_simple and self.graph_only:
-            raise ValueError(
-                "graph_simple and graph_only_latent are mutually exclusive: one "
-                "keeps a stock z branch, the other removes z entirely"
-            )
-        self.graph_schema = graph_schema(
-            self.graph_simple, graph_state_mode(config.graph)
-        )
-        self.graph_keys = graph_keys(self.graph_schema)
+        if self.graph_enabled:
+            _sync_camera_count(config.graph, obs_space)
+        # graph.enabled is the only graph switch. On means one pooled g beside
+        # a stock z, the box-addressed decoder, and the masked-mean readout.
+        self.graph_simple = self.graph_enabled
+        self.graph_pooled_simple = self.graph_enabled
+        self.graph_keys = graph_keys()
         amp_name = str(config.amp_dtype)
         amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
         if amp_name not in amp_dtypes:
@@ -200,41 +198,25 @@ class Dreamer(nn.Module):
             for key, value in shapes.items()
             if key not in RESERVED_GRAPH_KEYS
         }
-        if self.graph_enabled and self.graph_schema == "simple_pooled_bbox":
+        if self.graph_enabled:
             if "graph_node_uid" in shapes:
                 raise ValueError(
                     "pooled graph-simple must not be handed graph_node_uid; the "
                     "environment is emitting the slot contract"
                 )
-        encoder_shapes = (
-            {key: value for key, value in model_shapes.items() if len(value) != 3}
-            if self.graph_only
-            else model_shapes
-        )
-        self.encoder = networks.MultiEncoder(config.encoder, encoder_shapes)
+        self.encoder = networks.MultiEncoder(config.encoder, model_shapes)
         self.image_keys = tuple(self.encoder.cnn_shapes)
         self.embed_size = self.encoder.out_dim
         self.graph_encoder = GraphEncoder(config.graph) if self.graph_enabled else None
-        graph_token_size = (
-            0 if self.graph_slots
-            else (int(self.graph_encoder.units) if self.graph_enabled else 0)
-        )
-        self.graph_dim = (
-            int(config.graph.semantic_dim)
-            if (self.graph_simple and not self.graph_slots)
-            else 0
-        )
+        graph_token_size = int(self.graph_encoder.units) if self.graph_enabled else 0
+        self.graph_dim = int(config.graph.semantic_dim) if self.graph_enabled else 0
         self.rssm = rssm.RSSM(
             config.rssm,
             self.embed_size,
             self.act_dim,
             semantic=self.graph_enabled,
             graph_token_size=graph_token_size,
-            graph_only=self.graph_only,
-            graph_simple=self.graph_simple,
             graph_dim=self.graph_dim,
-            graph_slots=self.graph_slots,
-            graph_config=config.graph if self.graph_enabled else None,
         )
         self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
@@ -300,7 +282,7 @@ class Dreamer(nn.Module):
             progress_config is not None and progress_config.enabled
         )
         if self.progress_enabled and not (
-            self.graph_slots or self.graph_pooled_simple
+            self.graph_pooled_simple
         ):
             raise ValueError(
                 "progress.enabled requires a graph-simple mode: slots read "
@@ -311,25 +293,6 @@ class Dreamer(nn.Module):
         self.progress_value = None
         self.progress_head = None
         # Which potential imagination reads. `world_model` is the bounded
-        # scalar head regressed onto the observed ladder; `relation_head` is
-        # the original predicted-relation contraction, kept alongside so the
-        # two can be compared in one codebase and so a `relation_head` run
-        # still reproduces the old numbers exactly.
-        self.progress_source = str(
-            getattr(progress_config, "source", "world_model")
-            if progress_config is not None
-            else "world_model"
-        )
-        if self.progress_source not in ("world_model", "relation_head"):
-            raise ValueError(
-                f"progress.source={self.progress_source!r} is not one of "
-                "('world_model', 'relation_head')"
-            )
-        if self.progress_source == "relation_head" and self.graph_slots:
-            raise ValueError(
-                "progress.source=relation_head names the pooled fused head; "
-                "slot mode decodes relations per slot and ignores it"
-            )
         self.progress_mode = str(
             getattr(progress_config, "mode", "ee_target")
             if progress_config is not None
@@ -360,7 +323,7 @@ class Dreamer(nn.Module):
                 int(config.graph.n_abs),
                 int(config.graph.n_rel),
             )
-            if (self.graph_slots or self.graph_pooled_simple)
+            if self.graph_pooled_simple
             else None
         )
         if self.progress_enabled:
@@ -369,7 +332,7 @@ class Dreamer(nn.Module):
                 scorer, 1 - 1 / self.horizon, soft=bool(progress_config.soft)
             )
             relation_width = int(scorer.relations.numel()) * int(config.graph.n_abs)
-            if self.graph_pooled_simple and self.progress_source == "world_model":
+            if self.graph_pooled_simple:
                 # Exactly the latent the policy and the ordinary critic read,
                 # and nothing else. The predicted relation block is gone with
                 # the relation head: the potential is now a scalar function of
@@ -414,14 +377,8 @@ class Dreamer(nn.Module):
         # rather than computed and multiplied by zero, which is the only kind of
         # switch this repository needs: losses are keyed by scale, not by an
         # enable flag per head.
-        self._prior_progress = (
-            self.graph_pooled_simple
-            and self.progress_source == "relation_head"
-            and float(self._loss_scales.get("prior_progress_relabs", 0.0)) != 0.0
-        )
         self._progress_model = self.graph_pooled_simple and (
-            self.progress_source == "world_model"
-            and float(self._loss_scales.get("progress_model", 0.0)) != 0.0
+            float(self._loss_scales.get("progress_model", 0.0)) != 0.0
         )
         if self._progress_model:
             # Beside the environment reward head, on the same feature and
@@ -432,19 +389,12 @@ class Dreamer(nn.Module):
             self.progress_head = networks.ProgressHead(
                 progress_config.head, self.rssm.feat_size
             )
-        if self.progress_enabled and self.graph_pooled_simple:
-            missing = (
-                "loss_scales.progress_model=0"
-                if self.progress_source == "world_model"
-                else "loss_scales.prior_progress_relabs=0"
+        if self.progress_enabled and not self._progress_model:
+            raise ValueError(
+                "progress.enabled with loss_scales.progress_model=0 leaves the "
+                "progress head untrained; imagination would shape the actor "
+                "with an unsupervised readout"
             )
-            if not (self._progress_model or self._prior_progress):
-                raise ValueError(
-                    f"progress.enabled with {missing} leaves the "
-                    f"{self.progress_source} progress path untrained; "
-                    "imagination would shape the actor with an unsupervised "
-                    "readout"
-                )
         self._log_grads = bool(config.log_grads)
         self._replay_input_checked = False
         self._finite_diagnostic_updates = 4
@@ -462,14 +412,9 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
         if self.graph_enabled:
-            if self.graph_slots:
-                self.graph_decoder = SlotGraphDecoder(config.graph)
-            elif self.graph_simple:
-                self.graph_decoder = SimpleGraphDecoder(
-                    config.graph, self.graph_dim, self.progress_scorer.relations
-                )
-            else:
-                self.graph_decoder = GraphDecoder(config.graph)
+            self.graph_decoder = SimpleGraphDecoder(
+                config.graph, self.graph_dim, self.progress_scorer.relations
+            )
             modules.update(
                 {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
             )
@@ -482,10 +427,6 @@ class Dreamer(nn.Module):
             decoder_shapes = {
                 key: value for key, value in model_shapes.items() if key != "instruction"
             }
-            if self.graph_only:
-                decoder_shapes = {
-                    key: value for key, value in decoder_shapes.items() if len(value) != 3
-                }
             self.decoder = networks.MultiDecoder(
                 config.decoder,
                 self.rssm._deter,
@@ -496,7 +437,7 @@ class Dreamer(nn.Module):
                 # it, never reshape it: reconstruction is the highest-bandwidth
                 # signal in the model and would turn slots into a second visual
                 # latent.
-                detach_sem_cnn=self.graph_simple or self.graph_slots,
+                detach_sem_cnn=self.graph_simple,
             )
             recon = self._loss_scales.pop("recon")
             graph_image_recon = self._loss_scales.pop("graph_image_recon")
@@ -505,7 +446,7 @@ class Dreamer(nn.Module):
             # is unnecessary. Keeping stock 1.0 also makes the graph-free arm
             # directly comparable.
             use_graph_image_scale = self.graph_enabled and not (
-                self.graph_simple or self.graph_slots
+                self.graph_simple
             )
             self._loss_scales.update({
                 key: (
@@ -516,43 +457,11 @@ class Dreamer(nn.Module):
                 for key in self.decoder.all_keys
             })
             modules.update({"decoder": self.decoder})
-        elif self.rep_loss == "r2dreamer" or self.rep_loss == "infonce":
+        elif self.rep_loss == "r2dreamer":
             # add projector for latent to embedding
             self.prj = Projector(self.rssm.feat_size, self.embed_size)
             modules.update({"projector": self.prj})
             self.barlow_lambd = float(config.r2dreamer.lambd)
-        elif self.rep_loss == "dreamerpro":
-            dpc = config.dreamer_pro
-            self.warm_up = int(dpc.warm_up)
-            self.num_prototypes = int(dpc.num_prototypes)
-            self.proto_dim = int(dpc.proto_dim)
-            self.temperature = float(dpc.temperature)
-            self.sinkhorn_eps = float(dpc.sinkhorn_eps)
-            self.sinkhorn_iters = int(dpc.sinkhorn_iters)
-            self.ema_update_every = int(dpc.ema_update_every)
-            self.ema_update_fraction = float(dpc.ema_update_fraction)
-            self.freeze_prototypes_iters = int(dpc.freeze_prototypes_iters)
-            self.aug_max_delta = float(dpc.aug.max_delta)
-            self.aug_same_across_time = bool(dpc.aug.same_across_time)
-            self.aug_bilinear = bool(dpc.aug.bilinear)
-
-            self._prototypes = nn.Parameter(torch.randn(self.num_prototypes, self.proto_dim))
-            self.obs_proj = nn.Linear(self.embed_size, self.proto_dim)
-            self.feat_proj = nn.Linear(self.rssm.feat_size, self.proto_dim)
-            self._ema_encoder = copy.deepcopy(self.encoder)
-            self._ema_obs_proj = copy.deepcopy(self.obs_proj)
-            for param in self._ema_encoder.parameters():
-                param.requires_grad = False
-            for param in self._ema_obs_proj.parameters():
-                param.requires_grad = False
-            self._ema_updates = 0
-            modules.update({
-                "prototypes": self._prototypes,
-                "obs_proj": self.obs_proj,
-                "feat_proj": self.feat_proj,
-                "ema_encoder": self._ema_encoder,
-                "ema_obs_proj": self._ema_obs_proj,
-            })
         # count number of parameters in each module
         for key, module in modules.items():
             if isinstance(module, nn.Parameter):
@@ -607,6 +516,28 @@ class Dreamer(nn.Module):
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
         elif config.compile and self.graph_enabled:
             print("graph.enabled uses eager real-edge execution; skipping whole-update torch.compile")
+        print(f"[arm] {self.arm_summary()}", flush=True)
+
+    def arm_summary(self) -> str:
+        """One line naming what this run actually is.
+
+        Which arm you get is spread over four switches -- `graph.enabled`,
+        `progress.enabled` -- and reading
+        them back from a config dump means knowing how they combine. Reading
+        them back from the object that resolved them does not.
+        """
+        if not self.graph_enabled:
+            graph = "off"
+        else:
+            graph = "on"
+        if not self.progress_enabled:
+            progress = "off"
+        else:
+            progress = str(self.progress_mode)
+            progress += f" beta={self.progress_beta:g}"
+            if self.progress_schedule is None and self.progress_mode == "task_schedule":
+                progress += " (schedule not attached yet)"
+        return (f"rep_loss={self.rep_loss} | graph={graph} | progress={progress}")
 
     @staticmethod
     def _presence_metrics(logit, born, persistent, inactive):
@@ -700,7 +631,11 @@ class Dreamer(nn.Module):
         gradient step -- a schedule that cannot be scored yields a target of
         zero for the whole run, and nothing downstream would say so.
         """
-        if self.progress_mode != "task_schedule":
+        # Disabled progress has no target to compile. The baseline arm reaches
+        # here: it runs env=maniskill, which sets progress_mode, but turns the
+        # graph off -- so there is no whitelist to resolve roles against and
+        # nothing that would read the result anyway.
+        if not self.progress_enabled or self.progress_mode != "task_schedule":
             return
         import os
 
@@ -867,68 +802,39 @@ class Dreamer(nn.Module):
         # implementation. AMP is used only by the training update.
         embed = self._frozen_encoder(p_obs)
         encoded = (
-            self._frozen_graph_encoder(graph_from(p_obs, self.graph_schema))
+            self._frozen_graph_encoder(graph_from(p_obs))
             if self.graph_enabled
             else None
         )
         prev_stoch = state.get("stoch")
         prev_deter = state["deter"]
         prev_action = state["prev_action"]
-        if self.graph_slots:
-            # A terminal frame is an auto-reset artifact, not a scene: blanking
-            # it makes the aligner match nothing and every slot fall back to its
-            # prior rather than to a graph from the next episode.
-            slot_obs = encoded.slots.keep(_step_valid(obs["is_last"]))
-            step = self._frozen_rssm.obs_step(
-                prev_stoch,
-                prev_deter,
-                prev_action,
-                embed,
-                obs["is_first"],
-                sem=state.get("sem"),
-                slot_meta=state.get("slot_meta"),
-                slot_alive=state.get("slot_alive"),
-                slot_obs=slot_obs,
-            )
-            stoch, deter = step["stoch"], step["deter"]
-            sem, slot_meta = step["sem"], step["slot_meta"]
-            slot_alive = step["slot_alive"]
-            feat = self._frozen_rssm.get_feat(stoch, deter, sem, slot_alive)
+        graph_token = encoded.token if encoded is not None else None
+        if graph_token is not None:
+            graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
+        result = self._frozen_rssm.obs_step(
+            prev_stoch,
+            prev_deter,
+            prev_action,
+            embed,
+            obs["is_first"],
+            sem=state.get("sem") if self.graph_enabled else None,
+            graph_token=graph_token,
+        )
+        if self.graph_enabled:
+            stoch, deter, _, sem = result[:4]
         else:
-            graph_token = encoded.token if encoded is not None else None
-            if graph_token is not None:
-                graph_token = _mask_terminal_graph(graph_token, obs["is_last"])
-            result = self._frozen_rssm.obs_step(
-                prev_stoch,
-                prev_deter,
-                prev_action,
-                embed,
-                obs["is_first"],
-                sem=state.get("sem") if self.graph_enabled else None,
-                graph_token=graph_token,
-            )
-            slot_meta = slot_alive = None
-            if self.graph_only:
-                deter, sem, _ = result
-                stoch = None
-            elif self.graph_enabled:
-                stoch, deter, _, sem = result[:4]
-            else:
-                stoch, deter, _ = result
-                sem = None
-            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
+            stoch, deter, _ = result
+            sem = None
+        feat = self._frozen_rssm.get_feat(stoch, deter, sem)
         action_dist = self._frozen_actor(feat)
         action = action_dist.mode if eval else action_dist.rsample()
 
         action = to_f32(action)
-        entries = {"deter": to_f32(deter), "prev_action": action}
-        if not self.graph_only:
-            entries["stoch"] = to_f32(stoch)
+        entries = {"deter": to_f32(deter), "prev_action": action,
+                   "stoch": to_f32(stoch)}
         if self.graph_enabled:
             entries["sem"] = to_f32(sem)
-        if self.graph_slots:
-            entries["slot_meta"] = to_f32(slot_meta)
-            entries["slot_alive"] = to_f32(slot_alive)
         return action, TensorDict(entries, batch_size=state.batch_size)
 
     @torch.no_grad()
@@ -939,6 +845,26 @@ class Dreamer(nn.Module):
         entries["prev_action"] = action
         return TensorDict(entries, batch_size=(B,))
 
+    def _pixel_keys(self):
+        """Decoded camera keys, in the decoder's own order.
+
+        There is no single ``image``: an env names its cameras, and how many
+        there are follows from the task and its robot. Taking the list from the
+        decoder keeps truth and reconstruction in the same order, column for
+        column, whatever that turns out to be.
+        """
+        keys = list(getattr(self.decoder, "cnn_shapes", None) or {})
+        if not keys:
+            raise NotImplementedError(
+                "video_pred needs a pixel decoder; this run decodes no images"
+            )
+        return keys
+
+    @staticmethod
+    def _tile_cameras(frames):
+        """``[B, T, H, W, C]`` per camera -> one strip along width."""
+        return frames[0] if len(frames) == 1 else torch.cat(frames, dim=-2)
+
     @torch.no_grad()
     def video_pred(self, data, initial):
         torch.compiler.cudagraph_mark_step_begin()
@@ -947,10 +873,6 @@ class Dreamer(nn.Module):
 
     def _video_pred(self, data, initial):
         """Video prediction utility."""
-        if self.graph_only:
-            raise NotImplementedError(
-                "graph-only mode has no pixel decoder or open-loop video prediction"
-            )
         if self.rep_loss != "dreamer":
             raise NotImplementedError("video_pred requires decoder and is only supported when rep_loss == 'dreamer'.")
 
@@ -958,41 +880,10 @@ class Dreamer(nn.Module):
         # (B, T, E)
         embed = self.encoder(data)
         encoded = (
-            self.graph_encoder(graph_from(data, self.graph_schema))
+            self.graph_encoder(graph_from(data))
             if self.graph_enabled
             else None
         )
-        if self.graph_slots:
-            slot_obs = encoded.slots.keep(_step_valid(data["is_last"]))
-            observed = self.rssm.observe(
-                embed[:B, :5],
-                data["action"][:B, :5],
-                tuple(val[:B] for val in initial),
-                data["is_first"][:B, :5],
-                slot_obs=slot_obs[:B, :5],
-            )
-            post_stoch, post_deter = observed["stoch"], observed["deter"]
-            post_sem, post_meta = observed["sem"], observed["slot_meta"]
-            post_alive = observed["slot_alive"]
-            readout = self.rssm.semantic_feature(post_sem, post_alive)
-            recon = self.decoder(post_stoch, post_deter, readout)["image"].mode()[:B]
-            imagined = self.rssm.imagine_with_action(
-                post_stoch[:, -1],
-                post_deter[:, -1],
-                data["action"][:B, 5:],
-                post_sem[:, -1],
-                post_meta[:, -1],
-                post_alive[:, -1],
-            )
-            prior_readout = self.rssm.semantic_feature(
-                imagined["sem"], imagined["slot_alive"]
-            )
-            openl = self.decoder(
-                imagined["stoch"], imagined["deter"], prior_readout
-            )["image"].mode()
-            model = torch.cat([recon[:, :5], openl], 1)
-            truth = data["image"][:B]
-            return torch.cat([truth, model, (model - truth + 1.0) / 2.0], 2)
         graph_token = None
         if self.graph_enabled:
             graph_token = _mask_terminal_graph(encoded.token, data["is_last"])
@@ -1005,7 +896,9 @@ class Dreamer(nn.Module):
         )
         post_stoch, post_deter = observed[:2]
         post_sem = observed[3] if self.graph_enabled else None
-        recon = self.decoder(post_stoch, post_deter, post_sem)["image"].mode()[:B]
+        keys = self._pixel_keys()
+        decoded = self.decoder(post_stoch, post_deter, post_sem)
+        recon = self._tile_cameras([decoded[k].mode()[:B] for k in keys])
         init_stoch, init_deter = post_stoch[:, -1], post_deter[:, -1]
         imagined = self.rssm.imagine_with_action(
             init_stoch,
@@ -1015,9 +908,10 @@ class Dreamer(nn.Module):
         )
         prior_stoch, prior_deter = imagined[:2]
         prior_sem = imagined[2] if self.graph_enabled else None
-        openl = self.decoder(prior_stoch, prior_deter, prior_sem)["image"].mode()
+        decoded = self.decoder(prior_stoch, prior_deter, prior_sem)
+        openl = self._tile_cameras([decoded[k].mode() for k in keys])
         model = torch.cat([recon[:, :5], openl], 1)
-        truth = data["image"][:B]
+        truth = self._tile_cameras([data[k][:B] for k in keys])
         error = (model - truth + 1.0) / 2.0
         return torch.cat([truth, model, error], 2)
 
@@ -1090,8 +984,6 @@ class Dreamer(nn.Module):
         self._trace_stage_start("preprocess and target update")
         p_data = self.preprocess(data)
         self._update_slow_target()
-        if self.rep_loss == "dreamerpro":
-            self.ema_update()
         self._trace_stage_done("preprocess and target update")
         metrics = {}
         self._diagnose_finite = self._finite_diagnostic_updates > 0
@@ -1130,8 +1022,6 @@ class Dreamer(nn.Module):
                 _check_finite_tensors(
                     "gradients before clipping/optimizer step", grads
                 )
-        if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
-            self._prototypes.grad.zero_()
         if self._log_grads:
             old_params = [p.data.clone().detach() for p in self._named_params.values()]
             grads = [p.grad for p in self._named_params.values() if p.grad is not None]  # log grads before clipping
@@ -1218,198 +1108,70 @@ class Dreamer(nn.Module):
         if self.graph_enabled:
             self._trace_stage_start("graph encoder")
         graph_encoding = (
-            self.graph_encoder(graph_from(data, self.graph_schema))
+            self.graph_encoder(graph_from(data))
             if self.graph_enabled
             else None
         )
         if self.graph_enabled:
             self._trace_stage_done("graph encoder")
         step_valid = _step_valid(data["is_last"])
-        # Slot mode carries the slot table and its identity metadata; every
-        # other mode carries a single vector, so these stay None.
-        post_meta = post_alive = prior_slot = slot_align = None
         self._trace_stage_start("RSSM posterior rollout")
-        if self.graph_slots:
-            observed = self.rssm.observe(
-                embed,
-                data["action"],
-                initial,
-                data["is_first"],
-                slot_obs=graph_encoding.slots.keep(step_valid),
-            )
-            post_stoch, post_deter = observed["stoch"], observed["deter"]
-            post_logit, prior_logit = observed["logit"], observed["prior_logit"]
-            post_sem, post_meta = observed["sem"], observed["slot_meta"]
-            post_alive = observed["slot_alive"]
-            prior_slot, slot_align = observed["prior_slot"], observed
-            post_sem_logit = None
-        else:
-            graph_token = graph_encoding.token if graph_encoding is not None else None
-            if graph_token is not None:
-                graph_token = _mask_terminal_graph(graph_token, data["is_last"])
-            observed = self.rssm.observe(
-                embed, data["action"], initial, data["is_first"], graph_token
-            )
-            prior_logit = None
-            if self.graph_only:
-                post_deter, post_sem, post_sem_logit = observed
-                post_stoch = post_logit = None
-            else:
-                post_stoch, post_deter, post_logit = observed[:3]
-                post_sem = observed[3] if self.graph_enabled else None
-                post_sem_logit = (
-                    observed[4]
-                    if self.graph_enabled and not self.graph_simple
-                    else None
-                )
+        graph_token = graph_encoding.token if graph_encoding is not None else None
+        if graph_token is not None:
+            graph_token = _mask_terminal_graph(graph_token, data["is_last"])
+        observed = self.rssm.observe(
+            embed, data["action"], initial, data["is_first"], graph_token
+        )
+        prior_logit = None
+        post_stoch, post_deter, post_logit = observed[:3]
+        post_sem = observed[3] if self.graph_enabled else None
+        post_sem_logit = None
         self._trace_stage_done("RSSM posterior rollout")
         # (B, T, S, K)
-        if not self.graph_only:
-            self._trace_stage_start("RSSM prior and KL")
-            if prior_logit is None:
-                _, prior_logit = self.rssm.prior(post_deter, post_sem)
-            dyn_loss, rep_loss = self.rssm.kl_loss(
-                post_logit, prior_logit, self.kl_free
-            )
-            losses["dyn"] = torch.mean(dyn_loss)
-            losses["rep"] = torch.mean(rep_loss)
-            self._trace_stage_done("RSSM prior and KL")
+        self._trace_stage_start("RSSM prior and KL")
+        _, prior_logit = self.rssm.prior(post_deter, post_sem)
+        dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
+        losses["dyn"] = torch.mean(dyn_loss)
+        losses["rep"] = torch.mean(rep_loss)
+        self._trace_stage_done("RSSM prior and KL")
         if self.graph_enabled:
             self._trace_stage_start("semantic and graph losses")
             step_float = step_valid.float()
             denominator = step_float.sum().clamp_min(1)
-            if self.graph_slots:
-                alive = self.rssm.slot_mask(post_alive)
-                # A reset transition predicted from nothing, and a capacity
-                # replacement predicted a different entity than the one that
-                # arrived. Neither has a correspondence to charge a loss against.
-                usable = step_valid[..., None] & ~slot_align["reset"][..., None]
-                usable = usable & ~slot_align["replaced"]
-                persistent = slot_align["matched"] & usable
-                born = slot_align["born"] & usable
-                # Content regression covers persistence and matched births, and
-                # nothing else: an unmatched proposal has no target to regress to.
-                losses["slotdyn"] = self.rssm.slot_dynamics_loss(
-                    prior_slot, post_sem, persistent | born
+            prior_sem = self.rssm.semantic_prior_seq(post_deter)
+            sem_dyn, sem_rep = self.rssm.semantic_align_loss(post_sem, prior_sem)
+            # Terminal frames carry a masked graph token, so their
+            # posterior is not a real observation to align against.
+            losses["graphdyn"] = (sem_dyn * step_float).sum() / denominator
+            losses["graphrep"] = (sem_rep * step_float).sum() / denominator
+            # Both terms share one forward value; log it once and let the
+            # scales express the asymmetry.
+            metrics["graph_align_mse"] = losses["graphdyn"].detach()
+            with torch.no_grad():
+                # Collapse shows up here first: cosine climbing to one
+                # while both variances fall means the two branches agreed
+                # on a constant rather than on the graph.
+                cos = (
+                    self.rssm.rms(post_sem) * self.rssm.rms(prior_sem)
+                ).mean(-1)
+                metrics["graph_align_cos"] = (
+                    (cos * step_float).sum() / denominator
                 )
-                inactive = ~alive & usable
-                losses["slotalive"] = self.rssm.slot_alive_loss(
-                    slot_align["prior_alive_logit"],
-                    post_alive,
-                    persistent,
-                    born,
-                    inactive,
-                )
-                graph_losses, graph_metrics = self.graph_decoder(
-                    post_sem,
-                    prior_slot,
-                    graph_encoding.compact,
-                    slot_align["dest"],
-                    post_alive,
-                    post_meta[..., rssm.SLOT_META_TARGET],
-                    step_valid,
-                    self.progress_relations,
-                )
-                with torch.no_grad():
-                    live = alive.float()
-                    metrics["slot_occupancy"] = live.sum(-1).mean()
-                    metrics["slot_overflow"] = slot_align["overflow"].float().mean()
-                    metrics["slot_replacements"] = (
-                        slot_align["replaced"].float().sum(-1).mean()
-                    )
-                    metrics["slot_births"] = born.float().sum(-1).mean()
-                    metrics["slot_birth_rate"] = (
-                        born.float().sum() / usable.float().sum().clamp_min(1)
-                    )
-                    metrics["slot_matched_frac"] = (
-                        persistent.float().sum() / live.sum().clamp_min(1)
-                    )
-                    metrics["slot_post_var"] = (
-                        post_sem.float().var(-1) * live
-                    ).sum() / live.sum().clamp_min(1)
-                    metrics["slot_prior_cos"] = _masked_mean(
-                        F.cosine_similarity(
-                            prior_slot.float(), post_sem.float(), dim=-1, eps=1e-6
-                        ),
-                        persistent,
-                    )
-                    metrics["slot_birth_cos"] = _masked_mean(
-                        F.cosine_similarity(
-                            prior_slot.float(), post_sem.float(), dim=-1, eps=1e-6
-                        ),
-                        born,
-                    )
-                    metrics.update(
-                        self._presence_metrics(
-                            slot_align["prior_alive_logit"], born, persistent, inactive
-                        )
-                    )
-            elif self.graph_simple:
-                prior_sem = self.rssm.semantic_prior_seq(post_deter)
-                sem_dyn, sem_rep = self.rssm.semantic_align_loss(post_sem, prior_sem)
-                # Terminal frames carry a masked graph token, so their
-                # posterior is not a real observation to align against.
-                losses["graphdyn"] = (sem_dyn * step_float).sum() / denominator
-                losses["graphrep"] = (sem_rep * step_float).sum() / denominator
-                # Both terms share one forward value; log it once and let the
-                # scales express the asymmetry.
-                metrics["graph_align_mse"] = losses["graphdyn"].detach()
-                with torch.no_grad():
-                    # Collapse shows up here first: cosine climbing to one
-                    # while both variances fall means the two branches agreed
-                    # on a constant rather than on the graph.
-                    cos = (
-                        self.rssm.rms(post_sem) * self.rssm.rms(prior_sem)
-                    ).mean(-1)
-                    metrics["graph_align_cos"] = (
-                        (cos * step_float).sum() / denominator
-                    )
-                    metrics["graph_sem_post_var"] = post_sem.float().var(-1).mean()
-                    metrics["graph_sem_prior_var"] = prior_sem.float().var(-1).mean()
-                prior_valid = None
-                if self._prior_progress:
-                    # g_hat has no preceding episode to predict the reset frame
-                    # from, and step_valid only drops terminal frames. A target
-                    # admitted on any later frame is supervised straight away.
-                    prior_valid = step_valid & ~_frame_flag(data["is_first"])
-                graph_losses, graph_metrics = self.graph_decoder(
-                    post_sem,
-                    graph_encoding.compact,
-                    step_valid,
-                    prior_sem if self._prior_progress else None,
-                    prior_valid,
-                )
-            else:
-                sem_prior_logit = self.rssm.semantic_prior_logits(
-                    post_deter, post_sem, initial[-1], data["is_first"]
-                )
-                sem_dyn, sem_rep, raw_sem_dyn, raw_sem_rep = self.rssm.semantic_kl_loss(
-                    post_sem_logit, sem_prior_logit, self.kl_free
-                )
-                losses["semdyn"] = (sem_dyn * step_float).mean()
-                losses["semrep"] = (sem_rep * step_float).mean()
-                metrics["semdyn_raw"] = (raw_sem_dyn * step_float).sum() / denominator
-                metrics["semrep_raw"] = (raw_sem_rep * step_float).sum() / denominator
-                metrics["sem_entropy"] = (
-                    self.rssm.get_sem_dist(post_sem_logit).entropy().mean()
-                )
-                graph_losses, graph_metrics = self.graph_decoder(
-                    graph_encoding, step_valid
-                )
+                metrics["graph_sem_post_var"] = post_sem.float().var(-1).mean()
+                metrics["graph_sem_prior_var"] = prior_sem.float().var(-1).mean()
+            graph_losses, graph_metrics = self.graph_decoder(
+                post_sem,
+                graph_encoding.compact,
+                step_valid,
+            )
             losses.update(graph_losses)
             metrics.update(graph_metrics)
             self._trace_stage_done("semantic and graph losses")
         # === Representation / auxiliary losses ===
         # (B, T, F)
         self._trace_stage_start("representation and reconstruction losses")
-        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem, post_alive)
-        # The decoder takes the pooled readout in slot mode: reconstruction is a
-        # head, and heads never see the slot table directly.
-        decoder_sem = (
-            self.rssm.semantic_feature(post_sem, post_alive)
-            if self.graph_slots
-            else post_sem
-        )
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
+        decoder_sem = post_sem
         if self.rep_loss == "dreamer":
             recon_losses = {
                 key: torch.mean(-dist.log_prob(data[key]))
@@ -1434,76 +1196,14 @@ class Dreamer(nn.Module):
             off_diag_mask = ~torch.eye(x1.shape[-1], dtype=torch.bool, device=x1.device)
             redundancy_loss = c[off_diag_mask].pow(2).sum()
             losses["barlow"] = invariance_loss + self.barlow_lambd * redundancy_loss
-        elif self.rep_loss == "infonce":
-            # Contrastive (InfoNCE) objective between projected latent features and encoder embeddings.
-            # (B, T, F) -> (B*T, F)
-            x1 = self.prj(feat[:, :].reshape(B * T, -1))
-            # (B, T, E) -> (B*T, E)
-            x2 = embed.reshape(B * T, -1).detach()  # this detach is important
-            logits = torch.matmul(x1, x2.T)
-            norm_logits = logits - torch.max(logits, 1)[0][:, None]
-            labels = torch.arange(norm_logits.shape[0]).long().to(self.device)
-            losses["infonce"] = torch.nn.functional.cross_entropy(norm_logits, labels)
-        elif self.rep_loss == "dreamerpro":
-            # DreamerPro uses augmentation + EMA targets + Sinkhorn assignment.
-            with torch.no_grad():
-                data_aug = self.augment_data(data)
-                initial_aug = (
-                    # (B, ...) -> (2B, ...)
-                    torch.cat([initial[0], initial[0]], dim=0),
-                    torch.cat([initial[1], initial[1]], dim=0),
-                )
-                ema_proj = self.ema_proj(data_aug)
-
-            embed_aug = self.encoder(data_aug)
-            post_stoch_aug, post_deter_aug, _ = self.rssm.observe(
-                embed_aug, data_aug["action"], initial_aug, data_aug["is_first"]
-            )
-            proto_losses = self.proto_loss(post_stoch_aug, post_deter_aug, embed_aug, ema_proj)
-            losses.update(proto_losses)
-        else:
-            raise NotImplementedError
-        self._trace_stage_done("representation and reconstruction losses")
-
-        # reward and continue
-        self._trace_stage_start("reward and continuation losses")
-        losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
-        if self._progress_model:
-            losses["progress_model"], progress_model_metrics = self._progress_model_loss(
-                feat, graph_encoding.compact, step_valid
-            )
-            metrics.update(progress_model_metrics)
-        cont = 1.0 - to_f32(data["is_terminal"])
-        losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
-        # log
-        if not self.graph_only:
-            metrics["dyn_entropy"] = torch.mean(
-                self.rssm.get_dist(prior_logit).entropy()
-            )
-            metrics["rep_entropy"] = torch.mean(
-                self.rssm.get_dist(post_logit).entropy()
-            )
-        self._trace_stage_done("reward and continuation losses")
-
         # === Imagination rollout for actor-critic ===
         # (B*T, S, K), (B*T, D)
-        if self.graph_only:
-            start = (
-                post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
-                post_sem.reshape(-1, *post_sem.shape[2:]).detach(),
-            )
-        else:
-            start = (
-                post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
-                post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
-            )
-        if self.graph_enabled and not self.graph_only:
+        start = (
+            post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
+            post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
+        )
+        if self.graph_enabled:
             start = start + (post_sem.reshape(-1, *post_sem.shape[2:]).detach(),)
-        if self.graph_slots:
-            start = start + (
-                post_meta.reshape(-1, *post_meta.shape[2:]).detach(),
-                post_alive.reshape(-1, *post_alive.shape[2:]).detach(),
-            )
         # (B, T, ...) -> (B*T, ...)
         self._trace_stage_start("imagination rollout")
         imag_feat, imag_action, imag_extra = self._imagine(
@@ -1623,17 +1323,6 @@ class Dreamer(nn.Module):
         metrics["weight"] = torch.mean(weight)
         metrics["action_entropy"] = torch.mean(entropy)
         metrics.update(tools.tensorstats(imag_action, "action"))
-        if "imag_alive" in imag_extra:
-            alive = imag_extra["imag_alive"]
-            metrics["imag_occupancy"] = alive.gt(0.5).float().sum(-1).mean()
-            # Nonzero only once births are on: how much occupancy the rollout
-            # creates relative to where it started.
-            metrics["imag_births"] = (
-                (alive[:, -1].gt(0.5).float() - alive[:, 0].gt(0.5).float())
-                .clamp_min(0)
-                .sum(-1)
-                .mean()
-            )
         self._trace_stage_done("imagination objectives")
 
         # === Replay-based value learning (keep gradients through world model) ===
@@ -1643,7 +1332,7 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem, post_alive)
+        feat = self.rssm.get_feat(post_stoch, post_deter, post_sem)
         boot = ret[:, 0].reshape(B, T, 1)
         value = self._frozen_value(feat).mode()
         slow_value = self._frozen_slow_value(feat).mode()
@@ -1673,16 +1362,10 @@ class Dreamer(nn.Module):
 
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})
-        if self.graph_only:
-            posterior = (post_deter, post_sem)
-        else:
-            posterior = (post_stoch, post_deter)
-        # Simple mode still stores g: a sampled chunk's first transition needs
-        # g_{t-1} for the transition, exactly as the categorical mode does.
-        if self.graph_enabled and not self.graph_only:
+        posterior = (post_stoch, post_deter)
+        # g is stored too: a sampled chunk's first transition needs g_{t-1}.
+        if self.graph_enabled:
             posterior = posterior + (post_sem,)
-        if self.graph_slots:
-            posterior = posterior + (post_meta, post_alive)
         return posterior, metrics
 
     def _progress_beta_at(self, step):
@@ -1756,101 +1439,33 @@ class Dreamer(nn.Module):
         }
         return loss, metrics
 
-    def _progress_step(self, stoch, deter, sem, slot_alive):
-        """Shaping reward and progress-critic input for one imagined state.
-
-        Everything here is predicted: the slots come from the slot prior, the
-        target identity from the frozen decoder's target head, and the relations
-        from decoding each candidate slot. No observed label and no latched
-        target flag enters an imagined rollout.
-        """
-        decoder = self._frozen_graph_decoder
-        target_logits = decoder.target_logits(sem)
-        reward, potential, probs = self.progress(
-            decoder, sem, target_logits, slot_alive
-        )
-        weights, null = target_distribution(target_logits, slot_alive)
-        # A soft target embedding is fine as a critic feature -- it is only
-        # forbidden as the input to the nonlinear relation decoder.
-        objects = sem[..., 1:, :]
-        target = (weights[..., None] * objects).sum(-2)
-        feat = torch.cat(
-            [
-                stoch.reshape(*deter.shape[:-1], -1),
-                deter,
-                sem[..., 0, :],
-                target,
-                probs.reshape(*probs.shape[:-2], -1).to(deter.dtype),
-                (1.0 - null)[..., None].to(deter.dtype),
-            ],
-            -1,
-        )
-        return reward.unsqueeze(-1), potential.unsqueeze(-1), feat
-
-    @torch.no_grad()
     def _imagine(self, start, imag_horizon):
         """Roll out the policy in latent space."""
         # (B, S, K), (B, D)
         feats = []
         actions = []
         extra = {}
-        slot_meta = slot_alive = None
-        if self.graph_only:
-            deter, sem = start
-            stoch = None
-        else:
-            stoch, deter = start[:2]
-            sem = start[2] if self.graph_enabled else None
-            if self.graph_slots:
-                slot_meta, slot_alive = start[3], start[4]
-        progress_rewards, progress_potentials, progress_feats = [], [], []
-        alive_trace = []
+        stoch, deter = start[:2]
+        sem = start[2] if self.graph_enabled else None
         for _ in range(imag_horizon):
             # (B, F)
-            feat = self._frozen_rssm.get_feat(stoch, deter, sem, slot_alive)
+            feat = self._frozen_rssm.get_feat(stoch, deter, sem)
             # (B, A)
             action = self._frozen_actor(feat).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)
-            if self.graph_slots:
-                alive_trace.append(slot_alive)
-            if self.progress_enabled and self.graph_slots:
-                reward, potential, progress_feat = self._progress_step(
-                    stoch, deter, sem, slot_alive
-                )
-                progress_rewards.append(reward)
-                progress_potentials.append(potential)
-                progress_feats.append(progress_feat)
-            if self.graph_slots:
-                step = self._frozen_rssm.img_step(
-                    stoch, deter, action, sem, slot_meta, slot_alive
-                )
-                stoch, deter, sem = step["stoch"], step["deter"], step["sem"]
-                slot_alive = step["slot_alive"]
-                continue
             result = self._frozen_rssm.img_step(stoch, deter, action, sem)
-            if self.graph_only:
-                deter, sem, _ = result
-            elif self.graph_enabled:
+            if self.graph_enabled:
                 stoch, deter, sem, _ = result
             else:
                 stoch, deter = result
 
-        if alive_trace:
-            extra["imag_alive"] = torch.stack(alive_trace, dim=1)
         # Stack along sequence dim T_imag. (B, T_imag, F)
         imag_feat = torch.stack(feats, dim=1)
-        if (
-            self.progress_enabled
-            and self.graph_pooled_simple
-            and self.progress_source == "world_model"
-        ):
-            # Nothing progress-related ran inside the loop, and nothing needs
-            # to: the potential is one bounded head over the same feature the
-            # policy just read, so the whole path is one MLP over B * T_imag.
-            # The head is the frozen copy, so imagination reads exactly the
-            # parameters training wrote and pushes nothing back into them.
+        if self.progress_enabled and self.graph_pooled_simple:
+            # One bounded head over the feature the policy just read. Frozen,
+            # so imagination pushes nothing back into it.
             potential = self._frozen_progress_head(imag_feat).squeeze(-1)
             reward = (1.0 - self.progress.discount) * potential
             extra.update(
@@ -1860,35 +1475,6 @@ class Dreamer(nn.Module):
                     # The critic reads the policy's own feature and nothing
                     # else: the potential is already a function of it.
                     "progress_feat": imag_feat,
-                }
-            )
-        elif self.progress_enabled and self.graph_pooled_simple:
-            # Nothing progress-related ran inside the loop. g is already a
-            # contiguous slice of the stacked feature -- get_feat lays out
-            # [z, g, h] -- so no second list and no second stack are needed, and
-            # the whole path is one slice, one linear over B * T_imag, one
-            # softmax, one contraction and one concat.
-            start = self.rssm.flat_stoch
-            sem_seq = imag_feat[..., start : start + self.rssm.flat_sem]
-            probs = self._frozen_graph_decoder.progress_probs(sem_seq)
-            reward, potential = self.progress.pooled(probs)
-            extra.update(
-                {
-                    "progress_reward": reward.unsqueeze(-1),
-                    "progress_potential": potential.unsqueeze(-1),
-                    # Exactly the latent the policy and the ordinary critic see,
-                    # plus the predicted relation block. Nothing else.
-                    "progress_feat": torch.cat(
-                        [imag_feat, probs.flatten(-2).to(imag_feat.dtype)], -1
-                    ),
-                }
-            )
-        elif self.progress_enabled:
-            extra.update(
-                {
-                    "progress_reward": torch.stack(progress_rewards, dim=1),
-                    "progress_potential": torch.stack(progress_potentials, dim=1),
-                    "progress_feat": torch.stack(progress_feats, dim=1),
                 }
             )
         # (B, T_imag, F), (B, T_imag, A)
@@ -1920,120 +1506,12 @@ class Dreamer(nn.Module):
                 data[key] = to_f32(data[key]) / 255.0
         return data
 
-    @torch.no_grad()
-    def augment_data(self, data):
-        data_aug = {k: torch.cat([v, v], axis=0) for k, v in data.items()}
-        # (B, T, H, W, C) -> (B, T, C, H, W)
-        image = data_aug["image"].permute(0, 1, 4, 2, 3)
-        data_aug["image"] = self.random_translate(
-            image,
-            self.aug_max_delta,
-            same_across_time=self.aug_same_across_time,
-            bilinear=self.aug_bilinear,
-        )
-        # (B, T, C, H, W) -> (B, T, H, W, C)
-        data_aug["image"] = data_aug["image"].permute(0, 1, 3, 4, 2)
-        return data_aug
-
-    @torch.no_grad()
     def ema_proj(self, data):
         with torch.no_grad():
             embed = self._ema_encoder(data)
             proj = self._ema_obs_proj(embed)
         return F.normalize(proj, p=2, dim=-1)
 
-    @torch.no_grad()
-    def ema_update(self):
-        prototypes = F.normalize(self._prototypes, p=2, dim=-1)
-        self._prototypes.data.copy_(prototypes)
-        if self._ema_updates % self.ema_update_every == 0:
-            mix = self.ema_update_fraction if self._ema_updates > 0 else 1.0
-            for s, d in zip(self.encoder.parameters(), self._ema_encoder.parameters()):
-                d.data.copy_(mix * s.data + (1 - mix) * d.data)
-            for s, d in zip(self.obs_proj.parameters(), self._ema_obs_proj.parameters()):
-                d.data.copy_(mix * s.data + (1 - mix) * d.data)
-        self._ema_updates += 1
-
-    def sinkhorn(self, scores):
-        """Sinkhorn-Knopp normalization.
-
-        Notes
-        -----
-        Given a score matrix, we iteratively normalize rows and columns in log
-        space so that the resulting assignment matrix is approximately doubly
-        stochastic.
-        """
-        shape = scores.shape
-        K = shape[0]
-        scores = scores.reshape(-1)
-        log_Q = F.log_softmax(scores / self.sinkhorn_eps, dim=0)
-        log_Q = log_Q.reshape(K, -1)
-        N = log_Q.shape[1]
-        for _ in range(self.sinkhorn_iters):
-            log_row_sums = torch.logsumexp(log_Q, dim=1, keepdim=True)
-            log_Q = log_Q - log_row_sums - math.log(K)
-            log_col_sums = torch.logsumexp(log_Q, dim=0, keepdim=True)
-            log_Q = log_Q - log_col_sums - math.log(N)
-        log_Q = log_Q + math.log(N)
-        Q = torch.exp(log_Q)
-        return Q.reshape(shape)
-
-    def proto_loss(self, post_stoch, post_deter, embed, ema_proj):
-        prototypes = F.normalize(self._prototypes, p=2, dim=-1)
-
-        obs_proj = self.obs_proj(embed)
-        obs_norm = torch.norm(obs_proj, dim=-1)
-        obs_proj = F.normalize(obs_proj, p=2, dim=-1)
-
-        B, T = obs_proj.shape[:2]
-        # (B, T, P) -> (B*T, P)
-        obs_proj = obs_proj.reshape(B * T, -1)
-        obs_scores = torch.matmul(obs_proj, prototypes.T)
-        # (B*T, K) -> (B, T, K) -> (K, B, T)
-        obs_scores = obs_scores.reshape(B, T, -1).permute(2, 0, 1)
-        obs_scores = obs_scores[:, :, self.warm_up :]
-        obs_logits = F.log_softmax(obs_scores / self.temperature, dim=0)
-        obs_logits_1, obs_logits_2 = torch.chunk(obs_logits, 2, dim=1)
-
-        # (B, T, P) -> (B*T, P)
-        ema_proj = ema_proj.reshape(B * T, -1)
-        ema_scores = torch.matmul(ema_proj, prototypes.T)
-        # (B*T, K) -> (B, T, K) -> (K, B, T)
-        ema_scores = ema_scores.reshape(B, T, -1).permute(2, 0, 1)
-        ema_scores = ema_scores[:, :, self.warm_up :]
-        ema_scores_1, ema_scores_2 = torch.chunk(ema_scores, 2, dim=1)
-
-        with torch.no_grad():
-            ema_targets_1 = self.sinkhorn(ema_scores_1)
-            ema_targets_2 = self.sinkhorn(ema_scores_2)
-        ema_targets = torch.cat([ema_targets_1, ema_targets_2], dim=1)
-
-        feat = self.rssm.get_feat(post_stoch, post_deter)
-        feat_proj = self.feat_proj(feat)
-        feat_norm = torch.norm(feat_proj, dim=-1)
-        feat_proj = F.normalize(feat_proj, p=2, dim=-1)
-
-        # (B, T, P) -> (B*T, P)
-        feat_proj = feat_proj.reshape(B * T, -1)
-        feat_scores = torch.matmul(feat_proj, prototypes.T)
-        # (B*T, K) -> (B, T, K) -> (K, B, T)
-        feat_scores = feat_scores.reshape(B, T, -1).permute(2, 0, 1)
-        feat_scores = feat_scores[:, :, self.warm_up :]
-        feat_logits = F.log_softmax(feat_scores / self.temperature, dim=0)
-
-        swav_loss = -0.5 * torch.mean(torch.sum(ema_targets_2 * obs_logits_1, dim=0)) - 0.5 * torch.mean(
-            torch.sum(ema_targets_1 * obs_logits_2, dim=0)
-        )
-        temp_loss = -torch.mean(torch.sum(ema_targets * feat_logits, dim=0))
-        norm_loss = torch.mean(torch.square(obs_norm - 1)) + torch.mean(torch.square(feat_norm - 1))
-
-        return {
-            "swav": swav_loss,
-            "temp": temp_loss,
-            "norm": norm_loss,
-        }
-
-    @torch.no_grad()
     def random_translate(self, x, max_delta, same_across_time=False, bilinear=False):
         B, T, C, H, W = x.shape
         x_flat = x.reshape(B * T, C, H, W)

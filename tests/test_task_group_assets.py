@@ -332,7 +332,7 @@ class TestRuntimeSelection(TempTree):
             "whitelist_dir": whitelist_group_dir(str(root), group),
             "task_group": group,
         }
-        return GraphBuilder(object(), cfg, uid_vocab=16)
+        return GraphBuilder(object(), cfg)
 
     def test_builder_refuses_a_whitelist_from_another_group(self):
         root = self._two_groups()

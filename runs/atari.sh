@@ -50,7 +50,7 @@ do
             model.compile=True \
             device=cuda:0 \
             buffer.storage_device=cuda:0 \
-            model=size200M \
+            model=size100M \
             model.rep_loss=${METHOD} \
             seed=$seed
     done

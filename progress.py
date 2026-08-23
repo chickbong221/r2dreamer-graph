@@ -497,57 +497,14 @@ def _label_mask(label_ids, n_abs: int) -> torch.Tensor:
     return mask
 
 
-def target_distribution(target_logits, slot_alive, null_logit: float = 0.0):
-    """Predicted target identity over object slots plus one null class.
-
-    Slot zero is the end effector and is never a candidate. Without the null
-    class a softmax has to name an object even when the scene has no target, and
-    progress would then score a relation to an arbitrary slot.
-    """
-    objects = target_logits[..., 1:].float()
-    objects = objects.masked_fill(
-        ~(slot_alive[..., 1:] > 0.5), torch.finfo(torch.float32).min
-    )
-    null = objects.new_full((*objects.shape[:-1], 1), float(null_logit))
-    probs = torch.softmax(torch.cat([objects, null], -1), -1)
-    return probs[..., :-1], probs[..., -1]
-
-
 class ProgressReward(torch.nn.Module):
-    """Bounded shaping reward from imagined slots.
-
-    Holds the scorer and the discount; the relation decoder is passed in so the
-    frozen copy is used inside imagination and the live one inside tests.
-
-    The target is *predicted*, never latched: a born object may be the target,
-    and an imagined rollout has no observation to read a flag from. Each
-    candidate object slot is decoded separately and the resulting relation
-    distributions are mixed by the target weights -- the relation decoder is
-    nonlinear, so decoding one averaged slot embedding would ask it about an
-    object that does not exist.
-    """
+    """Bounded shaping reward. Holds the scorer and the discount."""
 
     def __init__(self, scorer: ProgressScorer, discount: float, soft: bool = True):
         super().__init__()
         self.scorer = scorer
         self.discount = float(discount)
         self.soft = bool(soft)
-
-    def relation_probs(self, decoder, slots, target_logits, slot_alive, hard_target=False):
-        weights, null = target_distribution(target_logits, slot_alive)
-        if hard_target:
-            choice = weights.argmax(-1, keepdim=True)
-            weights = torch.zeros_like(weights).scatter(-1, choice, 1.0)
-            weights = weights * (1.0 - null)[..., None]
-        objects = slots[..., 1:, :]
-        source = slots[..., :1, :].expand_as(objects)
-        # (..., n_obj, R, n_abs): one decode per candidate, mixed afterwards.
-        per_slot = decoder.relation_probs(source, objects, self.scorer.relations)
-        probs = (weights[..., None, None] * per_slot).sum(-3)
-        # Renormalise over the object mass so the result is a distribution
-        # conditioned on "a target exists"; the null mass gates the potential.
-        mass = weights.sum(-1).clamp_min(1e-6)
-        return probs / mass[..., None, None], 1.0 - null
 
     def pooled(self, probs: torch.Tensor):
         """Shaping reward from a directly predicted EE-to-target block.
@@ -560,14 +517,3 @@ class ProgressReward(torch.nn.Module):
         """
         potential = self.scorer.potential(probs, hard=not self.soft)
         return (1.0 - self.discount) * potential, potential
-
-    def forward(self, decoder, slots, target_logits, slot_alive, hard=None):
-        hard = (not self.soft) if hard is None else bool(hard)
-        probs, has_target = self.relation_probs(
-            decoder, slots, target_logits, slot_alive, hard_target=hard
-        )
-        alive_ee = (slot_alive[..., 0] > 0.5).float()
-        potential = self.scorer.potential(probs, hard=hard) * has_target * alive_ee
-        # (1 - discount) keeps the discounted return of a permanently solved
-        # episode at one, so beta means the same thing at any horizon.
-        return (1.0 - self.discount) * potential, potential, probs

@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import torch
 
-from .dino import DinoFeatures
 from .privileged_state import (
     begin_frame_cache,
     clear_privileged_state_caches,
@@ -28,14 +27,7 @@ from .privileged_state import (
     end_frame_cache,
     purge_scene_caches,
 )
-from .graph_pack import (
-    SCHEMA_FULL,
-    SCHEMA_SIMPLE_POOLED,
-    SCHEMA_SIMPLE_SLOT,
-    graph_keys,
-    graph_schema,
-    pack_graph,
-)
+from .graph_pack import graph_keys, pack_graph
 from .graph_vocab import GraphVocab, build_graph_vocab
 from ..configs.loader import load_config as load_teemo_config
 from ..core.graph_builder import GraphBuilder
@@ -54,8 +46,6 @@ _SCENE_CACHE_CAP = 8192
 
 _DTYPES: Dict[str, np.dtype] = {
     "graph_node_ent": np.uint8,
-    "graph_node_uid": np.uint8,
-    "graph_node_app": np.float16,
     "graph_node_bbox": np.float16,
     "graph_node_centroid": np.float32,
     "graph_node_target": np.uint8,
@@ -159,13 +149,8 @@ class GraphObsBuilder:
         e_max: int,
         cameras: List[str],
         sensor_source=None,
-        dino: Optional[DinoFeatures] = None,
-        app_dim: int = 384,
         bypass_teemo: bool = False,
         visibility_policy: str = "keep_tabletop",
-        simple: bool = False,
-        state_mode: str = "pooled",
-        uid_vocab: int = 256,
     ):
         self.env = env
         self.sensor_source = sensor_source
@@ -181,31 +166,13 @@ class GraphObsBuilder:
         self.e_max = int(e_max)
         self.bypass_teemo = bool(bypass_teemo)
         self.visibility_policy = str(visibility_policy)
-        self.simple = bool(simple)
-        # ``simple`` alone no longer names a contract: pooled graph-simple emits
-        # boxes and no identity code, slot graph-simple the reverse.
-        self.state_mode = str(state_mode)
-        self.schema = graph_schema(self.simple, self.state_mode)
-        self.appearance_enabled = self.schema == SCHEMA_FULL
-        self.bbox_enabled = self.schema in (SCHEMA_FULL, SCHEMA_SIMPLE_POOLED)
-        self.uids_enabled = self.schema == SCHEMA_SIMPLE_SLOT
-        self.uid_vocab = int(uid_vocab)
-        self.graph_keys = graph_keys(self.schema)
+        self.graph_keys = graph_keys()
         self.cameras = list(cameras)
         if not self.cameras:
             raise ValueError("graph: cameras is empty")
         # Overlay rendering and the offline tools need one frame to draw on.
         # The model reads every camera independently and never sees this.
         self.record_camera = self.cameras[0]
-        # Neither simple schema reads RGB or pools patch features, so a DINO
-        # instance handed in anyway is dropped rather than kept resident.
-        self.dino = dino if self.appearance_enabled else None
-        self.app_dim = int(self.dino.dim if self.dino is not None else app_dim)
-        self.patch_grid = (
-            (int(self.dino.grid) if self.dino is not None else 8)
-            if self.appearance_enabled
-            else 0
-        )
         self.builders = []
         for i in range(self.num_envs):
             cfg_i = _shallow_copy(teemo_cfg)
@@ -215,10 +182,6 @@ class GraphObsBuilder:
                              camera=self.record_camera,
                              camera_order=self.cameras,
                              visibility_policy=self.visibility_policy,
-                             uid_vocab=self.uid_vocab,
-                             appearance_enabled=self.appearance_enabled,
-                             bbox_enabled=self.bbox_enabled,
-                             uids_enabled=self.uids_enabled,
                              use_target_flag=self.use_target_flag)
             )
         self._frames = np.zeros(self.num_envs, dtype=np.int64)
@@ -226,12 +189,6 @@ class GraphObsBuilder:
         # sensors already belong to the next episode.
         self._last_packed: List[Optional[Dict[str, np.ndarray]]] = [
             None for _ in range(self.num_envs)
-        ]
-        # Per-env, per-node [C, app_dim] appearance. A camera row holds the
-        # last embedding that camera pooled for the node, or zero if it never
-        # saw it. Cleared per env at the episode boundary.
-        self._appearance: List[Dict[str, np.ndarray]] = [
-            {} for _ in range(self.num_envs)
         ]
         # Env indices whose latest graph + record-cam masks are cached for
         # offline overlays. Graph-only recording is used by trainer videos and
@@ -270,8 +227,6 @@ class GraphObsBuilder:
         """Per-env shapes for each graph key of the active contract."""
         shapes = {
             "graph_node_ent":  (self.n_max,),
-            "graph_node_uid":  (self.n_max,),
-            "graph_node_app":  (self.n_max, self.n_cams, self.app_dim),
             "graph_node_bbox": (self.n_max, self.n_cams, 4),
             "graph_node_centroid": (self.n_max, 3),
             "graph_node_target": (self.n_max,),
@@ -361,7 +316,6 @@ class GraphObsBuilder:
                     stats[key] = len(v)
         stats["match_key"] = sum(len(b._match_key_cache) for b in self.builders)
         stats["registry"] = sum(len(b.registry) for b in self.builders)
-        stats["appearance"] = sum(len(c) for c in self._appearance)
         stats["temporal_values"] = sum(
             len(b.temporal._values) for b in self.builders
         )
@@ -399,7 +353,6 @@ class GraphObsBuilder:
             rgb_override=None,
             record_camera=self.record_camera,
             need_masks=need_masks,
-            patch_grid=self.patch_grid,
         )
         if need_graph:
             self.last_graph_by_env[env_idx] = graph
@@ -454,57 +407,6 @@ class GraphObsBuilder:
             buf.copy_(value, non_blocking=False)
             out[cam] = buf.numpy()
         return out
-
-    def _read_rgb(self) -> torch.Tensor:
-        """``[num_envs, C, H, W, 3]`` uint8, left on the render device."""
-        sensor_data = self._sensor_data()
-        return torch.stack(
-            [sensor_data[cam]["rgb"] for cam in self.cameras], 1)
-
-    def _pool_appearance(self, active: List[int], graphs: Dict[int, Any]) -> None:
-        """Pool this frame's DINO features onto every node, then fall back to
-        the per-camera cache for cameras that lost sight of it.
-
-        Every buffer is sized at ``num_envs`` x ``n_max`` rather than cut to
-        the active set and the widest graph. Those two both move from step to
-        step, and a shape that moves hands the caching allocator a fresh block
-        size per combination, which it keeps rather than returning to the OS.
-        Terminal envs still pool nothing: only ``active`` writes a cache row.
-        """
-        if not self.appearance_enabled:
-            return
-        C, D, P = self.n_cams, self.app_dim, self.patch_grid ** 2
-        if not any(graphs[i].nodes for i in active):
-            return
-
-        pooled = None
-        if self.dino is not None:
-            weights = torch.zeros(
-                (self.num_envs, C, self.n_max, P), dtype=torch.float32)
-            for env_idx in active:
-                for j, node in enumerate(graphs[env_idx].nodes[:self.n_max]):
-                    if node.patch_weights is not None:
-                        weights[env_idx, :, j] = torch.from_numpy(
-                            node.patch_weights)
-            tokens = self.dino.patch_tokens(self._read_rgb())
-            pooled = self.dino.pool(tokens, weights.to(self.dino.device))
-            # [B, C, N, D] -> [B, N, C, D] to match the packed layout.
-            pooled = pooled.permute(0, 2, 1, 3).cpu().numpy()
-
-        for env_idx in active:
-            cache = self._appearance[env_idx]
-            for j, node in enumerate(graphs[env_idx].nodes[:self.n_max]):
-                if node.bbox is None:
-                    node.bbox = np.zeros((C, 4), np.float32)
-                app = cache.get(node.node_id)
-                if app is None:
-                    app = np.zeros((C, D), np.float32)
-                    cache[node.node_id] = app
-                if pooled is not None:
-                    current = pooled[env_idx, j]
-                    seen = np.abs(current).sum(-1) > 0
-                    app[seen] = current[seen]
-                node.appearance = app.copy()
 
     def _current_scene_signature(self):
         base = self.env.unwrapped
@@ -572,8 +474,6 @@ class GraphObsBuilder:
         )
         if first.any():
             self._refresh_scene_caches_if_needed()
-        for i in np.nonzero(first)[0]:
-            self._appearance[i].clear()
 
         if self.bypass_teemo:
             return self._stack([self._zero_pack() for _ in range(self.num_envs)])
@@ -592,7 +492,6 @@ class GraphObsBuilder:
                     )
             finally:
                 end_frame_cache()
-            self._pool_appearance(active, graphs)
 
         packed: List[Dict[str, np.ndarray]] = []
         for i in range(self.num_envs):
@@ -600,8 +499,7 @@ class GraphObsBuilder:
                 out = pack_graph(
                     graphs[i], self.vocab,
                     n_max=self.n_max, e_max=self.e_max,
-                    n_cams=self.n_cams, app_dim=self.app_dim,
-                    schema=self.schema, uid_vocab=self.uid_vocab,
+                    n_cams=self.n_cams,
                     use_target_flag=self.use_target_flag,
                 )
                 self._last_packed[i] = out
@@ -696,31 +594,10 @@ def build_graph_obs(
 
     n_max = int(teemo_cfg["selection"]["n_max"])
     e_max = int(graph_cfg.get("e_max", 256))
-    app_dim = int(graph_cfg.get("app_dim", 384))
 
     cameras = graph_cfg.get("cameras")
     if not cameras:
         cameras = [graph_cfg.get("camera", "fetch_head")]
-
-    simple = bool(graph_cfg.get("simple", False))
-    state_mode = str(graph_cfg.get("state_mode", "pooled"))
-    schema = graph_schema(simple, state_mode)
-
-    dino = None
-    # Neither simple schema has an appearance channel, so the checkpoint is
-    # never loaded and no weights sit in VRAM for the run's lifetime.
-    if schema == SCHEMA_FULL and not bool(graph_cfg.get("bypass_teemo", False)):
-        dino = DinoFeatures(
-            graph_cfg.get("dino_model") or "dinov2_vits14_reg",
-            res=int(graph_cfg.get("dino_res", 112)),
-            weights_path=graph_cfg.get("dino_weights") or None,
-        )
-        if dino.dim != app_dim:
-            raise ValueError(
-                f"graph: dino_model {dino.name!r} has feature width {dino.dim} "
-                f"but graph.app_dim is {app_dim}; the model reads app_dim from "
-                "config and would mismatch replay."
-            )
 
     return builder_cls(
         env,
@@ -732,11 +609,6 @@ def build_graph_obs(
         e_max=e_max,
         cameras=list(cameras),
         sensor_source=sensor_source,
-        dino=dino,
-        app_dim=app_dim,
         bypass_teemo=bool(graph_cfg.get("bypass_teemo", False)),
         visibility_policy=str(graph_cfg["visibility_policy"]),
-        simple=simple,
-        state_mode=state_mode,
-        uid_vocab=int(graph_cfg.get("uid_vocab", 256)),
     )
