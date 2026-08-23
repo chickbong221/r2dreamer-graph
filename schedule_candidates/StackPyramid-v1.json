@@ -1,0 +1,1998 @@
+{
+  "_schema_version": 1,
+  "env_id": "StackPyramid-v1",
+  "successful_episodes": 325,
+  "gates": {
+    "milestone_presence": 0.99,
+    "ordering_confidence": 0.95
+  },
+  "milestones": {
+    "contact / actor:cubeA / actor:cubeB": {
+      "relation": "contact",
+      "src": "actor:cubeA",
+      "dst": "actor:cubeB",
+      "episodes": 246,
+      "of": 325,
+      "rate": 0.7569230769230769,
+      "is_candidate": false,
+      "missing_episodes": [
+        1,
+        7,
+        26,
+        27,
+        30,
+        32,
+        34,
+        47,
+        48,
+        51,
+        52,
+        65,
+        67,
+        69,
+        78,
+        84,
+        86,
+        87,
+        98,
+        102,
+        113,
+        117,
+        120,
+        121,
+        135,
+        139,
+        141,
+        143,
+        158,
+        159,
+        164,
+        165
+      ],
+      "n_missing": 79,
+      "onset": {
+        "median": 74.0,
+        "p10": 63.0,
+        "p90": 86.0,
+        "min": 55.0,
+        "max": 98.0
+      },
+      "release": {
+        "median": 82.0,
+        "p10": 71.0,
+        "p90": 126.0,
+        "min": 60.0,
+        "max": 208.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / actor:cubeA / actor:cubeC": {
+      "relation": "contact",
+      "src": "actor:cubeA",
+      "dst": "actor:cubeC",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 182.0,
+        "p10": 160.0,
+        "p90": 203.0,
+        "min": 41.0,
+        "max": 227.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / actor:cubeA / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:cubeA",
+      "dst": "actor:table-workspace",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / actor:cubeB / actor:cubeC": {
+      "relation": "contact",
+      "src": "actor:cubeB",
+      "dst": "actor:cubeC",
+      "episodes": 324,
+      "of": 325,
+      "rate": 0.9969230769230769,
+      "is_candidate": true,
+      "missing_episodes": [
+        200
+      ],
+      "n_missing": 1,
+      "onset": {
+        "median": 183.0,
+        "p10": 164.3,
+        "p90": 203.7,
+        "min": 63.0,
+        "max": 227.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.3,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / actor:cubeB / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:cubeB",
+      "dst": "actor:table-workspace",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / actor:cubeC / actor:table-workspace": {
+      "relation": "contact",
+      "src": "actor:cubeC",
+      "dst": "actor:table-workspace",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 131.0,
+        "p10": 116.4,
+        "p90": 146.0,
+        "min": 35.0,
+        "max": 164.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "contact / ee / actor:cubeA": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:cubeA",
+      "episodes": 320,
+      "of": 325,
+      "rate": 0.9846153846153847,
+      "is_candidate": false,
+      "missing_episodes": [
+        7,
+        113,
+        141,
+        181,
+        298
+      ],
+      "n_missing": 5,
+      "onset": {
+        "median": 42.0,
+        "p10": 35.0,
+        "p90": 52.0,
+        "min": 31.0,
+        "max": 59.0
+      },
+      "release": {
+        "median": 86.0,
+        "p10": 73.9,
+        "p90": 100.0,
+        "min": 38.0,
+        "max": 136.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / ee / actor:cubeB": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:cubeB",
+      "episodes": 17,
+      "of": 325,
+      "rate": 0.052307692307692305,
+      "is_candidate": false,
+      "missing_episodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        29,
+        30,
+        31,
+        32,
+        33
+      ],
+      "n_missing": 308,
+      "onset": {
+        "median": 120.0,
+        "p10": 85.6,
+        "p90": 143.4,
+        "min": 66.0,
+        "max": 150.0
+      },
+      "release": {
+        "median": 126.0,
+        "p10": 85.6,
+        "p90": 146.6,
+        "min": 77.0,
+        "max": 152.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "contact / ee / actor:cubeC": {
+      "relation": "contact",
+      "src": "ee",
+      "dst": "actor:cubeC",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 130.0,
+        "p10": 115.4,
+        "p90": 146.0,
+        "min": 35.0,
+        "max": 164.0
+      },
+      "release": {
+        "median": 182.0,
+        "p10": 164.4,
+        "p90": 204.0,
+        "min": 84.0,
+        "max": 229.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "grasp / ee / actor:cubeC": {
+      "relation": "grasp",
+      "src": "ee",
+      "dst": "actor:cubeC",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 131.0,
+        "p10": 116.4,
+        "p90": 147.0,
+        "min": 36.0,
+        "max": 165.0
+      },
+      "release": {
+        "median": 182.0,
+        "p10": 164.4,
+        "p90": 204.0,
+        "min": 84.0,
+        "max": 229.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:cubeA / actor:cubeC": {
+      "relation": "support",
+      "src": "actor:cubeA",
+      "dst": "actor:cubeC",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 183.0,
+        "p10": 165.0,
+        "p90": 203.60000000000002,
+        "min": 85.0,
+        "max": 227.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:cubeB / actor:cubeC": {
+      "relation": "support",
+      "src": "actor:cubeB",
+      "dst": "actor:cubeC",
+      "episodes": 324,
+      "of": 325,
+      "rate": 0.9969230769230769,
+      "is_candidate": true,
+      "missing_episodes": [
+        200
+      ],
+      "n_missing": 1,
+      "onset": {
+        "median": 183.0,
+        "p10": 165.0,
+        "p90": 203.7,
+        "min": 85.0,
+        "max": 227.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.3,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 0.0,
+      "initial_condition": false
+    },
+    "support / actor:table-workspace / actor:cubeA": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:cubeA",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "support / actor:table-workspace / actor:cubeB": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:cubeB",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    },
+    "support / actor:table-workspace / actor:cubeC": {
+      "relation": "support",
+      "src": "actor:table-workspace",
+      "dst": "actor:cubeC",
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "is_candidate": true,
+      "missing_episodes": [],
+      "n_missing": 0,
+      "onset": {
+        "median": 0.0,
+        "p10": 0.0,
+        "p90": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "release": {
+        "median": 131.0,
+        "p10": 116.4,
+        "p90": 146.0,
+        "min": 35.0,
+        "max": 164.0
+      },
+      "starts_at_frame_zero_rate": 1.0,
+      "initial_condition": true
+    }
+  },
+  "candidate_order": [
+    "contact / actor:cubeA / actor:table-workspace",
+    "contact / actor:cubeB / actor:table-workspace",
+    "contact / actor:cubeC / actor:table-workspace",
+    "support / actor:table-workspace / actor:cubeA",
+    "support / actor:table-workspace / actor:cubeB",
+    "support / actor:table-workspace / actor:cubeC",
+    "contact / ee / actor:cubeC",
+    "grasp / ee / actor:cubeC",
+    "contact / actor:cubeA / actor:cubeC",
+    "contact / actor:cubeB / actor:cubeC",
+    "support / actor:cubeA / actor:cubeC",
+    "support / actor:cubeB / actor:cubeC"
+  ],
+  "ordering": [
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "contact / actor:cubeB / actor:table-workspace",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "contact / actor:cubeC / actor:table-workspace",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeA",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeB",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeC",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:table-workspace",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "contact / actor:cubeC / actor:table-workspace",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeA",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeB",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeC",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:table-workspace",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeA",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeB",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "support / actor:table-workspace / actor:cubeC",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeC / actor:table-workspace",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "support / actor:table-workspace / actor:cubeB",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "support / actor:table-workspace / actor:cubeC",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeA",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "support / actor:table-workspace / actor:cubeC",
+      "a_before_b": 0,
+      "b_before_a": 0,
+      "same_frame": 325,
+      "comparable": 325,
+      "rate_a_before_b": 0.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 1.0,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeB",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "contact / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "support / actor:table-workspace / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:cubeC",
+      "b": "grasp / ee / actor:cubeC",
+      "a_before_b": 319,
+      "b_before_a": 0,
+      "same_frame": 6,
+      "comparable": 325,
+      "rate_a_before_b": 0.9815384615384616,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.018461538461538463,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:cubeC",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 304,
+      "b_before_a": 21,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 0.9353846153846154,
+      "rate_b_before_a": 0.06461538461538462,
+      "rate_same_frame": 0.0,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "contact / ee / actor:cubeC",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 321,
+      "b_before_a": 2,
+      "same_frame": 1,
+      "comparable": 324,
+      "rate_a_before_b": 0.9907407407407407,
+      "rate_b_before_a": 0.006172839506172839,
+      "rate_same_frame": 0.0030864197530864196,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:cubeC",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / ee / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:cubeC",
+      "b": "contact / actor:cubeA / actor:cubeC",
+      "a_before_b": 304,
+      "b_before_a": 21,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 0.9353846153846154,
+      "rate_b_before_a": 0.06461538461538462,
+      "rate_same_frame": 0.0,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "grasp / ee / actor:cubeC",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 321,
+      "b_before_a": 3,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 0.9907407407407407,
+      "rate_b_before_a": 0.009259259259259259,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:cubeC",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 325,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 325,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "grasp / ee / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 324,
+      "b_before_a": 0,
+      "same_frame": 0,
+      "comparable": 324,
+      "rate_a_before_b": 1.0,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.0,
+      "verdict": "before"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:cubeC",
+      "b": "contact / actor:cubeB / actor:cubeC",
+      "a_before_b": 22,
+      "b_before_a": 10,
+      "same_frame": 292,
+      "comparable": 324,
+      "rate_a_before_b": 0.06790123456790123,
+      "rate_b_before_a": 0.030864197530864196,
+      "rate_same_frame": 0.9012345679012346,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:cubeC",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 21,
+      "b_before_a": 0,
+      "same_frame": 304,
+      "comparable": 325,
+      "rate_a_before_b": 0.06461538461538462,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9353846153846154,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "contact / actor:cubeA / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 22,
+      "b_before_a": 6,
+      "same_frame": 296,
+      "comparable": 324,
+      "rate_a_before_b": 0.06790123456790123,
+      "rate_b_before_a": 0.018518518518518517,
+      "rate_same_frame": 0.9135802469135802,
+      "verdict": "ambiguous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:cubeC",
+      "b": "support / actor:cubeA / actor:cubeC",
+      "a_before_b": 10,
+      "b_before_a": 2,
+      "same_frame": 312,
+      "comparable": 324,
+      "rate_a_before_b": 0.030864197530864196,
+      "rate_b_before_a": 0.006172839506172839,
+      "rate_same_frame": 0.9629629629629629,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "contact / actor:cubeB / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 4,
+      "b_before_a": 0,
+      "same_frame": 320,
+      "comparable": 324,
+      "rate_a_before_b": 0.012345679012345678,
+      "rate_b_before_a": 0.0,
+      "rate_same_frame": 0.9876543209876543,
+      "verdict": "simultaneous"
+    },
+    {
+      "a": "support / actor:cubeA / actor:cubeC",
+      "b": "support / actor:cubeB / actor:cubeC",
+      "a_before_b": 2,
+      "b_before_a": 6,
+      "same_frame": 316,
+      "comparable": 324,
+      "rate_a_before_b": 0.006172839506172839,
+      "rate_b_before_a": 0.018518518518518517,
+      "rate_same_frame": 0.9753086419753086,
+      "verdict": "simultaneous"
+    }
+  ],
+  "proposed_phases": [
+    {
+      "pair": [
+        "actor:cubeA",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:cubeA / actor:table-workspace",
+        "support / actor:table-workspace / actor:cubeA"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 0
+    },
+    {
+      "pair": [
+        "actor:cubeB",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:cubeB / actor:table-workspace",
+        "support / actor:table-workspace / actor:cubeB"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 1
+    },
+    {
+      "pair": [
+        "actor:cubeC",
+        "actor:table-workspace"
+      ],
+      "milestones": [
+        "contact / actor:cubeC / actor:table-workspace",
+        "support / actor:table-workspace / actor:cubeC"
+      ],
+      "median_onset": 0.0,
+      "all_initial_conditions": true,
+      "index": 2
+    },
+    {
+      "pair": [
+        "ee",
+        "actor:cubeC"
+      ],
+      "milestones": [
+        "contact / ee / actor:cubeC",
+        "grasp / ee / actor:cubeC"
+      ],
+      "median_onset": 130.5,
+      "all_initial_conditions": false,
+      "index": 3
+    },
+    {
+      "pair": [
+        "actor:cubeA",
+        "actor:cubeC"
+      ],
+      "milestones": [
+        "contact / actor:cubeA / actor:cubeC",
+        "support / actor:cubeA / actor:cubeC"
+      ],
+      "median_onset": 182.5,
+      "all_initial_conditions": false,
+      "index": 4
+    },
+    {
+      "pair": [
+        "actor:cubeB",
+        "actor:cubeC"
+      ],
+      "milestones": [
+        "contact / actor:cubeB / actor:cubeC",
+        "support / actor:cubeB / actor:cubeC"
+      ],
+      "median_onset": 183.0,
+      "all_initial_conditions": false,
+      "index": 5
+    }
+  ],
+  "proposed_roles": {
+    "movable": [
+      "actor:cubeC"
+    ],
+    "destination_candidates": [
+      "actor:cubeA",
+      "actor:cubeB"
+    ],
+    "ambiguous": false
+  },
+  "environment_predicates": {
+    "success": {
+      "episodes": 325,
+      "of": 325,
+      "rate": 1.0,
+      "first_onset": {
+        "median": 184.0,
+        "p10": 166.0,
+        "p90": 205.0,
+        "min": 85.0,
+        "max": 230.0
+      },
+      "last_release": {
+        "median": 188.0,
+        "p10": 170.4,
+        "p90": 210.0,
+        "min": 90.0,
+        "max": 235.0
+      },
+      "median_runs": 1.0,
+      "toggles": false
+    }
+  },
+  "environment_scalars": {
+    "elapsed_steps": {
+      "episodes": 325,
+      "of": 325,
+      "median_first": 1.0,
+      "median_last": 189.0,
+      "decreases": false
+    }
+  },
+  "detector_agreement": {
+    "contact / actor:cubeA / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.030927835051546393
+      }
+    ],
+    "contact / actor:cubeB / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.030927835051546393
+      }
+    ],
+    "contact / actor:cubeC / actor:table-workspace": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "support / actor:table-workspace / actor:cubeA": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.030927835051546393
+      }
+    ],
+    "support / actor:table-workspace / actor:cubeB": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.030927835051546393
+      }
+    ],
+    "support / actor:table-workspace / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 184.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / ee / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 53.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "grasp / ee / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 52.0,
+        "onset_within_1_frame": 0.0,
+        "median_span_iou": 0.0
+      }
+    ],
+    "contact / actor:cubeA / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 0.7723076923076924,
+        "median_span_iou": 1.0
+      }
+    ],
+    "contact / actor:cubeB / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 324,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 0.8179012345679012,
+        "median_span_iou": 1.0
+      }
+    ],
+    "support / actor:cubeA / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 325,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 0.8307692307692308,
+        "median_span_iou": 1.0
+      }
+    ],
+    "support / actor:cubeB / actor:cubeC": [
+      {
+        "predicate": "success",
+        "episodes": 324,
+        "median_onset_delta": 0.0,
+        "onset_within_1_frame": 0.8302469135802469,
+        "median_span_iou": 1.0
+      }
+    ]
+  },
+  "scorable_clauses": {
+    "members": {
+      "actor:cubeA": [
+        "contact",
+        "support"
+      ],
+      "actor:cubeB": [
+        "contact",
+        "support"
+      ],
+      "actor:cubeC": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "actor:table-workspace": [
+        "contact",
+        "support"
+      ]
+    },
+    "spatial_only": [],
+    "components": {
+      "actor:cubeA": [
+        "bottom_components",
+        "contact_components",
+        "support_components"
+      ],
+      "actor:cubeB": [
+        "bottom_components",
+        "contact_components",
+        "support_components"
+      ],
+      "actor:cubeC": [
+        "bottom_components",
+        "contact_components",
+        "grasp_components"
+      ],
+      "actor:table-workspace": [
+        "contact_components",
+        "support_components"
+      ]
+    },
+    "spatial_bins": {
+      "planar-distance": true,
+      "height-offset": true
+    },
+    "scorable": {
+      "ee / actor:cubeA": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:cubeB": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:cubeC": {
+        "contact": true,
+        "grasp": true,
+        "grasp-compatibility": true,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "ee / actor:table-workspace": {
+        "contact": true,
+        "grasp": false,
+        "grasp-compatibility": false,
+        "contact-compatibility": true,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeA / actor:cubeB": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeA / actor:cubeC": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeA / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeB / actor:cubeC": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeB / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      },
+      "actor:cubeC / actor:table-workspace": {
+        "contact": true,
+        "support": true,
+        "contain": false,
+        "contact-compatibility": true,
+        "support-compatibility": true,
+        "contain-compatibility": false,
+        "planar-distance": true,
+        "height-offset": true
+      }
+    }
+  },
+  "example_traces": [
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cubeC",
+          "actor:table-workspace",
+          0,
+          118
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeC",
+          0,
+          118
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:table-workspace",
+          0,
+          175
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:table-workspace",
+          0,
+          175
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeA",
+          0,
+          175
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeB",
+          0,
+          175
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeA",
+          43,
+          78
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:cubeB",
+          66,
+          73
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeC",
+          118,
+          169
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cubeC",
+          119,
+          169
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:cubeC",
+          170,
+          175
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:cubeC",
+          170,
+          175
+        ],
+        [
+          "support",
+          "actor:cubeA",
+          "actor:cubeC",
+          170,
+          175
+        ],
+        [
+          "support",
+          "actor:cubeB",
+          "actor:cubeC",
+          170,
+          175
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            170,
+            175
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cubeC",
+          "actor:table-workspace",
+          0,
+          122
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeC",
+          0,
+          122
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:table-workspace",
+          0,
+          178
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:table-workspace",
+          0,
+          178
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeA",
+          0,
+          178
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeB",
+          0,
+          178
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeA",
+          50,
+          88
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeC",
+          122,
+          172
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cubeC",
+          123,
+          172
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:cubeC",
+          171,
+          178
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:cubeC",
+          171,
+          178
+        ],
+        [
+          "support",
+          "actor:cubeA",
+          "actor:cubeC",
+          171,
+          178
+        ],
+        [
+          "support",
+          "actor:cubeB",
+          "actor:cubeC",
+          171,
+          178
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            173,
+            178
+          ]
+        ]
+      }
+    },
+    {
+      "interactions": [
+        [
+          "contact",
+          "actor:cubeC",
+          "actor:table-workspace",
+          0,
+          148
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeC",
+          0,
+          148
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:table-workspace",
+          0,
+          219
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:table-workspace",
+          0,
+          219
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeA",
+          0,
+          219
+        ],
+        [
+          "support",
+          "actor:table-workspace",
+          "actor:cubeB",
+          0,
+          219
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeA",
+          53,
+          96
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:cubeB",
+          87,
+          90
+        ],
+        [
+          "contact",
+          "ee",
+          "actor:cubeC",
+          148,
+          213
+        ],
+        [
+          "grasp",
+          "ee",
+          "actor:cubeC",
+          149,
+          213
+        ],
+        [
+          "contact",
+          "actor:cubeA",
+          "actor:cubeC",
+          208,
+          219
+        ],
+        [
+          "contact",
+          "actor:cubeB",
+          "actor:cubeC",
+          208,
+          219
+        ],
+        [
+          "support",
+          "actor:cubeA",
+          "actor:cubeC",
+          208,
+          219
+        ],
+        [
+          "support",
+          "actor:cubeB",
+          "actor:cubeC",
+          208,
+          219
+        ]
+      ],
+      "predicates": {
+        "success": [
+          [
+            215,
+            219
+          ]
+        ]
+      }
+    }
+  ]
+}

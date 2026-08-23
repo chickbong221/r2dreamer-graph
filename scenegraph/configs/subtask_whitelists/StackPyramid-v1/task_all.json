@@ -1,0 +1,95 @@
+{
+  "_schema_version": 4,
+  "subtask": "task",
+  "task_group": "StackPyramid-v1",
+  "target": "all",
+  "members": {
+    "actor:cubeA": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:cubeB": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:cubeC": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "grasp",
+        "support"
+      ],
+      "kind": "actor"
+    },
+    "actor:table-workspace": {
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor"
+    }
+  },
+  "bin_edges": {
+    "grasp-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contact-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "support-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "contain-compatibility": [
+      0.3333333333333333,
+      0.6666666666666666
+    ],
+    "planar-distance": [
+      0.05537641793489456,
+      0.11397532671689987,
+      0.16199777126312256,
+      0.20886965394020082
+    ],
+    "height-offset": [
+      -0.06553268134593963,
+      -0.02295796051621437,
+      1.4901161193847656e-08,
+      0.9396428465843201
+    ],
+    "planar-distance-change": [
+      -0.0001655514992307871,
+      -3.5589258207124877e-09,
+      0.0,
+      3.8287281495286236e-05
+    ],
+    "height-offset-change": [
+      -3.3646821975708e-06,
+      0.0,
+      9.313225746154785e-09,
+      0.00011814087629318252
+    ]
+  },
+  "episodes": 325
+}

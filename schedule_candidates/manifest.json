@@ -5,52 +5,12 @@
     "ordering_confidence": 0.95
   },
   "tasks": {
-    "PickCube-v1": {
-      "file": "PickCube-v1.json",
-      "successful_episodes": 300,
-      "milestones": 4,
-      "ambiguous_orderings": 1,
-      "simultaneous_orderings": 1,
-      "roles_ambiguous": false
-    },
-    "StackCube-v1": {
-      "file": "StackCube-v1.json",
-      "successful_episodes": 300,
-      "milestones": 8,
-      "ambiguous_orderings": 0,
-      "simultaneous_orderings": 7,
-      "roles_ambiguous": false
-    },
-    "PegInsertionSide-v1": {
-      "file": "PegInsertionSide-v1.json",
-      "successful_episodes": 331,
-      "milestones": 6,
-      "ambiguous_orderings": 2,
-      "simultaneous_orderings": 1,
-      "roles_ambiguous": false
-    },
-    "PlugCharger-v1": {
-      "file": "PlugCharger-v1.json",
-      "successful_episodes": 1048,
-      "milestones": 5,
-      "ambiguous_orderings": 0,
-      "simultaneous_orderings": 2,
-      "roles_ambiguous": false
-    },
-    "PlaceSphere-v1": {
-      "file": "PlaceSphere-v1.json",
-      "successful_episodes": 300,
-      "milestones": 6,
-      "ambiguous_orderings": 1,
-      "simultaneous_orderings": 1,
-      "roles_ambiguous": false
-    },
-    "PullCubeTool-v1": {
-      "file": "PullCubeTool-v1.json",
-      "successful_episodes": 1900,
-      "milestones": 7,
-      "ambiguous_orderings": 0,
-      "simultaneous_orderings": 7,
+    "StackPyramid-v1": {
+      "file": "StackPyramid-v1.json",
+      "successful_episodes": 325,
+      "milestones": 12,
+      "ambiguous_orderings": 5,
+      "simultaneous_orderings": 18,
       "roles_ambiguous": false
     }
   }
