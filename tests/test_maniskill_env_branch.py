@@ -336,7 +336,7 @@ class CameraDiscoveryTest(unittest.TestCase):
         """It cannot happen before: the cameras are a property of the robot the
         task registers, which gym.make decides."""
         source = _ctor_source()
-        self.assertLess(source.index("env = gym.make(**make_kwargs)"),
+        self.assertLess(source.index("_make_with_supported_reward("),
                         source.index("rendered_cameras(env)"))
 
     def test_a_named_list_is_left_alone(self):
@@ -520,19 +520,34 @@ class ArmSummaryTest(unittest.TestCase):
 
 
 class SweepScriptTest(unittest.TestCase):
-    """Every command in both arms carries the same knobs."""
+    """Every command in every arm carries the same knobs."""
 
     PATHS = sorted(Path("runs/maniskill").glob("slurm_*.sh"))
+    TASKS = 6
+    REWARDS = 2          # the task's native reward, and sparse
+    PER_ARM = TASKS * REWARDS
 
-    def test_there_are_three_arms_of_six_tasks(self):
+    @staticmethod
+    def _commands(path):
+        """One dict of overrides per `python train.py` block."""
+        out = []
+        for block in path.read_text(encoding="utf-8").split("\n\n"):
+            if not block.lstrip().startswith("python train.py"):
+                continue
+            pairs = {}
+            for token in re.findall(r"([\w.]+)=(\S+)", block):
+                pairs[token[0]] = token[1].rstrip(" '" + chr(92))
+            out.append(pairs)
+        return out
+
+    def test_there_are_three_arms_of_every_task_and_reward(self):
         self.assertEqual(len(self.PATHS), 3)
         for path in self.PATHS:
             with self.subTest(script=path.name):
-                text = path.read_text(encoding="utf-8")
-                self.assertEqual(text.count("python train.py"), 6)
+                self.assertEqual(len(self._commands(path)), self.PER_ARM)
 
     def test_no_command_restates_a_shared_default(self):
-        """Anything the same in all eighteen runs belongs in config."""
+        """Anything the same in all runs belongs in config."""
         for path in self.PATHS:
             text = path.read_text(encoding="utf-8")
             for flag in ("trainer.video_pred_log", "env.env_num", "batch_size",
@@ -554,52 +569,70 @@ class SweepScriptTest(unittest.TestCase):
         self.assertEqual(env["env_num"], 200)
         self.assertEqual(float(env["steps"]), 4e6)
 
-    def test_the_graph_arms_differ_only_in_beta(self):
-        betas = set()
+    def test_sparse_runs_are_strict_about_the_reward(self):
+        """A sparse run that silently fell back would not be the sparse arm."""
         for path in self.PATHS:
-            text = path.read_text(encoding="utf-8")
-            found = set(re.findall(r"model\.progress\.beta=([\d.]+)", text))
-            if not found:
-                continue        # the baseline runs no progress at all
-            self.assertEqual(len(found), 1, f"{path.name} mixes betas: {found}")
-            betas |= found
-        self.assertEqual(betas, {"0.0", "0.05"})
+            for cmd in self._commands(path):
+                name = cmd["wandb.name"]
+                with self.subTest(run=name):
+                    if "-sparse-" in name:
+                        self.assertEqual(cmd.get("env.reward_mode"), "sparse")
+                        self.assertEqual(cmd.get("env.reward_fallback"), "[]")
+                    else:
+                        self.assertNotIn("env.reward_mode", cmd)
+
+    def test_beta_is_the_only_thing_that_varies_between_graph_arms(self):
+        """The control holds beta at zero under both rewards. The treatment
+        raises it to 1 under sparse, where the environment advantage it is
+        being weighed against is nearly absent."""
+        expected = {
+            "slurm_baseline.sh": {},
+            "slurm_beta0.sh": {"native": "0.0", "sparse": "0.0"},
+            "slurm_beta005.sh": {"native": "0.05", "sparse": "1.0"},
+        }
+        for path in self.PATHS:
+            seen = {}
+            for cmd in self._commands(path):
+                beta = cmd.get("model.progress.beta")
+                if beta is None:
+                    continue
+                kind = "sparse" if "-sparse-" in cmd["wandb.name"] else "native"
+                seen.setdefault(kind, set()).add(beta)
+            with self.subTest(script=path.name):
+                collapsed = {k: v.pop() for k, v in seen.items() if len(v) == 1}
+                self.assertEqual(len(collapsed), len(seen),
+                                 f"{path.name} mixes betas within a reward mode")
+                self.assertEqual(collapsed, expected[path.name])
 
     def test_the_baseline_is_a_plain_preset(self):
         """No graph overrides: the preset carries no graph block, so nothing
         needs switching off. Three flags to read instead of none was the whole
         problem."""
-        raw = (Path("runs/maniskill/slurm_baseline.sh")
-               .read_text(encoding="utf-8"))
-        # Comments may name a flag as documentation -- "add model.rep_loss=..."
-        # -- without the script passing it.
-        text = "\n".join(l for l in raw.splitlines()
-                         if not l.lstrip().startswith("#"))
-        self.assertEqual(text.count("model=size50M"), 6)
-        self.assertNotIn("model=size50M_graph", text)
-        self.assertEqual(text.count("env.obs_mode=rgb"), 6)
-        self.assertNotIn("rgb+segmentation", text)
-        for absent in ("model.graph.enabled", "model.graph_simple",
-                       "model.graph_only_latent", "model.progress.beta",
-                       "model.rep_loss"):
-            with self.subTest(flag=absent):
-                self.assertNotIn(absent, text)
+        commands = self._commands(Path("runs/maniskill/slurm_baseline.sh"))
+        self.assertEqual(len(commands), self.PER_ARM)
+        for cmd in commands:
+            with self.subTest(run=cmd["wandb.name"]):
+                self.assertEqual(cmd["model"], "size50M")
+                self.assertEqual(cmd["env.obs_mode"], "rgb")
+                for absent in ("model.graph.enabled", "model.progress.beta",
+                               "model.rep_loss"):
+                    self.assertNotIn(absent, cmd)
 
     def test_every_arm_groups_by_task(self):
         """The baseline runs a different preset now, so ${run_name} would put
         it in a different wandb group than the arms it is the control for."""
         for path in self.PATHS:
             with self.subTest(script=path.name):
-                text = path.read_text(encoding="utf-8")
-                self.assertEqual(text.count("wandb.group=maniskill_"), 6)
+                groups = [c["wandb.group"] for c in self._commands(path)]
+                self.assertEqual(len(groups), self.PER_ARM)
+                self.assertTrue(all(g.startswith("maniskill_") for g in groups))
+                # Both reward modes of a task land in that task's group.
+                self.assertEqual(len(set(groups)), self.TASKS)
 
     def test_each_arm_has_its_own_names(self):
-        names = []
-        for path in self.PATHS:
-            text = path.read_text(encoding="utf-8")
-            names += re.findall(r"wandb\.name=(\S+)", text)
-        self.assertEqual(len(names), 18)
-        self.assertEqual(len(set(names)), 18)
+        names = [c["wandb.name"] for p in self.PATHS for c in self._commands(p)]
+        self.assertEqual(len(names), 3 * self.PER_ARM)
+        self.assertEqual(len(set(names)), 3 * self.PER_ARM)
 
     def test_the_graph_arms_keep_segmentation(self):
         """Nodes are seeded from it; rgb alone would build an empty graph. The

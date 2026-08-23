@@ -94,6 +94,17 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M \
+  env.reward_mode=sparse \
+  'env.reward_fallback=[]' \
+  env.task=maniskill_PlaceSphere-v1 \
+  env.obs_mode=rgb \
+  wandb.group=maniskill_PlaceSphere-v1 \
+  wandb.name=PlaceSphere-v1-sparse-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlaceSphere-v1-sparse-baseline
+
+python train.py \
+  env=maniskill \
+  model=size50M \
   env.task=maniskill_PullCubeTool-v1 \
   env.obs_mode=rgb \
   wandb.group=maniskill_PullCubeTool-v1 \
@@ -103,38 +114,93 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M \
-  env.task=maniskill_PickCube-v1 \
+  env.reward_mode=sparse \
+  'env.reward_fallback=[]' \
+  env.task=maniskill_PullCubeTool-v1 \
   env.obs_mode=rgb \
-  wandb.group=maniskill_PickCube-v1 \
-  wandb.name=PickCube-v1-baseline \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-baseline
+  wandb.group=maniskill_PullCubeTool-v1 \
+  wandb.name=PullCubeTool-v1-sparse-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-sparse-baseline
 
-python train.py \
-  env=maniskill \
-  model=size50M \
-  env.task=maniskill_StackCube-v1 \
-  env.obs_mode=rgb \
-  wandb.group=maniskill_StackCube-v1 \
-  wandb.name=StackCube-v1-baseline \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-baseline
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.task=maniskill_PickCube-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PickCube-v1 \
+#   wandb.name=PickCube-v1-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-baseline
 
-python train.py \
-  env=maniskill \
-  model=size50M \
-  env.task=maniskill_PegInsertionSide-v1 \
-  env.obs_mode=rgb \
-  wandb.group=maniskill_PegInsertionSide-v1 \
-  wandb.name=PegInsertionSide-v1-baseline \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-baseline
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_PickCube-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PickCube-v1 \
+#   wandb.name=PickCube-v1-sparse-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-sparse-baseline
 
-python train.py \
-  env=maniskill \
-  model=size50M \
-  env.task=maniskill_PlugCharger-v1 \
-  env.obs_mode=rgb \
-  wandb.group=maniskill_PlugCharger-v1 \
-  wandb.name=PlugCharger-v1-baseline \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-baseline
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.task=maniskill_StackCube-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_StackCube-v1 \
+#   wandb.name=StackCube-v1-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-baseline
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_StackCube-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_StackCube-v1 \
+#   wandb.name=StackCube-v1-sparse-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-sparse-baseline
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.task=maniskill_PegInsertionSide-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PegInsertionSide-v1 \
+#   wandb.name=PegInsertionSide-v1-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-baseline
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_PegInsertionSide-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PegInsertionSide-v1 \
+#   wandb.name=PegInsertionSide-v1-sparse-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-sparse-baseline
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.task=maniskill_PlugCharger-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PlugCharger-v1 \
+#   wandb.name=PlugCharger-v1-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-baseline
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_PlugCharger-v1 \
+#   env.obs_mode=rgb \
+#   wandb.group=maniskill_PlugCharger-v1 \
+#   wandb.name=PlugCharger-v1-sparse-baseline \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-sparse-baseline
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

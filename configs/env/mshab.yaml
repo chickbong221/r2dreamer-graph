@@ -25,6 +25,9 @@ obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: ''
 reward_mode: normalized_dense
+# Strict: every MS-HAB subtask implements it, and a silent change here
+# would break comparability with the published numbers.
+reward_fallback: []
 shader_dir: minimal
 nonprivileged_obs: false
 sim_config: {}

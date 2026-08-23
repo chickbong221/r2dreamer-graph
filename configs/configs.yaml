@@ -5,15 +5,6 @@ defaults:
   - override hydra/job_logging: disabled
   - _self_
 
-# Rooted at the launch directory, so runs land in the repo's own logdir/
-# rather than $HOME. Hydra chdirs into run.dir, so this has to resolve
-# before that happens -- runtime.cwd is where the command was typed.
-#
-# The trailing name is the task and the model preset, so a run says what it is
-# without anyone remembering to pass a name. Anything that varies *within* a
-# comparison -- beta, seed -- belongs in an explicit override, not here: it
-# would otherwise read as part of the run's identity rather than as the axis
-# being swept.
 run_name: ${env.task}-${hydra:runtime.choices.model}
 logdir: ${hydra:runtime.cwd}/logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}/${run_name}
 seed: 0

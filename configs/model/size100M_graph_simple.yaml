@@ -23,7 +23,7 @@ graph:
 progress:
   enabled: True
   beta: 0.05
-  beta_warmup_start: 400000
+  beta_warmup_start: 200000
   beta_warmup_end: 700000
 
 loss_scales:

@@ -16,6 +16,7 @@ obs_mode: rgb+segmentation
 sim_backend: gpu
 control_mode: pd_joint_delta_pos
 reward_mode: normalized_dense
+reward_fallback: [sparse]
 shader_dir: minimal
 nonprivileged_obs: false
 sim_config: {}

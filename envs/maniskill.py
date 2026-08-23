@@ -104,6 +104,44 @@ def _camera_keys(cameras) -> dict:
     return keys
 
 
+def _make_with_supported_reward(make_kwargs: dict, fallback) -> "gym.Env":
+    """Build the env, stepping down `env.reward_fallback` until one is implemented.
+
+    `normalized_dense` needs the task to supply a normaliser and `dense` needs a
+    shaped reward at all; not every ManiSkill task has either -- PlugCharger-v1
+    raises on the first. `reward_fallback` names what to try instead, in order.
+    An empty list is strict: the run fails rather than quietly training on a
+    different reward.
+
+    Announced, never silent. A task on `sparse` is a different learning problem
+    from one on `normalized_dense`, so it has to be visible in the log rather
+    than inferred later from a flat return curve. Both arms read the same env
+    config, so whichever applies, the within-task comparison is unaffected.
+    """
+    wanted = str(make_kwargs["reward_mode"])
+    chain = [wanted] + [str(m) for m in (fallback or []) if str(m) != wanted]
+    for mode in chain:
+        make_kwargs["reward_mode"] = mode
+        try:
+            env = gym.make(**make_kwargs)
+        except NotImplementedError as exc:
+            if "reward mode" not in str(exc).lower():
+                raise
+            continue
+        if mode != wanted:
+            print(
+                f"[env] {make_kwargs['id']} does not implement {wanted!r}; "
+                f"using {mode!r}. Returns are on a different scale from tasks "
+                "that do -- compare arms within a task, never across tasks",
+                flush=True,
+            )
+        return env
+    raise NotImplementedError(
+        f"{make_kwargs['id']} implements none of {chain}. Add a mode to "
+        "env.reward_fallback, or set env.reward_mode to one it supports"
+    )
+
+
 def is_mshab_task(task_id: str) -> bool:
     """MS-HAB subtask envs carry their scene through a ReplicaCAD task plan.
 
@@ -307,7 +345,8 @@ class ManiSkillVecEnv:
                 make_kwargs["human_render_camera_configs"] = dict(
                     width=self._render_size[1], height=self._render_size[0]
                 )
-        env = gym.make(**make_kwargs)
+        env = _make_with_supported_reward(
+            make_kwargs, getattr(config, "reward_fallback", None))
         if not self._camera_names:
             self._camera_names = rendered_cameras(env)
         self._camera_keys = _camera_keys(self._camera_names)
