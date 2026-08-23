@@ -310,7 +310,7 @@ class PooledEncoderTest(unittest.TestCase):
         encoder = self._encoder()
         self.assertIsNotNone(encoder.pool)
         for name in ("query", "key", "value", "out"):
-            self.assertIsNone(getattr(encoder, name), name)
+            self.assertFalse(hasattr(encoder, name), name)
 
     def test_siblings_differ_through_their_boxes(self):
         # Same entity id and same target flag: with UID gone, geometry is the
@@ -466,7 +466,7 @@ class PooledDecoderTest(unittest.TestCase):
         )
         return decoder, scorer
 
-    def _run(self, sem=None, graph=None, prior=None, prior_valid=None):
+    def _run(self, sem=None, graph=None):
         decoder, _ = self._decoder()
         compact = compact_graph(
             pooled_graph() if graph is None else graph
@@ -474,7 +474,7 @@ class PooledDecoderTest(unittest.TestCase):
         if sem is None:
             sem = torch.randn(2, 3, 32, requires_grad=True)
         step_valid = torch.ones(2, 3, dtype=torch.bool)
-        out = decoder(sem, compact, step_valid, prior, prior_valid)
+        out = decoder(sem, compact, step_valid)
         return decoder, sem, out
 
     def test_losses_are_finite_and_named(self):
