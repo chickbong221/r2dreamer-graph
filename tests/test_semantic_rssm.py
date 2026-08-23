@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from rssm import RSSM, SLOT_META_UID
+from rssm import RSSM
 
 
 def config():
@@ -43,19 +43,22 @@ class SemanticRSSMTest(unittest.TestCase):
         self.assertEqual(model.get_feat(stoch, deter).shape[-1], 24)
 
     def test_semantic_posterior_prior_and_imagination(self):
-        model = RSSM(config(), embed_size=5, act_dim=3, semantic=True, graph_token_size=7)
+        model = RSSM(config(), embed_size=5, act_dim=3, semantic=True,
+                     graph_token_size=7, graph_dim=6)
         initial = model.initial(self.batch)
         token = torch.randn(self.batch, self.time, 7)
         observed = model.observe(self.embed, self.action, initial, self.reset, token)
-        self.assertEqual(len(observed), 5)
-        stoch, deter, logit, sem, sem_logit = observed
-        self.assertEqual(sem.shape, (self.batch, self.time, 2, 3))
+        self.assertEqual(len(observed), 4)
+        stoch, deter, logit, sem = observed
+        # One flat deterministic g, not a categorical state.
+        self.assertEqual(sem.shape, (self.batch, self.time, 6))
         self.assertEqual(model.get_feat(stoch, deter, sem).shape[-1], 30)
         _, prior_logit = model.prior(deter, sem)
-        sem_prior = model.semantic_prior_logits(deter, sem, initial[2], self.reset)
-        losses = model.semantic_kl_loss(sem_logit, sem_prior, 1.0)
-        self.assertTrue(all(torch.isfinite(value).all() for value in losses))
         self.assertEqual(prior_logit.shape, logit.shape)
+        prior_sem = model.semantic_prior_seq(deter)
+        self.assertEqual(prior_sem.shape, sem.shape)
+        dyn, rep = model.semantic_align_loss(sem, prior_sem)
+        self.assertTrue(torch.isfinite(dyn).all() and torch.isfinite(rep).all())
         imagined = model.img_step(stoch[:, 0], deter[:, 0], self.action[:, 0], sem[:, 0])
         self.assertEqual(len(imagined), 4)
 

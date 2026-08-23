@@ -178,10 +178,13 @@ class RealPegInsertionIdentityTest(unittest.TestCase):
     """Server-only: the same assertion against the real task."""
 
     def _keys(self, num_envs, env_idx, backend):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
         out = subprocess.run(
             [sys.executable, os.path.abspath(__file__), "--keys",
              str(num_envs), str(env_idx), backend],
-            capture_output=True, text=True, timeout=900,
+            capture_output=True, text=True, timeout=900, cwd=root, env=env,
         )
         line = next((l for l in out.stdout.splitlines()
                      if l.startswith("KEYS ")), None)

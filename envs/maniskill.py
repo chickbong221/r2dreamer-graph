@@ -28,21 +28,16 @@ def _repo_path(value: str | Path) -> Path:
 # key added to the env config but forgotten here silently downgrades the run
 # to the previous behaviour instead of failing.
 _GRAPH_CONFIG_KEYS = (
-    # ``simple`` alone no longer picks a contract: pooled graph-simple emits
-    # boxes and no identity code, slot graph-simple the reverse, so the env has
-    # to know the state mode too.
     "enabled", "mshab_task", "entity_vocab",
     "use_target_flag", "object_object_spatial",
     "thresholds_path", "whitelist_dir", "n_max", "e_max",
-    "app_dim", "dino_model", "dino_res", "dino_weights", "visibility_policy",
-    "bypass_teemo",
+    "visibility_policy", "bypass_teemo",
 )
 
 _GRAPH_CONFIG_CASTS = {
     "enabled": bool,
     "use_target_flag": bool,
     "object_object_spatial": bool,
-    "simple": bool,
     "visibility_policy": str,
     "bypass_teemo": bool,
     "uid_vocab": int,
@@ -135,7 +130,7 @@ def graph_observation_config(graph_config, camera_names,
     if task_group:
         out["mshab_task"] = str(task_group)
     out["cameras"] = list(camera_names)
-    for key in ("thresholds_path", "whitelist_dir", "dino_weights"):
+    for key in ("thresholds_path", "whitelist_dir"):
         if out[key]:
             out[key] = str(_repo_path(out[key]))
     return out

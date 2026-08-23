@@ -208,6 +208,21 @@ class RSSM(nn.Module):
             )
         self.apply(weight_init_)
 
+    def _deterministic_head(self, inp_dim, act_name, name):
+        """Flat continuous semantic head. No logits, no sampling."""
+        act = getattr(torch.nn, act_name)
+        net = nn.Sequential()
+        for index in range(self._sem_layers):
+            net.add_module(f"{name}_{index}", nn.Linear(inp_dim, self._hidden, bias=True))
+            net.add_module(
+                f"{name}_norm_{index}",
+                nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32),
+            )
+            net.add_module(f"{name}_act_{index}", act())
+            inp_dim = self._hidden
+        net.add_module(f"{name}_out", nn.Linear(inp_dim, self.flat_sem))
+        return net
+
     def sem_shape(self):
         return (self.flat_sem,)
 

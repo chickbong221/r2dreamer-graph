@@ -46,7 +46,6 @@ def make_config(enabled):
     return config
 
 
-SLOT_NODES = 8
 SLOT_EDGES = 16
 
 
@@ -226,7 +225,7 @@ class PooledGraphSimpleTest(unittest.TestCase):
         self.assertTrue(model.graph_pooled_simple)
         self.assertIn("graph_node_bbox", model.graph_keys)
         self.assertNotIn("graph_node_uid", model.graph_keys)
-        self.assertIsNone(model.graph_encoder.uid)
+        self.assertFalse(hasattr(model.graph_encoder, "uid"))
 
     def test_a_stale_uid_key_is_rejected_rather_than_encoded(self):
         # Without the guard the key would simply be excluded from the encoder
@@ -340,6 +339,49 @@ class PooledGraphSimpleTest(unittest.TestCase):
                 *pooled_spaces(),
             )
 
+    def test_beta_zero_leaves_the_actor_objective_unchanged(self):
+        """The control arm has to be the treatment arm minus one term."""
+        model = Dreamer(
+            make_pooled_config(progress=True, beta=0.0), *pooled_spaces()
+        ).to("cpu")
+        raw = model.preprocess(pooled_sequence())
+        initial = model.rssm.initial(2)
+        ema = model.return_ema.ema_vals.clone()
+
+        torch.manual_seed(1234)
+        _, with_progress = model._cal_grad(raw, initial)
+        model._optimizer.zero_grad(set_to_none=True)
+        model.return_ema.ema_vals.copy_(ema)
+
+        model.progress_enabled = False
+        torch.manual_seed(1234)
+        _, without_progress = model._cal_grad(raw, initial)
+        model.progress_enabled = True
+        torch.testing.assert_close(
+            with_progress["loss/policy"], without_progress["loss/policy"]
+        )
+
+    def test_beta_warms_up_on_environment_steps(self):
+        config = make_pooled_config(progress=True, beta=0.2)
+        model = Dreamer(config, *pooled_spaces()).to("cpu")
+        self.assertEqual(
+            model.progress_beta_start, float(config.progress.beta_warmup_start)
+        )
+        self.assertEqual(
+            model.progress_beta_end, float(config.progress.beta_warmup_end)
+        )
+        # Fixed here so the arithmetic is independent of the preset.
+        model.progress_beta_start, model.progress_beta_end = 200000.0, 300000.0
+        beta_at = model._progress_beta_at
+        self.assertEqual(beta_at(0), 0.0)
+        self.assertEqual(beta_at(199999), 0.0)
+        self.assertEqual(beta_at(200000), 0.0)
+        self.assertAlmostEqual(beta_at(250000), 0.1)
+        self.assertAlmostEqual(beta_at(300000), 0.2)
+        self.assertAlmostEqual(beta_at(10**7), 0.2)
+        # No step count means no schedule: beta applies in full.
+        self.assertAlmostEqual(beta_at(None), 0.2)
+
     def test_acting_runs_on_the_pooled_contract(self):
         model = self._model()
         data = pooled_sequence(batch=2, time=1)
@@ -398,83 +440,6 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         posterior, _ = model._cal_grad(model.preprocess(sequence()), model.rssm.initial(2))
         self.assertEqual(len(posterior), 2)
 
-    def test_slot_mode_carries_slots_and_supervises_both_branches(self):
-        model = Dreamer(make_slot_config(), *slot_spaces()).to("cpu")
-        # No pooled semantic state exists anywhere in this arm.
-        self.assertIsNone(model.rssm._sem_obs)
-        self.assertIsNone(model.rssm._sem_img)
-        self.assertIsNone(model.graph_encoder.query)
-        self.assertEqual(model.rssm.n_slots, SLOT_NODES)
-        self.assertEqual(model.rssm.flat_sem, 8)  # the readout, not the slots
-        # h reads a permutation-invariant summary of the slot set, never the
-        # ordered flatten: three pooled 8-wide statistics plus occupancy.
-        self.assertEqual(model.rssm._deter_net._dyn_in3[0].in_features, 3 * 8 + 1)
-        self.assertEqual(model._loss_scales["image"], 1.0)
-
-        raw = slot_sequence()
-        action, state = model.act(raw[:, 0].clone(), model.get_initial_state(2))
-        self.assertEqual(action.shape, (2, 3))
-        self.assertIn("slot_meta", state)
-        self.assertIn("slot_alive", state)
-        self.assertEqual(tuple(state["slot_meta"].shape), (2, SLOT_NODES, 3))
-        self.assertEqual(tuple(state["slot_alive"].shape), (2, SLOT_NODES))
-
-        posterior, metrics = model._cal_grad(model.preprocess(raw), model.rssm.initial(2))
-        self.assertEqual(len(posterior), 5)
-        self.assertEqual(tuple(posterior[2].shape), (2, 3, SLOT_NODES, 8))
-        self.assertEqual(tuple(posterior[4].shape), (2, 3, SLOT_NODES))
-        for key in (
-            "loss/slotdyn", "loss/slotalive", "loss/nodetgt", "loss/prior_nodetgt",
-            "loss/relabs", "loss/reltemp",
-            "loss/dyn", "loss/rep",
-        ):
-            self.assertIn(key, metrics)
-            self.assertTrue(torch.isfinite(metrics[key]), key)
-        # Replaced by the teacher-forced end-effector-to-target loss.
-        self.assertNotIn("loss/prior_relabs", metrics)
-        self.assertNotIn("loss/prior_reltemp", metrics)
-        # The pooled-mode losses have no meaning here and must not appear.
-        self.assertNotIn("loss/graphdyn", metrics)
-        self.assertNotIn("loss/graphrep", metrics)
-        self.assertNotIn("loss/progress_value", metrics)
-        self.assertEqual(float(metrics["slot_overflow"]), 0.0)
-        self.assertIn("presence_brier", metrics)
-
-    def test_object_slot_permutation_does_not_move_the_heads(self):
-        model = Dreamer(make_slot_config(), *slot_spaces()).to("cpu").eval()
-        rssm_model = model.rssm
-        stoch, deter, sem, meta, alive = rssm_model.initial(1)
-        torch.manual_seed(0)
-        sem = torch.randn_like(sem)
-        alive = torch.ones_like(alive)
-        order = [0, 4, 2, 7, 1, 6, 3, 5][:SLOT_NODES]
-        with torch.no_grad():
-            feat = rssm_model.get_feat(stoch, deter, sem, alive)
-            other = rssm_model.get_feat(
-                stoch, deter, sem[:, order], alive[:, order]
-            )
-            torch.testing.assert_close(feat, other, atol=1e-5, rtol=1e-5)
-            for head in (model.reward, model.value):
-                torch.testing.assert_close(
-                    head(feat).mode(), head(other).mode(), atol=1e-5, rtol=1e-5
-                )
-            # The continuation head is a binary distribution, whose ``mode`` is
-            # a property rather than a method; ``mean`` is what dreamer reads.
-            torch.testing.assert_close(
-                model.cont(feat).mean, model.cont(other).mean,
-                atol=1e-5, rtol=1e-5,
-            )
-            torch.testing.assert_close(
-                model.actor(feat).mode, model.actor(other).mode,
-                atol=1e-5, rtol=1e-5,
-            )
-
-    def test_slot_mode_needs_the_relation_only_contract(self):
-        config = make_slot_config()
-        config.graph_simple = False
-        with self.assertRaisesRegex(ValueError, "relation-only"):
-            Dreamer(config, *slot_spaces())
-
     def test_progress_requires_a_graph_simple_mode(self):
         # Full mode has neither a slot table to decode per-candidate relations
         # from nor a pooled g to run the fused head on.
@@ -482,147 +447,6 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         config.progress.enabled = True
         with self.assertRaisesRegex(ValueError, "graph-simple"):
             Dreamer(config, *spaces())
-
-    def test_progress_is_bounded_and_trains_its_own_critic(self):
-        model = Dreamer(make_slot_config(progress=True), *slot_spaces()).to("cpu")
-        self.assertTrue(model.progress_enabled)
-        self.assertTrue(any(n.startswith("progress_value") for n in model._named_params))
-        _, metrics = model._cal_grad(
-            model.preprocess(slot_sequence()), model.rssm.initial(2)
-        )
-        self.assertIn("loss/progress_value", metrics)
-        self.assertTrue(torch.isfinite(metrics["loss/progress_value"]))
-        potential = float(metrics["progress_potential"])
-        self.assertGreaterEqual(potential, 0.0)
-        self.assertLessEqual(potential, 1.0)
-        # Bounded shaping: the per-step reward can never exceed 1 - discount.
-        self.assertLessEqual(float(metrics["progress_reward"]), 1.0 / model.horizon + 1e-6)
-
-    def test_beta_zero_leaves_the_actor_objective_unchanged(self):
-        model = Dreamer(make_slot_config(progress=True, beta=0.0), *slot_spaces()).to("cpu")
-        raw = model.preprocess(slot_sequence())
-        initial = model.rssm.initial(2)
-        ema = model.return_ema.ema_vals.clone()
-
-        torch.manual_seed(1234)
-        _, with_progress = model._cal_grad(raw, initial)
-        model._optimizer.zero_grad(set_to_none=True)
-        model.return_ema.ema_vals.copy_(ema)
-
-        model.progress_enabled = False
-        torch.manual_seed(1234)
-        _, without_progress = model._cal_grad(raw, initial)
-        model.progress_enabled = True
-        torch.testing.assert_close(
-            with_progress["loss/policy"], without_progress["loss/policy"]
-        )
-
-    def test_beta_warms_up_on_environment_steps(self):
-        config = make_slot_config(progress=True, beta=0.2)
-        model = Dreamer(config, *slot_spaces()).to("cpu")
-        # The window is plumbed from config, whatever the preset happens to say.
-        self.assertEqual(
-            model.progress_beta_start, float(config.progress.beta_warmup_start)
-        )
-        self.assertEqual(
-            model.progress_beta_end, float(config.progress.beta_warmup_end)
-        )
-        # Fixed here so the arithmetic below is independent of the preset.
-        model.progress_beta_start, model.progress_beta_end = 200000.0, 300000.0
-        beta_at = model._progress_beta_at
-        self.assertEqual(beta_at(0), 0.0)
-        self.assertEqual(beta_at(199999), 0.0)
-        self.assertEqual(beta_at(200000), 0.0)
-        self.assertAlmostEqual(beta_at(250000), 0.1)
-        self.assertAlmostEqual(beta_at(300000), 0.2)
-        self.assertAlmostEqual(beta_at(10**7), 0.2)
-        # No step count means no schedule: beta applies in full.
-        self.assertAlmostEqual(beta_at(None), 0.2)
-
-    def test_the_warm_up_trains_the_progress_critic_without_steering_the_actor(self):
-        model = Dreamer(make_slot_config(progress=True, beta=0.2), *slot_spaces()).to("cpu")
-        # Fixed here, like the schedule test above, so the two step counts
-        # below stay inside and outside the window whatever the preset says.
-        model.progress_beta_start, model.progress_beta_end = 200000.0, 300000.0
-        # A critic built at outscale 0 predicts a constant zero, which makes the
-        # progress advantage identically zero and every beta indistinguishable
-        # from every other. Give the head a real readout first, or the
-        # comparisons below compare zero with zero. The frozen copy shares this
-        # storage, so it reads the same weights.
-        with torch.no_grad():
-            model.progress_value.last.weight.normal_(0.0, 0.3)
-        raw = model.preprocess(slot_sequence())
-        initial = model.rssm.initial(2)
-        ema = model.return_ema.ema_vals.clone()
-        progress_ema = model.progress_return_ema.ema_vals.clone()
-
-        def run(step, progress=True):
-            # Same batch, same seed, same normaliser state: the environment
-            # advantage is identical across runs and only beta differs.
-            model.return_ema.ema_vals.copy_(ema)
-            model.progress_return_ema.ema_vals.copy_(progress_ema)
-            model.progress_enabled = progress
-            model._env_step = step
-            torch.manual_seed(1234)
-            _, metrics = model._cal_grad(raw, initial)
-            model._optimizer.zero_grad(set_to_none=True)
-            model.progress_enabled = True
-            return metrics
-
-        warming = run(0.0)  # inside the warm-up
-        plateau = run(300000.0)  # after it
-        without_progress = run(0.0, progress=False)
-
-        # Warm-up: the critic trains and the actor never sees it.
-        self.assertGreater(float(warming["progress_adv_abs"]), 0.0)
-        self.assertEqual(float(warming["progress_beta"]), 0.0)
-        self.assertEqual(float(warming["progress/influence"]), 0.0)
-        self.assertIn("loss/progress_value", warming)
-        self.assertTrue(torch.isfinite(warming["loss/progress_value"]))
-        torch.testing.assert_close(
-            warming["loss/policy"], without_progress["loss/policy"]
-        )
-
-        # Plateau: the same batch now moves the actor objective.
-        self.assertAlmostEqual(float(plateau["progress_beta"]), 0.2)
-        self.assertNotEqual(
-            float(plateau["loss/policy"].detach()),
-            float(warming["loss/policy"].detach()),
-        )
-        # rho = beta * E|A_progress| / E|A_env|, on the environment advantage as
-        # it was before the shaping term was mixed in. An untrained value head
-        # is built at outscale 0 and makes that denominator exactly zero, which
-        # is what the epsilon is for; the ratio form keeps the check scale-free.
-        expected = (
-            0.2
-            * float(plateau["progress_adv_abs"])
-            / (float(plateau["env_adv_abs"]) + 1e-8)
-        )
-        self.assertGreater(expected, 0.0)
-        self.assertAlmostEqual(
-            float(plateau["progress/influence"]) / expected, 1.0, places=4
-        )
-
-    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
-    def test_one_cuda_batch_completes_without_nan(self):
-        config = make_slot_config()
-        config.device = "cuda"
-        config.rssm.device = "cuda"
-        for head in ("reward", "cont", "actor", "critic"):
-            config[head].device = "cuda"
-        model = Dreamer(config, *slot_spaces()).to("cuda")
-        # Two batches with different valid-node counts: the real-edge path is
-        # dynamic, so a shape assumption would fail on the second one.
-        for uids in ((1, 2, 3), (1, 2, 3, 4, 5)):
-            raw = slot_sequence(uids=uids).to("cuda")
-            with torch.autocast("cuda", dtype=torch.float16):
-                _, metrics = model._cal_grad(
-                    model.preprocess(raw), model.rssm.initial(2)
-                )
-            for key, value in metrics.items():
-                if torch.is_tensor(value) and torch.is_floating_point(value):
-                    self.assertTrue(torch.isfinite(value).all(), key)
-            model._optimizer.zero_grad(set_to_none=True)
 
     def test_preprocess_is_shallow_and_non_mutating(self):
         config = make_config(True)
