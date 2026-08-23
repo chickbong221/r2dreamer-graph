@@ -460,10 +460,7 @@ class PooledDecoderTest(unittest.TestCase):
     def _decoder(self):
         torch.manual_seed(0)
         scorer = ProgressScorer(PICK_STAGES, N_ABS)
-        decoder = SimpleGraphDecoder(
-            graph_config(), semantic_dim=32,
-            progress_relations=scorer.relations,
-        )
+        decoder = SimpleGraphDecoder(graph_config(), semantic_dim=32)
         return decoder, scorer
 
     def _run(self, sem=None, graph=None):
@@ -588,37 +585,6 @@ class PooledDecoderTest(unittest.TestCase):
                 _, _, (losses, _) = self._run(graph=pooled_graph(n_valid=max(n_valid, 2)))
                 self.assertTrue(torch.isfinite(losses["nodetgt"]))
 
-
-class PooledProgressHeadTest(unittest.TestCase):
-    """One fused head, one relation-row map, one teacher mask."""
-
-    def _decoder(self):
-        torch.manual_seed(0)
-        scorer = ProgressScorer(PICK_STAGES, N_ABS)
-        decoder = SimpleGraphDecoder(
-            graph_config(), semantic_dim=32,
-            progress_relations=scorer.relations,
-        )
-        return decoder, scorer
-
-    def test_rows_come_from_the_scorer_not_the_relation_id(self):
-        decoder, scorer = self._decoder()
-        self.assertEqual(decoder.n_progress, int(scorer.relations.numel()))
-        for row, relation in enumerate(scorer.relations.tolist()):
-            self.assertEqual(int(decoder.progress_row[relation]), row)
-        # Every relation the scorer does not read is explicitly out of range,
-        # never silently row zero.
-        unused = set(range(11)) - set(scorer.relations.tolist())
-        for relation in unused:
-            self.assertEqual(int(decoder.progress_row[relation]), -1)
-
-    def test_head_emits_one_legal_simplex_per_relation(self):
-        decoder, scorer = self._decoder()
-        probs = decoder.progress_probs(torch.randn(2, 3, 32))
-        self.assertEqual(tuple(probs.shape), (2, 3, int(scorer.relations.numel()), N_ABS))
-        self.assertTrue(torch.allclose(probs.sum(-1), torch.ones(2, 3, 6), atol=1e-5))
-        illegal = ~decoder.progress_valid.expand_as(probs)
-        self.assertLess(float(probs.masked_select(illegal).abs().max()), 1e-6)
 
 class PotentialMatrixTest(unittest.TestCase):
     """The soft potential is linear, so it is one contraction, not 14 stages."""

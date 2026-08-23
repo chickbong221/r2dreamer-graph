@@ -325,33 +325,12 @@ class Dreamer(nn.Module):
         )
         if self.progress_enabled:
             scorer = self.progress_scorer
-            self.progress = ProgressReward(
-                scorer, 1 - 1 / self.horizon, soft=bool(progress_config.soft)
-            )
-            relation_width = int(scorer.relations.numel()) * int(config.graph.n_abs)
-            if self.graph_pooled_simple:
-                # Exactly the latent the policy and the ordinary critic read,
-                # and nothing else. The predicted relation block is gone with
-                # the relation head: the potential is now a scalar function of
-                # this same feature, so appending a second view of it would
-                # only give the critic a shortcut the actor does not have.
-                self.progress_feat_size = self.rssm.feat_size
-            elif self.graph_pooled_simple:
-                # imag_feat is already [z, g, h], so the progress critic reads
-                # the exact latent the policy and the ordinary critic read, plus
-                # the predicted relation block. Nothing else is concatenated: no
-                # masks, no counts, no boxes, no observed labels. There is also
-                # no target-presence scalar, because the pooled head has no null
-                # class to produce one.
-                self.progress_feat_size = self.rssm.feat_size + relation_width
-            else:
-                self.progress_feat_size = (
-                    self.rssm.flat_stoch
-                    + self.rssm._deter
-                    + 2 * self.rssm.slot_dim
-                    + relation_width
-                    + 1  # probability that a target exists at all
-                )
+            self.progress = ProgressReward(scorer, 1 - 1 / self.horizon)
+            # Exactly the latent the policy and the ordinary critic read, and
+            # nothing else: the potential is a scalar function of that same
+            # feature, so a second view of it would hand the critic a shortcut
+            # the actor does not have.
+            self.progress_feat_size = self.rssm.feat_size
             self.progress_value = networks.MLPHead(
                 config.critic, self.progress_feat_size
             )
@@ -409,9 +388,7 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
         if self.graph_enabled:
-            self.graph_decoder = SimpleGraphDecoder(
-                config.graph, self.graph_dim, self.progress_scorer.relations
-            )
+            self.graph_decoder = SimpleGraphDecoder(config.graph, self.graph_dim)
             modules.update(
                 {"graph_encoder": self.graph_encoder, "graph_decoder": self.graph_decoder}
             )
@@ -664,18 +641,6 @@ class Dreamer(nn.Module):
             self._frozen_graph_encoder = copy.deepcopy(self.graph_encoder)
             for (name_orig, param_orig), (name_new, param_new) in zip(
                 self.graph_encoder.named_parameters(), self._frozen_graph_encoder.named_parameters()
-            ):
-                assert name_orig == name_new
-                param_new.data = param_orig.data
-                param_new.requires_grad_(False)
-
-            # Imagination decodes relations from predicted slots, so the graph
-            # decoder joins the frozen set: the actor update must not train the
-            # world model through the shaping term.
-            self._frozen_graph_decoder = copy.deepcopy(self.graph_decoder)
-            for (name_orig, param_orig), (name_new, param_new) in zip(
-                self.graph_decoder.named_parameters(),
-                self._frozen_graph_decoder.named_parameters(),
             ):
                 assert name_orig == name_new
                 param_new.data = param_orig.data

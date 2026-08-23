@@ -17,6 +17,13 @@ import unittest
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+# Quote, apostrophe, backtick, space or a shell continuation may delimit a
+# preset reference; docs use backticks and launch scripts use the last two.
+_DELIM = re.escape("\"'` " + chr(92))
+_DELIM = re.escape("\"'` " + chr(92))
+PRESET_REF = re.compile(
+    "(?:^|[" + _DELIM + "])(model|env)=([A-Za-z0-9_]+)(?=[" + _DELIM + "]|$)")
+PY_PATH = re.compile(r"(?<![\w/.-])([\w./-]+\.py)\b")
 CONFIGS = ROOT / "configs"
 CODE = ["graph.py", "rssm.py", "dreamer.py", "progress.py", "networks.py",
         "trainer.py", "buffer.py", "envs", "scenegraph", "tests", "runs"]
@@ -333,7 +340,7 @@ class NoOrphanedDefinitionsTest(unittest.TestCase):
         "print_param_stats", "purge", "read_unwrapped_rgbs",
         "read_unwrapped_sensor", "recursively_load_optim_state_dict",
         "target_unresolved", "unique_seg_ids", "upsert_node",
-        "normal_std_fixed",
+        "normal_std_fixed", "merge",
     }
     # Stranded by the DINO/appearance removal; the adapter is kept for mining.
     PENDING = {"patch_tokens"}
@@ -348,35 +355,70 @@ class NoOrphanedDefinitionsTest(unittest.TestCase):
             elif path.is_dir():
                 paths.extend(f for f in path.rglob("*.py")
                              if "__pycache__" not in str(f))
-        defined, referenced = {}, set()
+        methods, functions = {}, {}
+        attrs, names, strings = set(), set(), set()
         for path in paths:
             tree = tree_of(path)
             in_tests = "tests" in path.parts
+            parents = {}
+            for node in ast.walk(tree):
+                for child in ast.iter_child_nodes(node):
+                    parents[child] = node
             for node in ast.walk(tree):
                 if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                         and not in_tests
                         and not node.name.startswith("__")
                         and node.name not in self.IMPLICIT):
-                    defined.setdefault(node.name, str(
-                        path.relative_to(ROOT)) + f":{node.lineno}")
+                    where = f"{path.relative_to(ROOT)}:{node.lineno}"
+                    # A method is only reachable through attribute access, so a
+                    # local variable of the same name must not mask it.
+                    target = (methods if isinstance(parents.get(node), ast.ClassDef)
+                              else functions)
+                    target.setdefault(node.name, where)
                 if isinstance(node, ast.Attribute):
-                    referenced.add(node.attr)
+                    attrs.add(node.attr)
                 elif isinstance(node, ast.Name):
-                    referenced.add(node.id)
+                    names.add(node.id)
                 elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    referenced.add(node.value)
+                    strings.add(node.value)
         orphans = sorted(
-            f"{name} ({where})" for name, where in defined.items()
-            if name not in referenced
-            and name not in self.PREEXISTING and name not in self.PENDING)
+            [f"{n} ({w})" for n, w in methods.items()
+             if n not in attrs and n not in strings]
+            + [f"{n} ({w})" for n, w in functions.items()
+               if n not in attrs and n not in names and n not in strings])
+        orphans = [o for o in orphans
+                   if o.split(" ")[0] not in self.PREEXISTING
+                   and o.split(" ")[0] not in self.PENDING]
         self.assertEqual(orphans, [])
+
+
+class ScriptPathsExistTest(unittest.TestCase):
+    """A launcher naming a file the cleanup moved fails on the cluster only.
+
+    The H100 diagnostics job kept invoking `runs/smoke_mshab.py` after the
+    probe moved to `tests/probes/`.
+    """
+
+    def test_every_python_path_in_a_script_resolves(self):
+        missing = []
+        for script in sorted((ROOT / "runs").rglob("*.sh")):
+            text = script.read_text(encoding="utf-8", errors="ignore")
+            for match in PY_PATH.finditer(text):
+                rel = match.group(1)
+                if rel.startswith("$") or not (ROOT / rel).exists():
+                    missing.append(f"{script.relative_to(ROOT)}: {rel}")
+        self.assertEqual(missing, [])
 
 
 class PresetsExistTest(unittest.TestCase):
     def test_every_selected_group_resolves_to_a_file(self):
         missing = []
-        for path in list((ROOT / "tests").rglob("*.py")) + \
-                list((ROOT / "runs").rglob("*.sh")):
+        # Docs included: a guide naming a deleted preset sends people to
+        # a command that cannot compose.
+        for path in (list((ROOT / "tests").rglob("*.py"))
+                     + list((ROOT / "runs").rglob("*.sh"))
+                     + list((ROOT / "docs").rglob("*.md"))
+                     + [ROOT / "README.md"]):
             if "__pycache__" in str(path):
                 continue
             for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -384,7 +426,7 @@ class PresetsExistTest(unittest.TestCase):
                 if "assertNot" in line:
                     continue
                 for group, name in re.findall(
-                        r"[\"' ](model|env)=([A-Za-z0-9_]+)[\"' \\]", line):
+                        PRESET_REF, line):
                     if not (CONFIGS / group / f"{name}.yaml").exists():
                         missing.append(f"{path.relative_to(ROOT)}: {group}={name}")
         self.assertEqual(missing, [])

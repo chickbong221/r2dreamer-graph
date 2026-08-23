@@ -25,7 +25,6 @@ progress:
   beta: 0.05
   beta_warmup_start: 400000
   beta_warmup_end: 700000
-  soft: True
 
 loss_scales:
   node: 1.0

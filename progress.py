@@ -500,20 +500,7 @@ def _label_mask(label_ids, n_abs: int) -> torch.Tensor:
 class ProgressReward(torch.nn.Module):
     """Bounded shaping reward. Holds the scorer and the discount."""
 
-    def __init__(self, scorer: ProgressScorer, discount: float, soft: bool = True):
+    def __init__(self, scorer: ProgressScorer, discount: float):
         super().__init__()
         self.scorer = scorer
         self.discount = float(discount)
-        self.soft = bool(soft)
-
-    def pooled(self, probs: torch.Tensor):
-        """Shaping reward from a directly predicted EE-to-target block.
-
-        The pooled graph state has no slots to enumerate and no target-null
-        class: the subtask target is fixed for the episode and the recurrent
-        state is what carries it through occlusion. So the head's own (R, n_abs)
-        output is already conditioned on "the target", and the potential is one
-        contraction over the whole ``B * H`` rollout at once.
-        """
-        potential = self.scorer.potential(probs, hard=not self.soft)
-        return (1.0 - self.discount) * potential, potential

@@ -399,7 +399,7 @@ class SimpleGraphDecoder(nn.Module):
     or every real edge in the batch. No loop over nodes, edges or relations.
     """
 
-    def __init__(self, config, semantic_dim: int, progress_relations):
+    def __init__(self, config, semantic_dim: int):
         super().__init__()
         self.units = int(getattr(config, "decoder_units", config.simple_units))
         self.n_cams = int(config.n_cams)
@@ -443,25 +443,8 @@ class SimpleGraphDecoder(nn.Module):
         # edge rows; their legal masks and losses stay separate.
         self.edge_head = nn.Linear(self.units, self.n_abs + self.n_temp)
 
-        relations = torch.as_tensor(progress_relations, dtype=torch.long).reshape(-1)
-        self.n_progress = int(relations.numel())
-        # One linear from g_hat to every scorer relation at once. The cumulative
-        # stages reuse these distributions; they never decode one apiece.
-        self.progress_head = nn.Linear(
-            int(semantic_dim), self.n_progress * self.n_abs
-        )
-        self.register_buffer("progress_relations", relations, persistent=False)
         self.register_buffer(
             "abs_valid", _relation_masks(int(config.n_rel), self.n_abs), persistent=False
-        )
-        # Relation id -> row of the fused progress output, -1 for relations the
-        # scorer does not read. Built from the scorer's own relation order,
-        # because the relation id is not the row.
-        row = torch.full((int(config.n_rel),), -1, dtype=torch.long)
-        row[relations] = torch.arange(self.n_progress, dtype=torch.long)
-        self.register_buffer("progress_row", row, persistent=False)
-        self.register_buffer(
-            "progress_valid", self.abs_valid.index_select(0, relations), persistent=False
         )
         self.apply(weight_init_)
 
@@ -481,17 +464,6 @@ class SimpleGraphDecoder(nn.Module):
         query = self.query_proj(self.query(signature))
         frame = self.global_proj(sem.reshape(compact.graph_count, -1).to(query.dtype))
         return self.node_proj(self.act(frame[:, None, :] + query))
-
-    def progress_logits(self, sem: torch.Tensor) -> torch.Tensor:
-        """(..., R, n_abs) EE->target logits for the scorer's relations."""
-        return self.progress_head(sem).reshape(
-            *sem.shape[:-1], self.n_progress, self.n_abs
-        )
-
-    def progress_probs(self, sem: torch.Tensor) -> torch.Tensor:
-        """Legal-masked distributions in float32, one call for the whole batch."""
-        logits = self.progress_logits(sem).float()
-        return torch.softmax(logits.masked_fill(~self.progress_valid, -1e9), -1)
 
     def forward(
         self,

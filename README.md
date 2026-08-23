@@ -29,8 +29,15 @@ Switching algorithms:
 
 ```bash
 # Choose an algorithm via model.rep_loss:
-# r2dreamer|dreamer|infonce|dreamerpro
-python3 train.py model.rep_loss=r2dreamer
+# dreamer|r2dreamer|infonce|dreamerpro
+#
+# Everything but `dreamer` needs a graph-free preset -- `size50M`/`size100M`,
+# not the `_graph_simple` pair -- because the graph is a DreamerV3 extension
+# and the constructor refuses the combination.
+python3 train.py env=dmc_vision model=size50M model.rep_loss=r2dreamer
+
+# dreamerpro augments a single `image` key, so it needs an env that emits one.
+python3 train.py env=dmc_vision model=size50M model.rep_loss=dreamerpro
 ```
 
 For easier code reading, inline tensor shape annotations are provided. See [`docs/tensor_shapes.md`](docs/tensor_shapes.md).

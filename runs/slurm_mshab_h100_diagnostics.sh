@@ -135,7 +135,7 @@ run_smoke() {
   echo "--- $label: envs=$num_envs build_configs=$build_configs ---"
   set +e
   timeout --foreground "${timeout_seconds}s" \
-    python -X faulthandler runs/smoke_mshab.py \
+    python -X faulthandler tests/probes/smoke_mshab.py \
       --num-envs "$num_envs" \
       --build-configs "$build_configs" \
       --steps 1 \

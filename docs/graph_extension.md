@@ -30,43 +30,30 @@ unambiguous.
 
 ## Method switch
 
-- Graph semantic method: use `model=size50M_graph`.
-- Matched graph-free DreamerV3: use `model=size50M_graph model.graph.enabled=false`.
-- Graph-only latent: add `model.graph_only_latent=true` to the graph method.
-- Pooled graph-simple: use `model=size50M_graph_simple`, or add
-  `model.graph_simple=true` to the graph method.
-- Slot graph-simple: use `model=size50M_graph_slots`.
+- Graph semantic method: `model=size50M_graph_simple` (`size100M_graph_simple`
+  for MS-HAB).
+- Matched DreamerV3 baseline: `model=size50M` (`size100M`).
 
-## Simple graph modes
+`model.graph.enabled` is the only switch that selects the method, and the two
+presets differ only in setting it. There is one graph contract; the full,
+graph-only and slot variants and `model.graph.state_mode` were removed, along
+with `graph_simple` and `graph_only_latent` as separate switches. Graph mode
+requires `model.rep_loss=dreamer`, and the constructor refuses anything else.
 
-`model.graph_simple=true` swaps the whole graph path for a relation-only one.
-It is mutually exclusive with `graph_only_latent` and needs `graph.enabled`.
+## The graph contract
 
-`graph_simple` alone does not name a contract. `model.graph.state_mode` picks
-between two, and the environment is told which through `env.graph.state_mode`:
+Nodes carry entity id, target flag, per-camera boxes and a world centroid. The
+graph builder constructs no DINO and reads no RGB: `graph_node_app` is absent
+from the observation space, the transition, replay and the sampled batch --
+not zeroed -- which removes about 12.3 KB per environment step. Boxes cost
+8 x 2 x 4 float16 = 128 bytes per frame and are extracted with one lookup table
+from segmentation id to node row plus two boolean projections per camera.
+Patch coverage is never computed.
 
-| Schema | Selected by | Node fields |
-|---|---|---|
-| `full` | `graph_simple=false` | appearance, bbox, target |
-| `simple_pooled_bbox` | `graph_simple=true`, `state_mode=pooled` | bbox, target |
-| `simple_slot_uid` | `graph_simple=true`, `state_mode=slots` | uid, target |
-
-Pooled graph-simple addresses a node by the box it currently occupies; slot
-graph-simple aligns nodes across frames by UID. Emitting both columns to both
-would put a key in replay that one of them must never read, so the packer emits
-exactly one. `graph_node_uid` nevertheless stays in the model's reserved graph
-key set, so a stale wrapper that still exposes it cannot feed it to the ordinary
-MLP encoder and quietly train an identity-conditioned model; a pooled run that
-is handed the key raises instead.
-
-Neither simple schema constructs DINO or reads RGB in the graph builder.
-`graph_node_app` is absent from the observation space, the transition, replay
-and the sampled batch -- not zeroed -- which removes about 12.3 KB per
-environment step. The pooled schema keeps boxes, at 8 x 2 x 4 float16 = 128
-bytes per frame, and extracts them without any appearance machinery: one lookup
-table from segmentation id to node row and two boolean projections per camera,
-instead of one `np.isin` sweep and one patch-grid reduction per node. Patch
-coverage is never computed.
+`graph_node_uid` stays in the model's reserved graph key set even though
+nothing packs it, so a stale wrapper that still exposes it cannot feed it to
+the ordinary MLP encoder and quietly train an identity-conditioned model. A
+run that is handed the key raises instead.
 
 ### Pooled graph-simple
 
@@ -170,16 +157,7 @@ consequence: the head is fitted on posterior features and applied to imagined
 ones, exactly as the reward head is, which makes `graph_align_cos` and
 `graph_align_mse` load-bearing for progress quality.
 
-**`relation_head` (comparison arm, scheduled for removal).** The original path.
-One fused head `H(g_hat) -> [R, n_abs]` inside `SimpleGraphDecoder`, supervised
-by `prior_progress_relabs` on the observed EE-to-target facts, with the
-potential taken as a contraction over predicted label distributions at
-imagination time. Continuity there comes from label uncertainty (`soft: true`),
-which is why `progress.soft` has no meaning under `world_model`. The critic
-input is `[imag_feat, vec(p)]`. Kept so the two can be compared in one codebase
-and so a `relation_head` run reproduces the earlier numbers exactly.
-
-Under either source, progress never runs inside a loop: after the rollout one
+Progress never runs inside a loop: after the rollout one
 pass covers all `B x H` states at once.
 
 ### The retained target
@@ -270,30 +248,6 @@ The clean paper comparison holds every loss fixed and varies only the schedule:
 classical potential-difference shaping: it rewards reaching and holding high
 progress states rather than improving between them.
 
-### Slot graph-simple
-
-The replay contract keeps `graph_node_uid` and has no boxes:
-
-| Key | Shape | Storage dtype |
-|---|---:|---|
-| `graph_node_ent` | `[8]` | `uint8` |
-| `graph_node_uid` | `[8]` | `uint8` |
-| `graph_node_target` | `[8]` | `uint8` |
-| `graph_edge_*` | `[168]` | `uint8` |
-
-UIDs are episode-scoped, allocated on first sight, kept when an object leaves
-the view, and never handed to a second object before reset. Codes are permuted
-per episode so a UID means "the same object as before" and nothing more.
-Overflow raises; size `model.graph.uid_vocab` above the peak
-`episode/graph_episode_entities` rather than letting two objects alias. The
-ceiling is 256: UIDs are packed as `uint8`, and the replay buffer's
-`index_put` has no `uint16` kernel. Going wider means moving to `int32`, not
-`uint16`. Nothing assigns or packs a UID under the pooled schema.
-
-`SlotAligner`, slot occupancy, births and deaths, candidate target decoding and
-per-candidate mixing belong to this mode alone and never execute under
-`state_mode: pooled`.
-
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation
 keys may still be present and are ignored. This makes `model.graph.enabled` the
@@ -309,7 +263,7 @@ arm retains the base repository's existing compile behavior.
 Run correctness tests:
 
 ```bash
-python -m unittest test_graph test_graph_simple test_semantic_rssm \n  test_slot_dynamics test_dreamer_graph test_entity_registry \n  test_mshab_contract
+python -m unittest discover -s tests -t . -p "test_*.py"
 ```
 
 Check that padding width no longer controls graph compute:
@@ -411,7 +365,7 @@ Before a long run, exercise reset, named RGB cameras, segmentation, frozen
 DINOv2 features, graph packing, the semantic RSSM, and policy inference:
 
 ```bash
-python runs/smoke_mshab.py \
+python tests/probes/smoke_mshab.py \
   --num-envs 8 \
   --steps 4 \
   --build-configs 4 \

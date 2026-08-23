@@ -114,8 +114,7 @@ def main():
     device = torch.device("cuda")
     cfg = make_config(args)
     encoder = GraphEncoder(cfg).to(device)
-    decoder = SimpleGraphDecoder(cfg, int(cfg.semantic_dim),
-                                torch.arange(1, 6)).to(device)
+    decoder = SimpleGraphDecoder(cfg, int(cfg.semantic_dim)).to(device)
     results = []
     for width in args.edge_widths:
         milliseconds, count = measure(args, encoder, decoder, width, device)
