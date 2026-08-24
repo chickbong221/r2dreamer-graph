@@ -42,6 +42,10 @@ affordances:
   # physical and spatial facts, but suppress compatibility facts for that pair
   # for the rest of the episode.
   suppress_initial_physical_pair_compatibility: true
+  # Frame the capture reads. Zero is the reset observation, whose
+  # pairwise contact buffer has not been filled by a physics step and
+  # reports touches between bodies far apart.
+  initial_physical_pair_frame: 1
   # Beyond this centre distance an obj-obj pair skips scoring and reports
   # unobserved with no value, so no change is accumulated for a pair that is
   # nowhere near interacting. ee-obj is never distance-gated.

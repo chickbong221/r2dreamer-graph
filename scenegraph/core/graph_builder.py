@@ -112,6 +112,12 @@ class GraphBuilder:
         # not an affordance the policy needs to achieve.
         self._initial_physical_pairs: Set[Tuple[str, str]] = set()
         self._initial_captured: bool = False
+        # Contact forces do not describe the reset state until physics has
+        # stepped: on GPU sim the pairwise buffer at the reset frame reports
+        # touches between bodies 15cm apart. Capture after the first step.
+        self._initial_capture_frame: int = int(
+            (self.cfg.get("affordances") or {}).get(
+                "initial_physical_pair_frame", 1))
         # Once per builder, not per episode.
         self._reported_initial: bool = False
 
@@ -507,15 +513,17 @@ class GraphBuilder:
             ),
         )
 
+        capture_initial = (not self._initial_captured
+                           and frame >= self._initial_capture_frame)
         self.last_in_frame = graph.meta["n_in_frame"]
         build_absolute_edges(
             graph, state, self.cfg,
             initial_physical_pairs=self._initial_physical_pairs,
-            capture_initial=not self._initial_captured,
+            capture_initial=capture_initial,
         )
-        if not self._initial_captured:
+        if capture_initial:
             self._report_initial_pairs(graph)
-        self._initial_captured = True
+            self._initial_captured = True
         self.temporal.annotate(graph, self.cfg)
         self.selector.commit(nodes, frame)
         return graph, masks, cam, rgb

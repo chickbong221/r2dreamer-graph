@@ -716,5 +716,54 @@ class ImmobilePairTest(unittest.TestCase):
         self.assertEqual(pairs, {("bin", "sphere"), ("sphere", "table")})
 
 
+class InitialCaptureFrameTest(unittest.TestCase):
+    """Frame zero is the reset observation, and its contact buffer lies.
+
+    On GPU sim the pairwise buffer has not been filled by a physics step yet
+    and reported PlaceSphere's sphere touching a bin 15cm away, which
+    suppressed the one affordance the task is about.
+    """
+
+    def _builder(self, frame_cfg=None):
+        cfg = {"selection": {"n_max": 8},
+               "temporal": {"K": 5},
+               "bin_edges": _BINS,
+               "affordances": dict(frame_cfg or {})}
+        builder = GraphBuilder.__new__(GraphBuilder)
+        builder.cfg = cfg
+        builder._initial_captured = False
+        builder._initial_capture_frame = int(
+            cfg["affordances"].get("initial_physical_pair_frame", 1))
+        return builder
+
+    def _capture_frames(self, builder, frames):
+        seen = []
+        for frame in frames:
+            capture = (not builder._initial_captured
+                       and frame >= builder._initial_capture_frame)
+            if capture:
+                builder._initial_captured = True
+            seen.append(capture)
+        return seen
+
+    def test_the_reset_frame_is_skipped(self):
+        builder = self._builder()
+        self.assertEqual(self._capture_frames(builder, [0, 1, 2, 3]),
+                         [False, True, False, False])
+
+    def test_capture_happens_exactly_once(self):
+        builder = self._builder()
+        self.assertEqual(sum(self._capture_frames(builder, range(20))), 1)
+
+    def test_the_frame_is_configurable(self):
+        builder = self._builder({"initial_physical_pair_frame": 3})
+        self.assertEqual(self._capture_frames(builder, [0, 1, 2, 3, 4]),
+                         [False, False, False, True, False])
+
+    def test_zero_restores_the_reset_frame(self):
+        builder = self._builder({"initial_physical_pair_frame": 0})
+        self.assertEqual(self._capture_frames(builder, [0, 1]), [True, False])
+
+
 if __name__ == "__main__":
     unittest.main()
