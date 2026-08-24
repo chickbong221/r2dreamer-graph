@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "PegInsertionSide-v1",
   "objects": {
     "actor:box_with_hole": {
@@ -3925,16 +3925,17 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.109139,
-            0.000898,
-            -0.005894
+            -0.056649,
+            -0.010058,
+            -0.01749
           ],
           "surface_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.030317156096617157,
+            -0.43726966384838045,
+            -0.8988192872452937
           ],
-          "footprint_radius": 0.11758,
+          "footprint_radius": 0.091576,
+          "partner": "actor:peg",
           "n_samples": 300
         }
       ]
@@ -15662,28 +15663,30 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            0.109277,
-            -0.001121,
-            0.00383
+            0.053138,
+            -0.010297,
+            -0.011525
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.01212307295725749,
+            0.43868104295004756,
+            0.8985610572789874
           ],
+          "partner": "actor:box_with_hole",
           "n_samples": 300
         },
         {
           "bottom_anchor": [
-            0.120354,
-            0.100558,
-            -0.938818
+            0.016511,
+            -0.005441,
+            -0.019113
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -2.72215740968074e-05,
+            0.0004797210284648357,
+            0.9999998845633538
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -19594,16 +19597,17 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.150949,
-            -0.122651,
-            0.938762
+            -0.138623,
+            -0.131344,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.177867,
+          "footprint_radius": 0.191774,
+          "partner": "actor:peg",
           "n_samples": 300
         }
       ]

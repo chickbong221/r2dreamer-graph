@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "PickCube-v1",
   "objects": {
     "actor:cube": {
@@ -7810,15 +7810,16 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            -0.009365,
-            -0.004827,
-            -0.939687
+            -0.000368,
+            0.000315,
+            -0.020001
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            4.724723490191381e-05,
+            -7.950673562901026e-05,
+            0.9999999957231889
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -11729,16 +11730,17 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.000281,
-            -0.123521,
-            0.939661
+            3.9e-05,
+            -0.124694,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.13417,
+          "footprint_radius": 0.136762,
+          "partner": "actor:cube",
           "n_samples": 300
         }
       ]

@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "StackPyramid-v1",
   "objects": {
     "actor:cubeA": {
@@ -11708,31 +11708,33 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.000967,
-            -0.000389,
-            0.039988
+            -0.00142,
+            -0.000935,
+            0.02
           ],
           "surface_normal": [
-            0.0,
-            0.0,
-            1.0
+            -2.3127197012884136e-05,
+            0.00019042169774789397,
+            -0.9999999816023547
           ],
-          "footprint_radius": 0.035517,
+          "footprint_radius": 0.026504,
+          "partner": "actor:cubeC",
           "n_samples": 300
         }
       ],
       "bottom_components": [
         {
           "bottom_anchor": [
-            0.001127,
-            -1.8e-05,
-            -0.940902
+            -0.000131,
+            -0.000386,
+            -0.019912
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.002575560410261471,
+            -0.0014153025100062707,
+            0.9999956816943653
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -23443,31 +23445,33 @@
       "support_components": [
         {
           "surface_anchor": [
-            -3.5e-05,
-            6.6e-05,
-            0.039993
+            -0.001337,
+            -0.000658,
+            0.02
           ],
           "surface_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.00015879001924074226,
+            -2.4756125343280217e-05,
+            -0.9999999870864319
           ],
-          "footprint_radius": 0.035004,
+          "footprint_radius": 0.025277,
+          "partner": "actor:cubeC",
           "n_samples": 300
         }
       ],
       "bottom_components": [
         {
           "bottom_anchor": [
-            0.005643,
-            0.002522,
-            -0.939725
+            -0.000763,
+            -0.000404,
+            -0.019999
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.0003057074048478424,
+            -0.000545036421392543,
+            0.9999998047391219
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -39080,41 +39084,44 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            -0.00042,
-            -0.000582,
-            -0.039988
+            -0.000424,
+            -0.000504,
+            -0.019993
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.0002268818403479291,
+            -7.241350763817902e-05,
+            0.9999999716404568
           ],
+          "partner": "actor:cubeA",
           "n_samples": 300
         },
         {
           "bottom_anchor": [
-            0.000467,
-            0.00063,
-            -0.039992
+            0.000192,
+            9.9e-05,
+            -0.019995
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -4.047771644514393e-06,
+            -0.00019972167535304848,
+            0.9999999800474337
           ],
+          "partner": "actor:cubeB",
           "n_samples": 300
         },
         {
           "bottom_anchor": [
-            0.003673,
-            -0.005817,
-            -0.939677
+            -4.8e-05,
+            -0.000305,
+            -0.02
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -1.166794861883601e-06,
+            5.225403830218071e-05,
+            0.9999999986340771
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -50825,44 +50832,47 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.002416,
-            -0.12181,
-            0.939574
+            0.000129,
+            -0.122479,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.214482,
+          "footprint_radius": 0.213307,
+          "partner": "actor:cubeA",
           "n_samples": 300
         },
         {
           "surface_anchor": [
-            -0.00066,
-            -0.136578,
-            0.939653
+            -0.000721,
+            -0.137025,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.227223,
+          "footprint_radius": 0.225507,
+          "partner": "actor:cubeB",
           "n_samples": 300
         },
         {
           "surface_anchor": [
-            0.010336,
-            -0.116592,
-            0.939655
+            0.010377,
+            -0.119583,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.230877,
+          "footprint_radius": 0.227488,
+          "partner": "actor:cubeC",
           "n_samples": 300
         }
       ]

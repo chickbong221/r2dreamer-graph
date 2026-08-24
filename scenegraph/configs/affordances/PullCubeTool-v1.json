@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "PullCubeTool-v1",
   "objects": {
     "actor:cube": {
@@ -7808,15 +7808,16 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            -0.046607,
-            0.103857,
-            -0.941034
+            -0.006523,
+            -0.000315,
+            -0.019999
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.004543697279269064,
+            0.0013025123245333208,
+            0.9999888290759446
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -19529,15 +19530,16 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            -0.027094,
-            0.182056,
-            -0.944539
+            0.102625,
+            0.023321,
+            -0.02501
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.00034217597688284177,
+            -0.0006822814282026085,
+            0.9999997087037843
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -27348,30 +27350,32 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.104551,
-            -0.060603,
-            0.93978
+            -0.104969,
+            -0.055032,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.33315,
+          "footprint_radius": 0.343849,
+          "partner": "actor:cube",
           "n_samples": 300
         },
         {
           "surface_anchor": [
-            -0.180987,
-            -0.027568,
-            0.944663
+            -0.157451,
+            -0.130294,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.285564,
+          "footprint_radius": 0.331936,
+          "partner": "actor:l_shape_tool",
           "n_samples": 300
         }
       ]

@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "StackCube-v1",
   "objects": {
     "actor:cubeA": {
@@ -11710,28 +11710,30 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            4.3e-05,
-            -0.000164,
-            -0.039987
+            7.5e-05,
+            0.000233,
+            -0.019995
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.0001295199867468749,
+            0.00015491524203433562,
+            0.9999999796129202
           ],
+          "partner": "actor:cubeB",
           "n_samples": 300
         },
         {
           "bottom_anchor": [
-            0.016586,
-            0.00532,
-            -0.939767
+            -0.000483,
+            4.1e-05,
+            -0.02
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.00012979397194587454,
+            1.2823540008579832e-06,
+            0.9999999915759402
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -19542,31 +19544,33 @@
       "support_components": [
         {
           "surface_anchor": [
-            0.000197,
-            0.000242,
-            0.039986
+            -0.000106,
+            0.000139,
+            0.019995
           ],
           "surface_normal": [
-            0.0,
-            0.0,
-            1.0
+            -0.00029780917226434906,
+            -7.64465613735219e-05,
+            -0.9999999527328091
           ],
-          "footprint_radius": 0.012515,
+          "footprint_radius": 0.024088,
+          "partner": "actor:cubeA",
           "n_samples": 300
         }
       ],
       "bottom_components": [
         {
           "bottom_anchor": [
-            0.015754,
-            0.004718,
-            -0.939676
+            -8.6e-05,
+            8.2e-05,
+            -0.019999
           ],
           "bottom_normal": [
-            0.0,
-            0.0,
-            1.0
+            -4.1468662782172085e-05,
+            -2.1780530764761506e-05,
+            0.9999999989029792
           ],
+          "partner": "actor:table-workspace",
           "n_samples": 300
         }
       ]
@@ -27377,30 +27381,32 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.010352,
-            -0.123059,
-            0.93967
+            -0.010482,
+            -0.126641,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.334525,
+          "footprint_radius": 0.333291,
+          "partner": "actor:cubeA",
           "n_samples": 300
         },
         {
           "surface_anchor": [
-            0.005504,
-            -0.119438,
-            0.939642
+            0.005315,
+            -0.118339,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.303005,
+          "footprint_radius": 0.30412,
+          "partner": "actor:cubeB",
           "n_samples": 300
         }
       ]

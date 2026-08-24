@@ -1,5 +1,5 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "env_id": "PlaceSphere-v1",
   "objects": {
     "actor:bin": {
@@ -3908,16 +3908,17 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.000469,
-            -0.000868,
-            0.0225
+            -0.000773,
+            -0.000874,
+            0.002656
           ],
           "surface_normal": [
-            0.0,
-            0.0,
-            1.0
+            0.0011077762808772492,
+            0.0010720605877312672,
+            -0.9999988117581978
           ],
           "footprint_radius": 0.01,
+          "partner": "actor:sphere",
           "n_samples": 300
         }
       ]
@@ -11742,29 +11743,35 @@
       "bottom_components": [
         {
           "bottom_anchor": [
-            0.003393,
-            0.00085,
-            -0.022091
+            0.0,
+            0.0,
+            0.0
           ],
           "bottom_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "n_samples": 300
+          "partner": "actor:bin",
+          "n_samples": 300,
+          "radial_offset": 0.019815,
+          "orientation_invariant": true
         },
         {
           "bottom_anchor": [
-            -0.046404,
-            0.004332,
-            -0.939645
+            0.0,
+            0.0,
+            0.0
           ],
           "bottom_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "n_samples": 300
+          "partner": "actor:table-workspace",
+          "n_samples": 300,
+          "radial_offset": 0.020003,
+          "orientation_invariant": true
         }
       ],
       "symmetry": {
@@ -15679,16 +15686,17 @@
       "support_components": [
         {
           "surface_anchor": [
-            -0.004289,
-            -0.046639,
-            0.939643
+            -0.003666,
+            -0.047663,
+            0.919643
           ],
           "surface_normal": [
             0.0,
             0.0,
-            1.0
+            -1.0
           ],
-          "footprint_radius": 0.104303,
+          "footprint_radius": 0.104476,
+          "partner": "actor:sphere",
           "n_samples": 300
         }
       ]
