@@ -671,5 +671,50 @@ class ScopedCalibrationTest(unittest.TestCase):
         self.assertEqual(obj_edge.temp_label, "increase-fast")
 
 
+class ImmobilePairTest(unittest.TestCase):
+    """A pair neither endpoint can move is scene layout, not a fact.
+
+    PlaceSphere's bin and table are both kinematic, so PhysX solves no contact
+    between them and no anchor is ever mined. Left in, the pair reports link
+    origins -- a table's sits ~0.9m below its own top -- every frame, and its
+    fixed offset sets the height scale for every pair that does move.
+    """
+
+    def _pair(self, a_type, b_type):
+        a = _node("obj-0", "bin", pose=(0.0, 0.0, 0.95))
+        b = _node("obj-1", "table", pose=(0.0, 0.0, 0.0))
+        a.attributes["body_type"] = a_type
+        b.attributes["body_type"] = b_type
+        cfg = {"bin_edges": _BINS}
+        return object_object_spatial_edges(_graph([a, b], None), None, cfg)
+
+    def test_two_kinematic_bodies_emit_nothing(self):
+        self.assertEqual(self._pair("kinematic", "kinematic"), [])
+
+    def test_one_dynamic_endpoint_is_enough(self):
+        self.assertTrue(self._pair("dynamic", "kinematic"))
+
+    def test_static_counts_as_immobile(self):
+        self.assertEqual(self._pair("static", "kinematic"), [])
+
+    def test_an_unknown_body_type_keeps_the_pair(self):
+        """Fail open: a missing field must not silently delete facts."""
+        self.assertTrue(self._pair("", ""))
+
+    def test_the_miner_drops_the_same_pairs(self):
+        """Mining and runtime have to agree on which pairs exist at all."""
+        from scenegraph.adapters.interaction_events import BinStats
+        poses = {"bin": [0, 0, 0.95, 1, 0, 0, 0],
+                 "table": [0, 0, 0.0, 1, 0, 0, 0],
+                 "sphere": [0, 0, 1.0, 1, 0, 0, 0]}
+        stats = BinStats(horizon=1)
+        for frame in range(3):
+            stats.observe(poses, frame, dynamic={"sphere"})
+        pairs = {tuple(sorted((r["key_a"], r["key_b"])))
+                 for r in stats.pose_samples()}
+        self.assertNotIn(("bin", "table"), pairs)
+        self.assertEqual(pairs, {("bin", "sphere"), ("sphere", "table")})
+
+
 if __name__ == "__main__":
     unittest.main()

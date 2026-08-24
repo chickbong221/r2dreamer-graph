@@ -625,19 +625,30 @@ class BinStats:
         self._history.clear()
         self._pose_history.clear()
 
-    def observe(self, poses: Dict[str, Any], frame: int) -> None:
+    def observe(self, poses: Dict[str, Any], frame: int,
+                dynamic: Optional[Iterable[str]] = None) -> None:
+        """``dynamic`` names the keys physics can move.
+
+        A pair with no dynamic endpoint is dropped: its relative
+        geometry is fixed for the run, so it would pin the scale at a
+        constant no pair that actually moves ever reaches. Omitting the
+        argument keeps every pair, which is what the tests want.
+        """
         import itertools as _it
 
         import numpy as np
 
+        movable = None if dynamic is None else set(dynamic)
         keys = sorted(poses)
         for a, b in _it.combinations(keys, 2):
             pa = np.asarray(poses[a], dtype=float)
             pb = np.asarray(poses[b], dtype=float)
             if a == EE_KEY or b == EE_KEY:
                 self._observe_ee(a, b, pa, pb)
-            else:
-                self._observe_object_pair(a, b, pa, pb)
+                continue
+            if movable is not None and a not in movable and b not in movable:
+                continue
+            self._observe_object_pair(a, b, pa, pb)
 
     def _observe_ee(self, a, b, pa, pb) -> None:
         import numpy as np

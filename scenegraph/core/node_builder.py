@@ -105,6 +105,9 @@ def make_object_node(entity, state: PrivilegedState) -> Node:
             is_articulation_link=_is_link(entity),
             entity_kind=entity_kind(entity),
             entity_key=stable_entity_key(entity),
+            # 'dynamic' | 'kinematic' | 'static'. A pair with no
+            # dynamic endpoint cannot change shape during an episode.
+            body_type=str(getattr(entity, "px_body_type", "") or ""),
         ),
     )
 

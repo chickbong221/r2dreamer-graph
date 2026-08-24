@@ -236,15 +236,18 @@ class InteractionRecorder:
         """Relation bin edges come from the range a run actually spans, so
         this samples every pair every step -- not only when a predicate fires,
         which would leave every bin describing contact distance alone."""
-        poses = {}
+        poses, dynamic = {}, set()
         for ent in self.entities:
             pose = _pose(ent, self.env_idx)
             if pose is not None:
-                poses[self.keys[id(ent)]] = pose
+                key = self.keys[id(ent)]
+                poses[key] = pose
+                if str(getattr(ent, "px_body_type", "") or "") == "dynamic":
+                    dynamic.add(key)
         tcp = _list(state.tcp_pose_world)
         if tcp is not None:
             poses[EE_KEY] = tcp
-        self.bins.observe(poses, self.frame)
+        self.bins.observe(poses, self.frame, dynamic=dynamic)
 
     def _containment(self) -> None:
         """The one relation physics cannot find: a hole is not an actor."""

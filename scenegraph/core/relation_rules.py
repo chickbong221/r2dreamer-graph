@@ -660,17 +660,45 @@ def pair_sort_key(node: Node) -> Tuple[str, str]:
     return (str(attrs.get("whitelist_key") or ""), str(node.node_id))
 
 
+def is_dynamic(node: Node) -> bool:
+    """Whether physics can move this body.
+
+    Unknown reads as dynamic: a missing body type must not silently
+    delete facts.
+    """
+    body_type = (node.attributes or {}).get("body_type")
+    if not body_type:
+        return True
+    return str(body_type) == "dynamic"
+
+
+def _immobile_pair(a: Node, b: Node) -> bool:
+    """Neither endpoint can move, so the pair is scene layout.
+
+    PlaceSphere's bin and table are both kinematic. PhysX solves no
+    contact between them, so no anchor is ever mined and the pair falls
+    back to link origins -- and a table origin sits ~0.9m below its own
+    top. Emitting that costs an edge slot to say the same wrong thing
+    every frame, and mining it sets the height scale for every pair
+    that does move.
+    """
+    return not is_dynamic(a) and not is_dynamic(b)
+
+
 def _object_pairs(graph: Graph) -> List[Tuple[Node, Node]]:
     """Unordered object pairs in stable key order.
 
     Sorted by ``pair_sort_key`` rather than by registry position, which shifts
     as nodes arrive. A pair's ``(a, b)`` orientation has to mean the same thing
-    every frame for a single stored edge to be readable.
+    every frame for a single stored edge to be readable. Pairs neither
+    endpoint can move are dropped: nothing the policy does changes them.
     """
     objs = sorted(_eligible_objects(graph), key=pair_sort_key)
     out: List[Tuple[Node, Node]] = []
     for i in range(len(objs)):
         for j in range(i + 1, len(objs)):
+            if _immobile_pair(objs[i], objs[j]):
+                continue
             out.append((objs[i], objs[j]))
     # The protected target pairs with anything in frame even when it is not.
     # A place subtask's defining fact is target-to-receptacle, and losing it

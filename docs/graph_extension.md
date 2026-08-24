@@ -292,6 +292,14 @@ pose pairs at `t` and `t - K`, and the asset builder reprojects them through
 the anchors it just mined. Calibrating on origins while labelling on surfaces
 is what made a `level` band span +/-22cm.
 
+A pair neither endpoint can move is dropped entirely -- no spatial, physical
+or compatibility edges, and no pose samples. PlaceSphere's bin and table are
+both kinematic, so PhysX solves no contact between them, no anchor is ever
+mined, and the pair would report link origins every frame while its fixed
+~0.9m offset set the height scale for every pair that does move. A body type
+the adapter cannot read counts as dynamic, so a missing field never deletes a
+fact silently.
+
 MS-HAB emits no object-object spatial edges, so it requires the object-object
 *planar* scale only -- its obj-obj compatibility near gate reads it -- and
 `required_bin_keys` is scope-aware for that reason. The whitelist schema
