@@ -1304,7 +1304,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:cubeA / actor:table-workspace",
         "support / actor:table-workspace / actor:cubeA"
       ],
       "median_onset": 0.0,
@@ -1317,7 +1316,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:cubeB / actor:table-workspace",
         "support / actor:table-workspace / actor:cubeB"
       ],
       "median_onset": 0.0,
@@ -1330,7 +1328,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:cubeC / actor:table-workspace",
         "support / actor:table-workspace / actor:cubeC"
       ],
       "median_onset": 0.0,
@@ -1343,10 +1340,9 @@
         "actor:cubeC"
       ],
       "milestones": [
-        "contact / ee / actor:cubeC",
         "grasp / ee / actor:cubeC"
       ],
-      "median_onset": 130.5,
+      "median_onset": 131.0,
       "all_initial_conditions": false,
       "index": 3
     },
@@ -1356,10 +1352,9 @@
         "actor:cubeC"
       ],
       "milestones": [
-        "contact / actor:cubeA / actor:cubeC",
         "support / actor:cubeA / actor:cubeC"
       ],
-      "median_onset": 182.5,
+      "median_onset": 183.0,
       "all_initial_conditions": false,
       "index": 4
     },
@@ -1369,7 +1364,6 @@
         "actor:cubeC"
       ],
       "milestones": [
-        "contact / actor:cubeB / actor:cubeC",
         "support / actor:cubeB / actor:cubeC"
       ],
       "median_onset": 183.0,
@@ -1572,8 +1566,10 @@
       ]
     },
     "spatial_bins": {
-      "planar-distance": true,
-      "height-offset": true
+      "ee-object-planar-distance": true,
+      "ee-object-height-offset": true,
+      "object-object-planar-distance": true,
+      "object-object-height-offset": true
     },
     "scorable": {
       "ee / actor:cubeA": {

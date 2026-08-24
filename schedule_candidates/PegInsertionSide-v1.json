@@ -487,7 +487,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:peg / actor:table-workspace",
         "support / actor:table-workspace / actor:peg"
       ],
       "median_onset": 0.0,
@@ -500,7 +499,6 @@
         "actor:peg"
       ],
       "milestones": [
-        "contact / ee / actor:peg",
         "grasp / ee / actor:peg"
       ],
       "median_onset": 53.0,
@@ -513,10 +511,9 @@
         "actor:peg"
       ],
       "milestones": [
-        "contact / actor:box_with_hole / actor:peg",
         "contain / actor:box_with_hole / actor:peg"
       ],
-      "median_onset": 132.5,
+      "median_onset": 134.0,
       "all_initial_conditions": false,
       "index": 2
     }
@@ -655,8 +652,10 @@
       ]
     },
     "spatial_bins": {
-      "planar-distance": true,
-      "height-offset": true
+      "ee-object-planar-distance": true,
+      "ee-object-height-offset": true,
+      "object-object-planar-distance": true,
+      "object-object-height-offset": true
     },
     "scorable": {
       "ee / actor:box_with_hole": {

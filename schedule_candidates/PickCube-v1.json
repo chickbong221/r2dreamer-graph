@@ -203,7 +203,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:cube / actor:table-workspace",
         "support / actor:table-workspace / actor:cube"
       ],
       "median_onset": 0.0,
@@ -216,10 +215,9 @@
         "actor:cube"
       ],
       "milestones": [
-        "contact / ee / actor:cube",
         "grasp / ee / actor:cube"
       ],
-      "median_onset": 42.5,
+      "median_onset": 43.0,
       "all_initial_conditions": false,
       "index": 1
     }
@@ -451,8 +449,10 @@
       ]
     },
     "spatial_bins": {
-      "planar-distance": true,
-      "height-offset": true
+      "ee-object-planar-distance": true,
+      "ee-object-height-offset": true,
+      "object-object-planar-distance": true,
+      "object-object-height-offset": true
     },
     "scorable": {
       "ee / actor:cube": {

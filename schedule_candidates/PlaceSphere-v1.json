@@ -427,7 +427,6 @@
         "actor:table-workspace"
       ],
       "milestones": [
-        "contact / actor:sphere / actor:table-workspace",
         "support / actor:table-workspace / actor:sphere"
       ],
       "median_onset": 0.0,
@@ -440,10 +439,9 @@
         "actor:sphere"
       ],
       "milestones": [
-        "contact / ee / actor:sphere",
         "grasp / ee / actor:sphere"
       ],
-      "median_onset": 46.5,
+      "median_onset": 47.0,
       "all_initial_conditions": false,
       "index": 1
     },
@@ -453,7 +451,6 @@
         "actor:sphere"
       ],
       "milestones": [
-        "contact / actor:bin / actor:sphere",
         "support / actor:bin / actor:sphere"
       ],
       "median_onset": 110.0,
@@ -738,8 +735,10 @@
       ]
     },
     "spatial_bins": {
-      "planar-distance": true,
-      "height-offset": true
+      "ee-object-planar-distance": true,
+      "ee-object-height-offset": true,
+      "object-object-planar-distance": true,
+      "object-object-height-offset": true
     },
     "scorable": {
       "ee / actor:bin": {
