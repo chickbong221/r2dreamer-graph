@@ -17,10 +17,12 @@ reader turns end-effector-to-target facts into one potential in ``[0, 1]``:
 All three return ``sum_k w_k * p_k`` with positive weights summing to one,
 which is what bounds the potential without a clamp -- and it is the same
 contraction in each case, so the observed scalar and the predicted one are
-comparable by construction rather than by a second table. With
-``progress_reward = (1 - discount) * potential`` the discounted return of a
-permanently-solved episode is at most one, so the term cannot outgrow the task
-return it is added to.
+comparable by construction rather than by a second table.
+
+The potential becomes a reward through :func:`potential_shaping`, which is
+potential-difference shaping, not occupancy. Occupancy paid for *being* in a
+high-progress state, so standing still in one earned as much as improving,
+and undoing progress cost nothing.
 """
 
 from __future__ import annotations
@@ -497,10 +499,19 @@ def _label_mask(label_ids, n_abs: int) -> torch.Tensor:
     return mask
 
 
-class ProgressReward(torch.nn.Module):
-    """Bounded shaping reward. Holds the scorer and the discount."""
+def potential_shaping(potential, cont, discount: float):
+    """``F_t = gamma * c_{t+1} * Phi_{t+1} - Phi_t``, indexed for lambda return.
 
-    def __init__(self, scorer: ProgressScorer, discount: float):
-        super().__init__()
-        self.scorer = scorer
-        self.discount = float(discount)
+    ``potential`` and ``cont`` are ``(B, T, 1)`` over one imagined rollout.
+    Index 0 is zero because ``_lambda_return`` consumes ``reward[:, 1:]``: the
+    first entry is the reward for arriving at step 0, which no transition in
+    this rollout produced.
+
+    ``cont`` must be the same continuation the return uses, so a terminal
+    transition keeps only ``-Phi_t`` and the telescoping stays exact. Nothing
+    is clipped and negatives are kept -- a reward floored at zero would pay to
+    undo and redo the same progress.
+    """
+    body = discount * cont[:, 1:] * potential[:, 1:] - potential[:, :-1]
+    head = torch.zeros_like(potential[:, :1])
+    return torch.cat([head, body], dim=1)

@@ -27,6 +27,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..adapters.graph_vocab import build_absolute_vocab, build_relation_vocab
+from .relation_rules import SPATIAL_RELATIONS
+from .spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    OBJECT_OBJECT_SCOPE,
+    spatial_bin_key,
+)
 
 SCHEDULE_SCHEMA_VERSION = 1
 EE_ROLE = "ee"
@@ -126,8 +132,12 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
     clause naming it would score zero forever with nothing to show for it.
     """
     keys = sorted(members)
-    spatial = {r: bool(bin_edges.get(r))
-               for r in ("planar-distance", "height-offset")}
+    # Scope-aware: the ee-object and object-object scales are mined
+    # separately, so a pair can be scorable in one and not the other.
+    ee_spatial = {r: bool(bin_edges.get(spatial_bin_key(EE_OBJECT_SCOPE, r)))
+                  for r in SPATIAL_RELATIONS}
+    obj_spatial = {r: bool(bin_edges.get(
+        spatial_bin_key(OBJECT_OBJECT_SCOPE, r))) for r in SPATIAL_RELATIONS}
     out: Dict[str, Dict[str, bool]] = {}
     for key in keys:
         out[f"{EE_KEY} / {key}"] = {
@@ -135,7 +145,7 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
             "grasp": "grasp" in _types(members, key),
             "grasp-compatibility": _has(objects, key, "grasp_components"),
             "contact-compatibility": _has(objects, key, "contact_components"),
-            **spatial,
+            **ee_spatial,
         }
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):
@@ -153,7 +163,7 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
                 "contain-compatibility": _pairing(objects, a, b,
                                                   "contain_components",
                                                   "key_components"),
-                **spatial,
+                **obj_spatial,
             }
     return out
 

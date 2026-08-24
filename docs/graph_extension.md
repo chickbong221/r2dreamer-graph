@@ -121,10 +121,11 @@ track graph size. Box IoU is an evaluation metric, not an update-loop one.
 ### Progress in pooled graph-simple
 
 `progress.enabled=true` works in both simple modes. Pooled has two
-implementations of the potential, selected by `progress.source`, and they read
-the same stage table so their numbers are comparable.
+implementations of the potential, selected by `progress.mode` (`ee_target`
+or `task_schedule`), and they read the same stage table so their numbers are
+comparable.
 
-**`world_model` (default).** The potential is a scalar. `progress_head` is a
+**`ee_target` (default).** The potential is a scalar. `progress_head` is a
 bounded head beside the environment reward head -- `phi = sigmoid(MLP(feat))`
 on the same `[z, g, h]` the policy and the ordinary critic read -- and it is
 trained by regression, not classification:
@@ -149,8 +150,13 @@ present and none is duplicated; anything else is *masked*, never scored zero.
 `train/progress/valid_fraction` is that mask, and a low value is a persistence
 or relation bug rather than a hard task.
 
-Imagination reads the frozen head directly: `phi = progress_head(imag_feat)`,
-`r_progress = (1 - gamma) * phi`. The progress critic input is `imag_feat` and
+Imagination reads the frozen head directly: `phi = progress_head(imag_feat)`.
+The reward is the potential *difference*,
+`F_t = gamma * c_{t+1} * phi_{t+1} - phi_t`, built after `imag_cont` is
+predicted so it uses the same discount and continuation as `_lambda_return`.
+Index 0 is zero because the return consumes `reward[:, 1:]`. Nothing is
+clipped and negatives are kept: a floor at zero would pay to undo and redo
+the same progress. The progress critic input is `imag_feat` and
 nothing else -- the potential is already a function of it, so appending a
 second view would hand the critic a shortcut the actor does not have. Note the
 consequence: the head is fitted on posterior features and applied to imagined
@@ -235,18 +241,71 @@ doing the steering. `train/progress_beta` and
 read without knowing which beta produced it, and horizon_std separates "beta is
 too small" from "acting does not change predicted progress".
 
-The progress return is normalised with its own floor
-(`progress.return_min_scale`), not the environment critic's `1.0`: a potential
-in `[0, 1]` has an inter-quantile spread far below one, and a floor of one
-would rescale the term rather than normalise it. Set it from `target_std` on a
-beta-zero diagnostic run.
+The two critics are never mixed. The environment critic learns the
+environment return, the progress critic learns the shaping return, and the
+actor combines their **raw** advantages before a single normalisation:
+
+```
+A_actor = (A_env_raw + beta * A_progress_raw) / EMA_IQR(G_env + beta * G_progress)
+```
+
+Normalising each advantage by its own return spread destroyed their relative
+magnitude, so beta stopped meaning "this fraction of the task advantage" and
+a nearly flat potential was amplified to task scale. Lambda return is linear
+in `(reward, value, bootstrap)`, so the raw combination equals forming one
+combined return for the actor while each critic keeps its own target. At
+`beta = 0` the actor loss and the EMA update are identical to the baseline.
+Read `progress/influence_raw` for the weight beta actually buys; it is not
+comparable with the older separately-normalised `progress/influence`.
 
 The clean paper comparison holds every loss fixed and varies only the schedule:
 `beta: 0.0` throughout for the control, the warm-up for the treatment.
 
-`r_progress = (1 - gamma) * Phi` is a bounded progress-*potential* return, not
-classical potential-difference shaping: it rewards reaching and holding high
-progress states rather than improving between them.
+`episode/score` and `eval/score` stay environment-only: the shaping reward
+exists only inside imagined rollouts and never reaches a transition, the
+replay reward, or the reward head.
+
+No checkpoint is written or resumed. Corrected relation labels keep their ids
+and change geometric meaning, so mixing old and new transitions would train
+one label to mean two things.
+
+### Scoped spatial calibration
+
+`planar-distance` and `height-offset` stay two relations in the vocabulary and
+are calibrated separately per endpoint scope. The mined asset carries eight
+keys -- `ee-object-*`, `object-object-*`, and their `-change` forms -- and each
+spatial edge records which one labelled it in `Edge.bin_key`. `TemporalBuffer`
+reads that key rather than deriving one from the relation name, so the change
+bins split with the absolute bins.
+
+Object-object geometry is measured between **mined surface anchors**, not link
+origins: a table's origin sits ~0.9m below its own top, which reported a bin
+resting on it as `far-above`. Anchors are pair-specific -- a table carrying two
+things has one component per partner -- and keep describing the pair after
+physical support ends, so a lift changes height without changing what height
+means. Spherical objects store a radius instead of a local bottom point, so an
+unmoved but spinning ball keeps its relations. Pairs with no mined anchor fall
+back to origins.
+
+The miner measures the same way: the collector ships a reservoir of raw object
+pose pairs at `t` and `t - K`, and the asset builder reprojects them through
+the anchors it just mined. Calibrating on origins while labelling on surfaces
+is what made a `level` band span +/-22cm.
+
+MS-HAB emits no object-object spatial edges, so it requires the object-object
+*planar* scale only -- its obj-obj compatibility near gate reads it -- and
+`required_bin_keys` is scope-aware for that reason. The whitelist schema
+version is descriptive; the missing-bin check is what rejects a pre-split
+asset.
+
+### Initial physical pairs
+
+A physical object-object relation already true in the first graph of an
+episode is scene layout, not an affordance to pursue. Those unordered pairs
+are captured once (`GraphBuilder._initial_captured`, cleared on reset) and
+their compatibility edges are suppressed for the rest of the episode. Physical
+and spatial facts are kept, EE-object affordances are never suppressed, and a
+pair that first becomes physical later is not affected.
 
 The matched command keeps the same Dreamer reconstruction objective and eager
 execution but constructs no graph or semantic parameters. Graph observation

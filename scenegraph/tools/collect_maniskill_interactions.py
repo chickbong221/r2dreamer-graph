@@ -43,9 +43,10 @@ from scenegraph.adapters.privileged_state import (
     entity_pose_world_array, get_privileged_state, invalidate_scene_caches,
     set_merged_view_aliasing,
 )
+from scenegraph.configs.loader import default_temporal_k
 from scenegraph.core.entity_identity import stable_entity_key
 
-SCHEMA_VERSION = 3  # 2 adds interaction traces, 3 adds info predicates
+SCHEMA_VERSION = 4  # 4 adds obj-obj pose pairs and scoped bin stats
 
 
 def _pose(entity, env_idx=0):
@@ -76,7 +77,7 @@ class InteractionRecorder:
 
     def __init__(self, env, *, eps_force=0.05, min_vertical_ratio=0.5,
                  grasp_angle=30, env_idx=0, group_gap=GROUP_GAP,
-                 group_window=GROUP_WINDOW):
+                 group_window=GROUP_WINDOW, temporal_horizon=5):
         self.env = env
         self.env_idx = int(env_idx)
         self.eps_force = float(eps_force)
@@ -91,7 +92,7 @@ class InteractionRecorder:
             "grasp": GroupAccumulator("last", group_gap, group_window),
             "contain": GroupAccumulator("peak", group_gap, group_window),
         }
-        self.bins = BinStats()
+        self.bins = BinStats(horizon=temporal_horizon)
         self.capability: Optional[str] = None
         self.symmetry: Dict[str, Any] = {}
         self.entities: Optional[List[Any]] = None
@@ -311,7 +312,8 @@ def collect(args):
     recorder = InteractionRecorder(
         env, eps_force=args.eps_force,
         min_vertical_ratio=args.min_vertical_ratio,
-        group_gap=args.group_gap, group_window=args.group_window)
+        group_gap=args.group_gap, group_window=args.group_window,
+        temporal_horizon=args.temporal_horizon)
     box.append(recorder)
 
     store = BucketStore(target=args.target)
@@ -359,6 +361,7 @@ def collect(args):
     capability = recorder.capability
     bin_stats = recorder.bins.as_dict()
     bin_samples = recorder.bins.reservoir()
+    bin_pose_pairs = recorder.bins.pose_samples()
     env.close()
     print(f"\nattempts={attempts} successes={successes} "
           f"rate={successes / max(attempts, 1):.1%}")
@@ -375,12 +378,12 @@ def collect(args):
               "-- likely brushes, not task interactions:")
         for b in incidental:
             print(f"  {store.presence(b):.0%}  {b}")
-    return store, symmetry, capability, bin_stats, bin_samples
+    return store, symmetry, capability, bin_stats, bin_samples, bin_pose_pairs
 
 
 def write_shard(store: BucketStore, args, symmetry=None,
                 capability=None, bin_stats=None,
-                bin_samples=None) -> Path:
+                bin_samples=None, bin_pose_pairs=None) -> Path:
     out = Path(args.out) / args.env_id
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"shard_{args.shard:03d}.pkl"
@@ -403,6 +406,9 @@ def write_shard(store: BucketStore, args, symmetry=None,
         "symmetry": symmetry or {},
         "bin_stats": bin_stats or {},
         "bin_samples": bin_samples or {},
+        # Object-object scales are derived from these once anchors are mined.
+        "bin_pose_pairs": bin_pose_pairs or [],
+        "temporal_horizon": int(args.temporal_horizon),
         "capability": capability,
         "late": {str(b): n for b, n in store.late.items()},
         "traces": [r.to_dict() for r in store.traces],
@@ -430,6 +436,8 @@ def parse_args(argv=None):
                    help="observed steps without the predicate to end a group")
     p.add_argument("--group-window", type=int, default=GROUP_WINDOW,
                    help="positive frames averaged around the peak")
+    p.add_argument("--temporal-horizon", type=int, default=None,
+                   help="t-K horizon; defaults to thresholds.yaml temporal.K")
     p.add_argument("--min-presence", type=float, default=0.2,
                    help="buckets in fewer than this fraction of episodes are reported as incidental, never silently dropped")
     p.add_argument("--log-every", type=int, default=10)
@@ -440,13 +448,15 @@ def parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.temporal_horizon is None:
+        args.temporal_horizon = default_temporal_k()
     if args.pilot:
         args.max_attempts = min(args.max_attempts, 25)
         args.patience = 10 ** 6      # never freeze; report what appears
-    store, symmetry, capability, bin_stats, bin_s = collect(args)
+    store, symmetry, capability, bin_stats, bin_s, pose_pairs = collect(args)
     if not args.pilot:
         write_shard(store, args, symmetry, capability, bin_stats,
-                    bin_s)
+                    bin_s, pose_pairs)
     return 0
 
 

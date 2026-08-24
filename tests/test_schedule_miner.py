@@ -13,6 +13,20 @@ import unittest
 from pathlib import Path
 
 from scenegraph.tools import mine_maniskill_schedules as miner
+from scenegraph.core.spatial_metrics import (
+    OBJECT_OBJECT_SCOPE,
+    SPATIAL_SCOPES,
+    spatial_bin_key,
+)
+
+
+def _bins(height=True):
+    out = {}
+    for scope in SPATIAL_SCOPES:
+        out[spatial_bin_key(scope, "planar-distance")] = [0.1, 0.2, 0.3, 0.4]
+        if height:
+            out[spatial_bin_key(scope, "height-offset")] = [-0.1, 0.0, 0.1, 0.2]
+    return out
 
 
 def _episode(seed=0, grasp=True, stack=True, drift=0):
@@ -80,10 +94,9 @@ class MinerTestBase(unittest.TestCase):
             json.dump({"members": members,
                        "bin_edges": overrides.get(
                            "bin_edges",
-                           {"planar-distance": [0.1, 0.2, 0.3, 0.4],
-                            "height-offset": [-0.1, 0.0, 0.1, 0.2]})}, f)
+                           _bins())}, f)
 
-    def _write_shard(self, traces, schema=3):
+    def _write_shard(self, traces, schema=4):
         d = self.shards / self.ENV
         d.mkdir(parents=True, exist_ok=True)
         with open(d / "shard_000.pkl", "wb") as f:
@@ -267,10 +280,12 @@ class ClauseInventoryTest(MinerTestBase):
                 "contain-compatibility"])
 
     def test_missing_spatial_bins_are_reported(self):
-        self._write_assets(bin_edges={"planar-distance": [0.1, 0.2, 0.3, 0.4]})
+        self._write_assets(bin_edges=_bins(height=False))
         inventory = self._bundle([_episode() for _ in range(10)])["scorable_clauses"]
-        self.assertTrue(inventory["spatial_bins"]["planar-distance"])
-        self.assertFalse(inventory["spatial_bins"]["height-offset"])
+        self.assertTrue(inventory["spatial_bins"][
+            spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance")])
+        self.assertFalse(inventory["spatial_bins"][
+            spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset")])
 
     def test_mining_a_schedule_without_assets_fails_loudly(self):
         shutil.rmtree(self.configs)

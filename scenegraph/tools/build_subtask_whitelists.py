@@ -59,6 +59,9 @@ from scenegraph.core.containment import (
     obj_contact_compatibility,
     support_compatibility,
 )
+from scenegraph.configs.loader import default_temporal_k
+from scenegraph.core import spatial_metrics
+from scenegraph.core.affordance import components_for_partner
 from scenegraph.core.entity_identity import normalize_asset_key
 from scenegraph.core.relation_rules import (
     SPATIAL_LABELS,
@@ -68,6 +71,12 @@ from scenegraph.core.relation_rules import (
     bin_label,
 )
 from scenegraph.core.schema import Node
+from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    OBJECT_OBJECT_SCOPE,
+    spatial_bin_key,
+    stat_key,
+)
 from scenegraph.core.whitelist import (
     INTERACTION_CONTACT,
     INTERACTION_CONTAIN,
@@ -90,6 +99,17 @@ _MINER_QUANTILE_CHANGE = 0.6
 _MINER_QUANTILE_ABSOLUTE = 0.9
 
 
+# Pre-split shards named the ee-object streams without a scope. They only
+# ever held ee-object samples, so the rename is exact and re-mining is
+# enough -- no recollection.
+_LEGACY_STAT_ALIASES = {
+    "planar_distance": "ee_object_planar_distance",
+    "height_offset": "ee_object_height_offset",
+    "planar_distance_change": "ee_object_planar_distance_change",
+    "height_offset_change": "ee_object_height_offset_change",
+}
+
+
 def _miner_quantile(relation: str) -> float:
     return (
         _MINER_QUANTILE_CHANGE
@@ -102,10 +122,14 @@ def _miner_quantile(relation: str) -> float:
 # blow-up rather than a meaningful EE-operating range. Tuned for Fetch in a
 # kitchen scene (max reach ~1.5 m planar; ~1.2 m vertical).
 _BIN_VALUE_CEILING: Dict[str, float] = {
-    "planar_distance": 2.0,
-    "height_offset": 1.5,
-    "planar_distance_change": 2.0,
-    "height_offset_change": 1.5,
+    "ee_object_planar_distance": 2.0,
+    "ee_object_height_offset": 1.5,
+    "ee_object_planar_distance_change": 2.0,
+    "ee_object_height_offset_change": 1.5,
+    "object_object_planar_distance": 2.0,
+    "object_object_height_offset": 1.5,
+    "object_object_planar_distance_change": 2.0,
+    "object_object_height_offset_change": 1.5,
     "grasp_compatibility_change": 1.0,
     "contact_compatibility_change": 1.0,
     "support_compatibility_change": 1.0,
@@ -140,7 +164,7 @@ class _WhitelistBuilder:
         task_group: str = "",
         membership_policy: str = MEMBERSHIP_TARGET_SUPPORTERS,
         affordance_set: Optional[AffordanceSet] = None,
-        temporal_k: int = 5,
+        temporal_k: Optional[int] = None,
     ):
         if membership_policy not in MEMBERSHIP_POLICIES:
             raise ValueError(
@@ -152,7 +176,9 @@ class _WhitelistBuilder:
         self.task_group = str(task_group or "")
         self.membership_policy = membership_policy
         self.affordance_set = affordance_set or AffordanceSet()
-        self.temporal_k = max(1, int(temporal_k))
+        self.temporal_k = max(
+            1, int(temporal_k if temporal_k is not None
+                   else default_temporal_k()))
         self.roles: Dict[str, Set[str]] = defaultdict(set)
         self.kinds: Dict[str, str] = {}
         self.names: Dict[str, str] = {}
@@ -279,7 +305,8 @@ class _WhitelistBuilder:
             for k, values in raw_samples.items():
                 if not isinstance(values, (list, tuple)):
                     continue
-                bucket = self.bin_samples[str(k)]
+                name = _LEGACY_STAT_ALIASES.get(str(k), str(k))
+                bucket = self.bin_samples[name]
                 for v in values:
                     try:
                         fv = float(v)
@@ -291,6 +318,77 @@ class _WhitelistBuilder:
         raw_pose_samples = rollout.get("pose_samples")
         if isinstance(raw_pose_samples, list):
             self.pose_rollouts.append(raw_pose_samples)
+
+    def _object_anchor_spec(self, a: Node, b: Node):
+        """``(anchor_a, radial_a, anchor_b, radial_b)`` for the pair, or None."""
+        if self.affordance_set is None or self.affordance_set.is_empty():
+            return None
+        for supporter, supported in ((a, b), (b, a)):
+            sup = components_for_partner(
+                lookup_support_components(self.affordance_set, supporter),
+                supported.node_id)
+            bot = components_for_partner(
+                lookup_bottom_components(self.affordance_set, supported),
+                supporter.node_id)
+            if len(sup) != 1 or len(bot) != 1:
+                continue
+            s_anchor = sup[0].surface_anchor_obj_frame
+            b_anchor = bot[0].bottom_anchor_obj_frame
+            radial = bot[0].radial_offset
+            if supporter is a:
+                return s_anchor, None, b_anchor, radial
+            return b_anchor, radial, s_anchor, None
+        return None
+
+    def _mine_object_pair_samples(self) -> Dict[str, List[float]]:
+        """Object-object scales, measured the way the runtime will measure them.
+
+        MS-HAB emits no object-object spatial edges, but its object-object
+        compatibility near gate reads the planar scale, so it still has to be
+        calibrated -- and on surface anchors, not link origins.
+        """
+        samples: Dict[str, List[float]] = defaultdict(list)
+        if not self.pose_rollouts:
+            return samples
+        pd_key = stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")
+        ho_key = stat_key(OBJECT_OBJECT_SCOPE, "height-offset")
+        for rollout in self.pose_rollouts:
+            history: Dict[Tuple[str, str], Deque[Tuple[float, float]]] = {}
+            for snap in rollout:
+                if not isinstance(snap, dict):
+                    continue
+                raw_entities = snap.get("entities")
+                if not isinstance(raw_entities, dict):
+                    continue
+                nodes = {
+                    key: node
+                    for key, raw in raw_entities.items()
+                    if (node := self._trace_node(str(key), raw)) is not None
+                }
+                keys = sorted(nodes)
+                for i in range(len(keys)):
+                    for j in range(i + 1, len(keys)):
+                        a, b = nodes[keys[i]], nodes[keys[j]]
+                        spec = (self._object_anchor_spec(a, b)
+                                or (None, None, None, None))
+                        points = spatial_metrics.pair_points(
+                            a.pose_world, b.pose_world,
+                            spec[0], spec[2], spec[1], spec[3])
+                        planar, height = spatial_metrics.measures(*points)
+                        samples[pd_key].append(abs(planar))
+                        samples[ho_key].append(abs(height))
+                        hk = (keys[i], keys[j])
+                        buf = history.get(hk)
+                        if buf is None:
+                            buf = deque(maxlen=self.temporal_k + 1)
+                            history[hk] = buf
+                        buf.append((planar, height))
+                        if len(buf) > self.temporal_k:
+                            samples[pd_key + "_change"].append(
+                                abs(planar - buf[0][0]))
+                            samples[ho_key + "_change"].append(
+                                abs(height - buf[0][1]))
+        return samples
 
     def _aggregate_bins(
         self,
@@ -447,8 +545,13 @@ class _WhitelistBuilder:
         samples: Dict[str, List[float]] = defaultdict(list)
         if self.affordance_set.is_empty() or not self.pose_rollouts:
             return samples
-        pd_edges = bin_edges.get("planar-distance")
-        if not pd_edges:
+        ee_pd_edges = bin_edges.get(
+            spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance"))
+        obj_pd_edges = bin_edges.get(
+            spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
+        # Both scopes or nothing: gating object pairs by the end-effector
+        # scale would score a different population than the runtime does.
+        if not ee_pd_edges or not obj_pd_edges:
             return samples
 
         near_labels = self._planar_near_labels()
@@ -496,7 +599,8 @@ class _WhitelistBuilder:
                     if not (INTERACTION_GRASP in types or INTERACTION_CONTACT in types):
                         continue
                     obj_xyz = np.asarray(node.pose_world[:3], dtype=float)
-                    if not self._is_near(tcp_pose[:3], obj_xyz, pd_edges, near_labels):
+                    if not self._is_near(tcp_pose[:3], obj_xyz, ee_pd_edges,
+                                         near_labels):
                         continue
                     scored = self._score_ee_object_compatibility(
                         node, tcp_pose, gripper_width, anchor_cache,
@@ -524,7 +628,8 @@ class _WhitelistBuilder:
                         b = nodes[keys[j]]
                         a_xyz = np.asarray(a.pose_world[:3], dtype=float)
                         b_xyz = np.asarray(b.pose_world[:3], dtype=float)
-                        if not self._is_near(a_xyz, b_xyz, pd_edges, near_labels):
+                        if not self._is_near(a_xyz, b_xyz, obj_pd_edges,
+                                             near_labels):
                             continue
                         a_types = self.interaction_types.get(a.node_id, set())
                         b_types = self.interaction_types.get(b.node_id, set())
@@ -537,7 +642,9 @@ class _WhitelistBuilder:
                             b_comps = lookup_contact_components(self.affordance_set, b)
                             if a_comps and b_comps:
                                 meas = obj_contact_compatibility(
-                                    a.pose_world, a_comps, b.pose_world, b_comps,
+                                    a.pose_world, a_comps,
+                                    b.pose_world, b_comps,
+                                    a.node_id, b.node_id,
                                 )
                                 if meas is not None:
                                     parts = [meas.pos_mismatch / norm["pos"]]
@@ -554,11 +661,15 @@ class _WhitelistBuilder:
                             and INTERACTION_SUPPORT in b_types
                         ):
                             for supporter, supported in ((a, b), (b, a)):
-                                sup_comps = lookup_support_components(
-                                    self.affordance_set, supporter,
+                                sup_comps = components_for_partner(
+                                    lookup_support_components(
+                                        self.affordance_set, supporter),
+                                    supported.node_id,
                                 )
-                                bot_comps = lookup_bottom_components(
-                                    self.affordance_set, supported,
+                                bot_comps = components_for_partner(
+                                    lookup_bottom_components(
+                                        self.affordance_set, supported),
+                                    supporter.node_id,
                                 )
                                 if not sup_comps or not bot_comps:
                                     continue
@@ -692,10 +803,13 @@ class _WhitelistBuilder:
                 self.interaction_count.get(self.target, 0),
             )
 
-        robust, _observed = self._aggregate_bins()
+        object_samples = self._mine_object_pair_samples()
+        robust, _observed = self._aggregate_bins(object_samples)
         compatibility_samples = self._mine_compatibility_samples(
             derive_bin_edges(robust)
         )
+        for key, values in object_samples.items():
+            compatibility_samples[key].extend(values)
         robust, observed = self._aggregate_bins(compatibility_samples)
         bin_edges = derive_bin_edges(robust)
         return {

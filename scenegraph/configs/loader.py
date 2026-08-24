@@ -38,6 +38,12 @@ def _abs_asset_path(cfg_dir: str, rel: Optional[str]) -> Optional[str]:
     return rel if os.path.isabs(rel) else os.path.normpath(os.path.join(cfg_dir, rel))
 
 
+def default_temporal_k(path: Optional[str] = None) -> int:
+    """Runtime ``temporal.K``. Mining must difference over the same horizon."""
+    cfg = load_config(path, task_group=None, require_assets=False)
+    return int((cfg.get("temporal") or {}).get("K", 5))
+
+
 def load_config(
     path: Optional[str] = None,
     *,

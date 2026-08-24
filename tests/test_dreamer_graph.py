@@ -304,7 +304,10 @@ class PooledGraphSimpleTest(unittest.TestCase):
         feat, _, extra = model._imagine(start, 5)
         self.assertEqual(tuple(feat.shape), (4, 5, model.rssm.feat_size))
         # Produced in one pass over B * H after the rollout, not per step.
-        self.assertEqual(tuple(extra["progress_reward"].shape), (4, 5, 1))
+        # Only the potential: the shaping reward needs imag_cont, which
+        # is predicted outside the rollout loop.
+        self.assertEqual(tuple(extra["progress_potential"].shape), (4, 5, 1))
+        self.assertNotIn("progress_reward", extra)
         self.assertEqual(
             tuple(extra["progress_feat"].shape), (4, 5, model.progress_feat_size)
         )

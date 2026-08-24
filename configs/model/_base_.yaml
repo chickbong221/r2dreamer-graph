@@ -16,7 +16,6 @@ progress:
   beta: 0.05
   beta_warmup_start: 400000
   beta_warmup_end: 700000
-  return_min_scale: 0.01
   head:
     layers: 1
     units: ${model.units}

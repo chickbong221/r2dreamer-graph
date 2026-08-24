@@ -58,12 +58,9 @@ def main(config):
 
     policy_trainer = OnlineTrainer(config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs)
     policy_trainer.begin(agent)
-
-    items_to_save = {
-        "agent_state_dict": agent.state_dict(),
-        "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
-    }
-    torch.save(items_to_save, logdir / "latest.pt")
+    # No checkpoint is written. Corrected relation labels have the same ids
+    # and different geometric meaning, so resuming across the change would
+    # train one label to mean two things. Runs are compared from metrics.
 
 
 if __name__ == "__main__":

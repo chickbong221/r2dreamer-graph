@@ -30,25 +30,49 @@
       0.0012822721784177375,
       0.00923235968460771
     ],
-    "height-offset": [
+    "ee-object-height-offset": [
       -0.5815189920365811,
       -0.19383966401219369,
       0.19383966401219369,
       0.5815189920365811
     ],
-    "height-offset-change": [
+    "object-object-height-offset": [
+      -0.5815189920365811,
+      -0.19383966401219369,
+      0.19383966401219369,
+      0.5815189920365811
+    ],
+    "ee-object-height-offset-change": [
       -0.0683481216430664,
       -0.009492794672648111,
       0.009492794672648111,
       0.0683481216430664
     ],
-    "planar-distance": [
+    "object-object-height-offset-change": [
+      -0.0683481216430664,
+      -0.009492794672648111,
+      0.009492794672648111,
+      0.0683481216430664
+    ],
+    "ee-object-planar-distance": [
       0.2928310300433018,
       0.5856620600866036,
       0.8784930901299053,
       1.1713241201732072
     ],
-    "planar-distance-change": [
+    "object-object-planar-distance": [
+      0.2928310300433018,
+      0.5856620600866036,
+      0.8784930901299053,
+      1.1713241201732072
+    ],
+    "ee-object-planar-distance-change": [
+      -0.04652323840610302,
+      -0.00646156088973653,
+      0.00646156088973653,
+      0.04652323840610302
+    ],
+    "object-object-planar-distance-change": [
       -0.04652323840610302,
       -0.00646156088973653,
       0.00646156088973653,
@@ -82,10 +106,14 @@
     "contact_compatibility_change": 0.01636552342229457,
     "grasp_compatibility": 0.7816609609654624,
     "grasp_compatibility_change": 0.01538726614101285,
-    "height_offset": 0.9691983200609684,
-    "height_offset_change": 0.11391353607177734,
-    "planar_distance": 1.4641551502165089,
-    "planar_distance_change": 0.07753873067683836,
+    "ee_object_height_offset": 0.9691983200609684,
+    "object_object_height_offset": 0.9691983200609684,
+    "ee_object_height_offset_change": 0.11391353607177734,
+    "object_object_height_offset_change": 0.11391353607177734,
+    "ee_object_planar_distance": 1.4641551502165089,
+    "object_object_planar_distance": 1.4641551502165089,
+    "ee_object_planar_distance_change": 0.07753873067683836,
+    "object_object_planar_distance_change": 0.07753873067683836,
     "support_compatibility": 1.0,
     "support_compatibility_change": 0.014553127748940888
   },
@@ -186,5 +214,6 @@
   "membership_policy": "target-supporters",
   "subtask": "pick",
   "target": "actor:010_potted_meat_can",
-  "task_group": "tidy_house"
+  "task_group": "tidy_house",
+  "_bins_migrated_pre_anchor": true
 }

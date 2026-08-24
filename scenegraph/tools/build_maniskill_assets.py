@@ -28,23 +28,31 @@ import numpy as np
 
 from scenegraph.adapters.contact_geometry import directions_to_local, to_local
 from scenegraph.adapters.interaction_events import EE_KEY
+from scenegraph.core import spatial_metrics
+from scenegraph.core.spatial_metrics import (
+    OBJECT_OBJECT_SCOPE,
+    SPATIAL_SCOPES,
+    spatial_bin_key,
+    stat_key,
+)
 from scenegraph.core.whitelist import WHITELIST_SCHEMA_VERSION, derive_bin_edges
 
-# Equal-population edges for the five-label scales.
+# Equal-population edges for unsigned distance only. Signed quantities keep
+# the symmetric, zero-centred deadbands produced by ``derive_bin_edges``:
+# otherwise a skewed scene distribution can classify exactly zero as
+# ``above`` or ``increase-slow``.
 _EDGE_PROBS = (0.2, 0.4, 0.6, 0.8)
-_QUANTILE_RELATIONS = {
-    "planar_distance": "planar-distance",
-    "height_offset": "height-offset",
-    "planar_distance_change": "planar-distance-change",
-    "height_offset_change": "height-offset-change",
+_QUANTILE_KEYS = {
+    stat_key(scope, "planar-distance"): spatial_bin_key(scope, "planar-distance")
+    for scope in SPATIAL_SCOPES
 }
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
-AFFORDANCE_SCHEMA_VERSION = 3
+AFFORDANCE_SCHEMA_VERSION = 4
 # Shards below this carry no interaction traces, no env predicate traces
 # and no raw presence counts.
-SHARD_SCHEMA_MIN = 3
+SHARD_SCHEMA_MIN = 4
 TASK_SUBTASK = "task"
 TASK_TARGET = "all"
 
@@ -79,6 +87,7 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         "samples": defaultdict(list), "presence": {}, "excluded": {},
         "symmetry": {}, "bin_stats": defaultdict(float), "capability": None,
         "bin_samples": defaultdict(list),
+        "bin_pose_pairs": [],
         "episode_presence": defaultdict(int),
         # One entry per successful episode, never flattened: the "present in
         # every successful rollout" rule counts episodes, so concatenating
@@ -93,8 +102,9 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         if version < SHARD_SCHEMA_MIN:
             raise SystemExit(
                 f"{path} is schema v{version}; v{SHARD_SCHEMA_MIN} or newer is "
-                "required (older shards carry no per-episode traces and no "
-                "raw presence counts). Re-collect this task."
+                "required (older shards carry no object-pair pose reservoir, "
+                "so object-object bins would fall back to origins). "
+                "Re-collect this task."
             )
         merged["episodes"] += int(shard.get("episodes", 0))
         merged["traces"].extend(shard.get("traces") or [])
@@ -108,6 +118,7 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         merged["complete"] |= set(shard.get("complete") or [])
         for key, arr in (shard.get("bin_samples") or {}).items():
             merged["bin_samples"][key].append(np.asarray(arr))
+        merged["bin_pose_pairs"].extend(shard.get("bin_pose_pairs") or [])
         for key, value in (shard.get("bin_stats") or {}).items():
             merged["bin_stats"][key] = max(merged["bin_stats"][key],
                                            float(value))
@@ -230,45 +241,64 @@ def _paired_contact(samples, a_key: str, b_key: str
     return a_comps, b_comps
 
 
-def _support_components(samples, supporter_key) -> Tuple[Optional[Dict],
-                                                         Optional[Dict]]:
-    """One averaged surface component and one bottom component.
+def _support_components(samples, supporter_key, supported_key, symmetry
+                        ) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """Pair-specific surface and bottom descriptors from paired contact anchors.
 
-    Averaged deliberately: support is a surface, not a set of points, and the
-    footprint radius carries the spread so a large table still matches an
-    object resting anywhere on it.
+    Origins are not contact points -- a table's sits ~0.9m below its own top --
+    so averaging them described the surface as being under the floor and made a
+    resting bin read as far-above. Both sides come from the same event, and
+    each carries the partner it was mined against.
     """
-    surface, bottom = [], []
+    surface, s_normals, bottom, b_normals = [], [], [], []
     for s in samples:
         p = s["payload"]
-        pose_a, pose_b = p.get("pose_a"), p.get("pose_b")
-        if pose_a is None or pose_b is None:
+        if "anchor_a_local" not in p or "anchor_b_local" not in p:
             continue
-        if p.get("key_a") == supporter_key:
-            sup_pose, sub_pose = pose_a, pose_b
+        ka, kb = p.get("key_a"), p.get("key_b")
+        if ka == supporter_key and kb == supported_key:
+            sa, sn = p["anchor_a_local"], p.get("normal_a_local")
+            ba, bn = p["anchor_b_local"], p.get("normal_b_local")
+        elif kb == supporter_key and ka == supported_key:
+            sa, sn = p["anchor_b_local"], p.get("normal_b_local")
+            ba, bn = p["anchor_a_local"], p.get("normal_a_local")
         else:
-            sup_pose, sub_pose = pose_b, pose_a
-        surface.append(to_local(np.asarray(sub_pose[:3])[None, :], sup_pose)[0])
-        bottom.append(to_local(np.asarray(sup_pose[:3])[None, :], sub_pose)[0])
+            continue
+        surface.append(sa)
+        s_normals.append(sn or [0.0, 0.0, 1.0])
+        bottom.append(ba)
+        b_normals.append(bn or [0.0, 0.0, -1.0])
     if not surface:
         return None, None
 
-    arr = np.asarray(surface)
+    arr = np.asarray(surface, dtype=float)
     mean = arr.mean(axis=0)
     spread = (float(np.max(np.linalg.norm(arr[:, :2] - mean[:2], axis=1)))
               if len(arr) > 1 else 0.01)
     surface_comp = {
         "surface_anchor": _round(mean),
-        "surface_normal": [0.0, 0.0, 1.0],
+        "surface_normal": (_unit(np.asarray(s_normals, dtype=float).mean(axis=0))
+                           or [0.0, 0.0, 1.0]),
         "footprint_radius": round(max(0.01, spread), 6),
+        "partner": supported_key,
         "n_samples": len(arr),
     }
-    bmean = np.asarray(bottom).mean(axis=0)
+    barr = np.asarray(bottom, dtype=float)
     bottom_comp = {
-        "bottom_anchor": _round(bmean),
-        "bottom_normal": [0.0, 0.0, 1.0],
-        "n_samples": len(bottom),
+        "bottom_anchor": _round(barr.mean(axis=0)),
+        "bottom_normal": (_unit(np.asarray(b_normals, dtype=float).mean(axis=0))
+                          or [0.0, 0.0, -1.0]),
+        "partner": supporter_key,
+        "n_samples": len(barr),
     }
+    if (symmetry.get(supported_key) or {}).get("symmetry") == "spherical":
+        # A fixed local point orbits with the ball, so an unmoved but spinning
+        # sphere would change its spatial relations. Store the radius instead.
+        bottom_comp["bottom_anchor"] = [0.0, 0.0, 0.0]
+        bottom_comp["bottom_normal"] = [0.0, 0.0, -1.0]
+        bottom_comp["radial_offset"] = round(
+            float(np.mean(np.linalg.norm(barr, axis=1))), 6)
+        bottom_comp["orientation_invariant"] = True
     return surface_comp, bottom_comp
 
 
@@ -398,9 +428,9 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         elif rel == "support":
             if support_roles.get(pair) != (src, dst):
                 continue
-            if samples and "key_a" not in samples[0].get("payload", {}):
-                empty.append(f"{bucket} (no key_a in payload)")
-            surface, bottom = _support_components(samples, src)
+            surface, bottom = _support_components(samples, src, dst, symmetry)
+            if surface is None:
+                empty.append(f"{bucket} (no paired contact anchors)")
             if surface:
                 objects[src]["support_components"].append(surface)
             if bottom:
@@ -463,33 +493,112 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
                 "kind": "link" if k.startswith("link:") else "actor"}
             for k, v in sorted(members.items())
         },
-        "bin_edges": _bin_edges(merged),
+        "bin_edges": _bin_edges(merged, objects),
         "episodes": merged["episodes"],
     }
     return affordances, whitelist
 
 
-def _bin_edges(merged: Dict[str, Any]) -> Dict[str, List[float]]:
-    """Quantile edges where the distribution was recorded, max-derived else.
+def _anchor_index(objects):
+    """``(supporter, supported) -> (surface_anchor, bottom_anchor, radial)``."""
+    index = {}
+    bottoms = {}
+    for key, entry in objects.items():
+        for comp in entry.get("bottom_components", []) or []:
+            partner = comp.get("partner")
+            if partner:
+                bottoms[(str(partner), key)] = (
+                    comp.get("bottom_anchor"), comp.get("radial_offset"))
+    for key, entry in objects.items():
+        for comp in entry.get("support_components", []) or []:
+            partner = comp.get("partner")
+            if not partner:
+                continue
+            bottom = bottoms.get((key, str(partner)))
+            if bottom is None:
+                continue
+            index[(key, str(partner))] = (
+                comp.get("surface_anchor"), bottom[0], bottom[1])
+    return index
 
-    Equal-width bins over a maximum are wrong for these scenes: the table
-    origin sits ~0.9m below its own surface, so height offsets are bimodal and
-    every object pair lands in one bin. Equal-population edges separate the
-    modes instead of collapsing them, and outliers stop setting the scale.
+
+def _pair_measures(index, key_a, key_b, pose_a, pose_b):
+    """``(planar, height)`` in ``a - b`` order, anchored where mined."""
+    spec = index.get((key_a, key_b))
+    if spec is not None:
+        anchor_a, anchor_b, radial_b = spec
+        radial_a = None
+    else:
+        spec = index.get((key_b, key_a))
+        if spec is None:
+            anchor_a = anchor_b = radial_a = radial_b = None
+        else:
+            anchor_b, anchor_a, radial_a = spec
+            radial_b = None
+    points = spatial_metrics.pair_points(
+        pose_a, pose_b, anchor_a, anchor_b, radial_a, radial_b)
+    return spatial_metrics.measures(*points)
+
+
+def _object_pair_stats(merged, objects):
+    """Object-object maxima, measured the way the runtime will measure them.
+
+    The pose reservoir travels raw because the anchors do not exist until this
+    point in the pipeline. Reprojecting here is what stops the scale being
+    calibrated on origins while the labels are read off surfaces.
     """
-    edges = derive_bin_edges(dict(merged["bin_stats"]))
-    for stat, relation in _QUANTILE_RELATIONS.items():
-        chunks = merged.get("bin_samples", {}).get(stat) or []
-        if not len(chunks):
+    index = _anchor_index(objects)
+    stats = defaultdict(float)
+    pd_key = stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")
+    ho_key = stat_key(OBJECT_OBJECT_SCOPE, "height-offset")
+    planar_samples = []
+    for rec in merged.get("bin_pose_pairs") or []:
+        a, b = rec.get("key_a"), rec.get("key_b")
+        pose_a, pose_b = rec.get("pose_a"), rec.get("pose_b")
+        if not a or not b or pose_a is None or pose_b is None:
             continue
-        values = np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
-        if values.size < 100:
+        planar, height = _pair_measures(index, a, b, pose_a, pose_b)
+        stats[pd_key] = max(stats[pd_key], abs(planar))
+        stats[ho_key] = max(stats[ho_key], abs(height))
+        planar_samples.append(planar)
+        prev_a, prev_b = rec.get("prev_pose_a"), rec.get("prev_pose_b")
+        if prev_a is None or prev_b is None:
+            continue
+        old_planar, old_height = _pair_measures(index, a, b, prev_a, prev_b)
+        stats[pd_key + "_change"] = max(
+            stats[pd_key + "_change"], abs(planar - old_planar))
+        stats[ho_key + "_change"] = max(
+            stats[ho_key + "_change"], abs(height - old_height))
+    return dict(stats), np.asarray(planar_samples, dtype=np.float32)
+
+
+def _bin_edges(merged, objects):
+    """Scoped edges: EE from recorded stats, object-object from reprojection.
+
+    Quantiles apply only to non-negative planar distance, where they stop an
+    outlier setting the whole scale. Signed height and change keep symmetric
+    zero-centred deadbands, so exactly zero is always level / stable.
+    """
+    stats = dict(merged["bin_stats"])
+    object_stats, object_planar = _object_pair_stats(merged, objects)
+    stats.update(object_stats)
+    edges = derive_bin_edges(stats)
+
+    samples = {k: np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
+               for k, chunks in (merged.get("bin_samples") or {}).items()
+               if len(chunks)}
+    if object_planar.size:
+        samples[stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")] = object_planar
+
+    for stat, key in _QUANTILE_KEYS.items():
+        values = samples.get(stat)
+        if values is None or values.size < 100:
             continue
         cut = sorted(float(np.quantile(values, p)) for p in _EDGE_PROBS)
         # Degenerate when a statistic barely varies; keep the max-derived scale.
         if len(set(round(c, 9) for c in cut)) < len(cut):
             continue
-        edges[relation] = cut
+        edges[key] = cut
     return edges
 
 
@@ -532,12 +641,14 @@ def main(argv=None) -> int:
 
     print(f"[mine] {len(affordances['objects'])} objects, "
           f"{len(whitelist['members'])} whitelist members")
-    missing = [r for r in ("planar-distance", "height-offset")
-               if not whitelist["bin_edges"].get(r)]
+    missing = [spatial_bin_key(scope, rel)
+               for scope in SPATIAL_SCOPES
+               for rel in ("planar-distance", "height-offset")
+               if not whitelist["bin_edges"].get(spatial_bin_key(scope, rel))]
     if missing:
         raise SystemExit(
             f"bin_stats calibrate no edges for {missing}; the shard predates "
-            "spatial-statistic collection. Re-collect before mining."
+            "scoped spatial statistics. Re-collect before mining."
         )
     write_assets(affordances, whitelist, args.env_id, Path(args.configs))
     return 0

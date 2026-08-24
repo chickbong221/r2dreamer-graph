@@ -47,7 +47,9 @@ import sapien.physx as physx
 from mani_skill import ASSET_DIR
 from mani_skill.agents.robots import Fetch
 
+from scenegraph.configs.loader import default_temporal_k
 from scenegraph.core.affordance import canonical_affordance_key
+from scenegraph.core.spatial_metrics import EE_OBJECT_SCOPE, stat_key
 from scenegraph.core.entity_identity import (
     entity_kind,
     entity_name,
@@ -69,7 +71,9 @@ _OBJ_CONTACT_SAMPLE_CAP = 1024
 _EPS_FORCE_DEFAULT = 0.05
 _MIN_VERTICAL_FORCE_RATIO_DEFAULT = 0.5
 _OBSERVE_STRIDE_DEFAULT = 1
-_DEFAULT_TEMPORAL_K = 5
+# Runtime temporal.K. Differencing over a different horizon here would
+# compress the mined stable band relative to the labels it calibrates.
+_DEFAULT_TEMPORAL_K = default_temporal_k()
 # Reject the first few ticks after a reset so we never sample the spawned-but-
 # settling state or, worse, the just-autoreset state of an env whose previous
 # step returned done=True (MS-HAB autoresets inside super().step()).
@@ -553,11 +557,14 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
                 }
             pd = float(np.linalg.norm(ee_xy - obj_xyz[:2]))
             ho_signed = ee_z - float(obj_xyz[2])
-            self._push_sample(samples, "planar_distance", pd)
-            self._push_sample(samples, "height_offset", abs(ho_signed))
+            self._push_sample(
+                samples, stat_key(EE_OBJECT_SCOPE, "planar-distance"), pd)
+            self._push_sample(
+                samples, stat_key(EE_OBJECT_SCOPE, "height-offset"),
+                abs(ho_signed))
             for relation, value in (
-                ("planar_distance", pd),
-                ("height_offset", ho_signed),
+                (stat_key(EE_OBJECT_SCOPE, "planar-distance"), pd),
+                (stat_key(EE_OBJECT_SCOPE, "height-offset"), ho_signed),
             ):
                 hk = (key, relation)
                 buf = history.get(hk)

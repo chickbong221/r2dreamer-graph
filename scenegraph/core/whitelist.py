@@ -54,6 +54,12 @@ from .entity_identity import (
     stable_entity_key,
 )
 from .schema import Node
+from .spatial_metrics import (
+    SPATIAL_SCOPES,
+    change_bin_key,
+    spatial_bin_key,
+    stat_key,
+)
 
 
 WHITELIST_SCHEMA_VERSION = 4
@@ -126,6 +132,9 @@ class Whitelist:
     interaction_types: Dict[str, Set[str]] = field(default_factory=dict)
     bin_edges: Dict[str, List[float]] = field(default_factory=dict)
     source_path: Optional[str] = None
+    # Set by the key-rename migration. The keys are scoped, the values are not
+    # anchor-derived, so the asset compiles schedules but must not train.
+    migrated_pre_anchor: bool = False
 
     @property
     def empty(self) -> bool:
@@ -224,6 +233,7 @@ def load_whitelist(path: str) -> Whitelist:
                 bin_edges[rel] = parsed
 
     wl = Whitelist(
+        migrated_pre_anchor=bool(raw.get("_bins_migrated_pre_anchor", False)),
         subtask=str(raw.get("subtask", "") or ""),
         task_group=str(raw.get("task_group", "") or ""),
         target=str(raw.get("target", "") or ""),
@@ -268,24 +278,33 @@ def _sensitive_width_5_signed(max_v: float) -> Optional[List[float]]:
             max_v / 12.0, 3.0 * max_v / 5.0]
 
 
-# Relations and the kind of bin-derivation they use.
-_BIN_DERIVATION = {
-    "planar-distance":              ("unsigned5",        "planar_distance"),
-    "height-offset":                ("signed5",          "height_offset"),
-    "planar-distance-change":       ("signed5-sensitive", "planar_distance_change"),
-    "height-offset-change":         ("signed5-sensitive", "height_offset_change"),
+# Per scope, because ee-object and object-object span different distributions.
+_SPATIAL_KINDS = {
+    "planar-distance": "unsigned5",
+    "height-offset": "signed5",
+}
+_BIN_DERIVATION: Dict[str, Tuple[str, str]] = {
     "grasp-compatibility-change":   ("signed5-sensitive", "grasp_compatibility_change"),
     "contact-compatibility-change": ("signed5-sensitive", "contact_compatibility_change"),
     "support-compatibility-change": ("signed5-sensitive", "support_compatibility_change"),
     "contain-compatibility-change": ("signed5-sensitive", "contain_compatibility_change"),
 }
+for _scope in SPATIAL_SCOPES:
+    for _rel, _kind in _SPATIAL_KINDS.items():
+        _key = spatial_bin_key(_scope, _rel)
+        _stat = stat_key(_scope, _rel)
+        _BIN_DERIVATION[_key] = (_kind, _stat)
+        _BIN_DERIVATION[change_bin_key(_key)] = (
+            "signed5-sensitive", f"{_stat}_change")
+del _scope, _rel, _kind, _key, _stat
 
 
 def derive_bin_edges(max_values: Dict[str, float]) -> Dict[str, List[float]]:
-    """Derive runtime bin edges from per-relation demo maxes.
+    """Derive runtime bin edges from per-statistic demo maxes.
 
-    Compatibility absolute edges are always ``[1/3, 2/3]`` because the score
-    is normalized to ``[0, 1]`` before binning.
+    Keys are scoped calibration keys, not relation names. Compatibility
+    absolute edges are always ``[1/3, 2/3]`` because the score is normalized
+    to ``[0, 1]`` before binning.
     """
     out: Dict[str, List[float]] = {
         "grasp-compatibility":   [1.0 / 3.0, 2.0 / 3.0],

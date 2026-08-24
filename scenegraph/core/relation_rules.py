@@ -31,8 +31,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from . import spatial_metrics
 from .affordance import (
     CompatibilityMeasurement,
+    components_for_partner,
     compatibility_components,
     lookup_components,
     lookup_contact_components,
@@ -98,6 +100,23 @@ CHANGE_LABELS: List[str] = [
     "decrease-fast", "decrease-slow", "stable", "increase-slow", "increase-fast",
 ]
 
+# --------------------------------------------------------------------------- #
+# Scoped calibration keys
+# --------------------------------------------------------------------------- #
+# The vocabulary stays two relations. The scale does not: an end-effector reach
+# and a table-to-bin offset are different distributions, so one shared set of
+# edges makes a token mean two distances.
+EE_OBJECT_SCOPE = spatial_metrics.EE_OBJECT_SCOPE
+OBJECT_OBJECT_SCOPE = spatial_metrics.OBJECT_OBJECT_SCOPE
+SPATIAL_SCOPES: Tuple[str, ...] = spatial_metrics.SPATIAL_SCOPES
+spatial_bin_key = spatial_metrics.spatial_bin_key
+change_bin_key = spatial_metrics.change_bin_key
+
+SCOPED_SPATIAL_KEYS: Tuple[str, ...] = tuple(
+    spatial_bin_key(scope, relation)
+    for scope in SPATIAL_SCOPES for relation in SPATIAL_RELATIONS
+)
+
 # Absolute-state vocabulary per relation, used by the encoder and the decoder.
 # One edge per unordered pair in stable key order, with the role in the label,
 # so a pair's direction never depends on whether the predicate holds.
@@ -117,20 +136,38 @@ ABS_LABELS: Dict[str, List[str]] = abs_labels_for()
 
 # Label sets that pair with binned edges. Compatibility bins only cover the
 # three scored labels; ``unobserved`` is assigned outside the binning path.
+# Keyed by calibration key, not relation: the unscoped spatial names are gone
+# so a pre-split asset cannot resolve and quietly label with the wrong scale.
 _BIN_LABELS: Dict[str, List[str]] = {
-    **SPATIAL_LABELS,
+    **{spatial_bin_key(scope, relation): labels
+       for scope in SPATIAL_SCOPES
+       for relation, labels in SPATIAL_LABELS.items()},
+    **{change_bin_key(k): CHANGE_LABELS for k in SCOPED_SPATIAL_KEYS},
     **{r: COMPAT_BIN_LABELS for r in AFFORDANCE_RELATIONS},
-    **{f"{r}-change": CHANGE_LABELS for r in TEMPORAL_RELATIONS},
+    **{f"{r}-change": CHANGE_LABELS for r in AFFORDANCE_RELATIONS},
 }
 
 
-# Absolute relations the runtime cannot label at all without mined edges.
-# ``derive_bin_edges`` always emits the four compatibility scales (the score is
-# already normalised to [0, 1]) and derives the two spatial ones from the demo
-# statistics, so a v4 asset missing any of these was not mined against the task
-# being run. Change relations stay out: an asset legitimately omits one when
-# the demos never moved it.
-REQUIRED_BIN_RELATIONS: Tuple[str, ...] = SPATIAL_RELATIONS + AFFORDANCE_RELATIONS
+def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
+    """Calibration keys this configuration cannot label without.
+
+    Scope-aware because MS-HAB emits no object-object spatial edges: requiring
+    a height scale it never mines would reject every one of its whitelists.
+    Object-object planar is still needed there, since the obj-obj
+    compatibility near gate reads it. Change relations stay out -- an asset
+    legitimately omits one the demos never moved.
+    """
+    keys = [spatial_bin_key(EE_OBJECT_SCOPE, r) for r in SPATIAL_RELATIONS]
+    keys.extend(AFFORDANCE_RELATIONS)
+    oo_spatial = bool(cfg.get("object_object_spatial", False))
+    oo_compat = bool(
+        (cfg.get("affordances") or {}).get("object_object_compatibility", True)
+    )
+    if oo_spatial or oo_compat:
+        keys.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
+    if oo_spatial:
+        keys.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"))
+    return tuple(keys)
 
 
 def temporal_bin_key(relation: str) -> str:
@@ -215,6 +252,51 @@ def planar_distance_xyz(a: np.ndarray, b: np.ndarray) -> float:
 
 def height_offset_xyz(a: np.ndarray, b: np.ndarray) -> float:
     return float(a[2] - b[2])
+
+
+def _whitelist_key(node: Node) -> Optional[str]:
+    key = node.attributes.get("whitelist_key")
+    return str(key) if key else None
+
+
+def support_anchor_spec(a: Node, b: Node, aff_set):
+    """``(anchor_a, radial_a, anchor_b, radial_b)`` for the pair, or None.
+
+    Link origins are not on the contact surface -- a table's sits ~0.9m below
+    its own top -- so origin geometry reports a bin resting on a table as far
+    above it. The anchors keep describing the pair after physical support
+    ends, so a lift changes height without changing what height means.
+    """
+    if aff_set is None or a.pose_world is None or b.pose_world is None:
+        return None
+    for supporter, supported in ((a, b), (b, a)):
+        sup = components_for_partner(
+            lookup_support_components(aff_set, supporter),
+            _whitelist_key(supported),
+        )
+        bot = components_for_partner(
+            lookup_bottom_components(aff_set, supported),
+            _whitelist_key(supporter),
+        )
+        if len(sup) != 1 or len(bot) != 1:
+            continue
+        s_anchor = getattr(sup[0], "surface_anchor_obj_frame", None)
+        b_anchor = getattr(bot[0], "bottom_anchor_obj_frame", None)
+        radial = getattr(bot[0], "radial_offset", None)
+        if s_anchor is None or (b_anchor is None and radial is None):
+            continue
+        if supporter is a:
+            return s_anchor, None, b_anchor, radial
+        return b_anchor, radial, s_anchor, None
+    return None
+
+
+def object_pair_measures(a: Node, b: Node, aff_set) -> Tuple[float, float]:
+    """``(planar, signed height)`` for an object pair, in ``a - b`` order."""
+    spec = support_anchor_spec(a, b, aff_set) or (None, None, None, None)
+    points = spatial_metrics.pair_points(
+        a.pose_world, b.pose_world, spec[0], spec[2], spec[1], spec[3])
+    return spatial_metrics.measures(*points)
 
 
 def planar_distance(a: Node, b: Node) -> Optional[float]:
@@ -432,8 +514,10 @@ def ee_object_spatial_edges(
     if ee is None or ee.pose_world is None:
         return []
     ee_xyz = np.asarray(ee.pose_world[:3], dtype=float)
-    pd_spec = _get_bin_spec(cfg, "planar-distance")
-    ho_spec = _get_bin_spec(cfg, "height-offset")
+    pd_key = spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")
+    ho_key = spatial_bin_key(EE_OBJECT_SCOPE, "height-offset")
+    pd_spec = _get_bin_spec(cfg, pd_key)
+    ho_spec = _get_bin_spec(cfg, ho_key)
 
     edges: List[Edge] = []
     for node in _ee_object_nodes(graph):
@@ -443,12 +527,14 @@ def ee_object_spatial_edges(
             edges.append(Edge(
                 "ee", node.node_id, "planar-distance",
                 bin_label(d, pd_spec[0], pd_spec[1]), raw_value=d,
+                bin_key=pd_key,
             ))
         if ho_spec is not None:
             dz = height_offset_xyz(ee_xyz, obj_xyz)
             edges.append(Edge(
                 "ee", node.node_id, "height-offset",
                 bin_label(dz, ho_spec[0], ho_spec[1]), raw_value=dz,
+                bin_key=ho_key,
             ))
     return edges
 
@@ -512,7 +598,8 @@ def ee_object_affordance_edges(
     if ee is None or ee.pose_world is None or state.tcp_pose_world is None:
         return []
     ee_xyz = np.asarray(ee.pose_world[:3], dtype=float)
-    pd_spec = _get_bin_spec(cfg, "planar-distance")
+    pd_spec = _get_bin_spec(
+        cfg, spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance"))
     if pd_spec is None:
         return []
     grasp_spec = _get_bin_spec(cfg, "grasp-compatibility")
@@ -725,16 +812,20 @@ def object_object_physical_edges(
 
 
 def object_object_affordance_edges(
-    graph: Graph, state: PrivilegedState, cfg: dict
+    graph: Graph, state: PrivilegedState, cfg: dict,
+    skip_pairs: Optional[Set[Tuple[str, str]]] = None,
 ) -> List[Edge]:
     """obj--obj affordance facts: contact / support / contain compatibility.
 
     Admissible when both endpoints carry the mined token and the matching
     components exist. Pairs beyond ``object_object_compat_max_distance`` skip
     scoring and report ``unobserved`` with no value, so no temporal change is
-    accumulated for a pair that is nowhere near interacting.
+    accumulated for a pair that is nowhere near interacting. ``skip_pairs``
+    contains unordered node-id pairs whose physical relation was already true
+    at episode start; those are static scene layout, not affordances to pursue.
     """
-    pd_spec = _get_bin_spec(cfg, "planar-distance")
+    pd_spec = _get_bin_spec(
+        cfg, spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
     if pd_spec is None:
         return []
     near_labels = _planar_near_labels()
@@ -766,9 +857,13 @@ def object_object_affordance_edges(
 
     edges: List[Edge] = []
     for a, b in _object_pairs(graph):
-        a_xyz, b_xyz = _xyz(a), _xyz(b)
+        pair = tuple(sorted((a.node_id, b.node_id)))
+        if skip_pairs is not None and pair in skip_pairs:
+            continue
         ta, tb = interaction_types(a), interaction_types(b)
-        d = planar_distance_xyz(a_xyz, b_xyz)
+        # Same metric the spatial edges report, so "near" means the distance
+        # the label names rather than an origin-to-origin one.
+        d, _ = object_pair_measures(a, b, aff_set)
         scored = max_distance <= 0.0 or d <= max_distance
         near = scored and bin_label(d, pd_spec[0], pd_spec[1]) in near_labels
 
@@ -796,8 +891,12 @@ def object_object_affordance_edges(
         if support_spec is not None and _both(ta, tb, "support"):
             oriented = []
             for supporter, supported in ((a, b), (b, a)):
-                sup_comps = lookup_support_components(aff_set, supporter)
-                bot_comps = lookup_bottom_components(aff_set, supported)
+                sup_comps = components_for_partner(
+                    lookup_support_components(aff_set, supporter),
+                    _whitelist_key(supported))
+                bot_comps = components_for_partner(
+                    lookup_bottom_components(aff_set, supported),
+                    _whitelist_key(supporter))
                 if sup_comps and bot_comps:
                     oriented.append((supporter, supported, sup_comps, bot_comps))
             if len(oriented) > 1:
@@ -879,31 +978,36 @@ def object_object_spatial_edges(
     antisymmetric and its ``above``/``below`` bins already say which way round
     the pair is, so one edge per pair says everything two would.
     """
-    pd_spec = _get_bin_spec(cfg, "planar-distance")
-    ho_spec = _get_bin_spec(cfg, "height-offset")
+    pd_key = spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance")
+    ho_key = spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset")
+    pd_spec = _get_bin_spec(cfg, pd_key)
+    ho_spec = _get_bin_spec(cfg, ho_key)
     if pd_spec is None and ho_spec is None:
         return []
 
+    aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
     for a, b in _object_pairs(graph):
-        a_xyz, b_xyz = _xyz(a), _xyz(b)
+        d, dz = object_pair_measures(a, b, aff_set)
         if pd_spec is not None:
-            d = planar_distance_xyz(a_xyz, b_xyz)
             edges.append(Edge(
                 a.node_id, b.node_id, "planar-distance",
                 bin_label(d, pd_spec[0], pd_spec[1]), raw_value=d,
+                bin_key=pd_key,
             ))
         if ho_spec is not None:
-            dz = height_offset_xyz(a_xyz, b_xyz)
             edges.append(Edge(
                 a.node_id, b.node_id, "height-offset",
                 bin_label(dz, ho_spec[0], ho_spec[1]), raw_value=dz,
+                bin_key=ho_key,
             ))
     return edges
 
 
 def build_absolute_edges(
-    graph: Graph, state: PrivilegedState, cfg: dict
+    graph: Graph, state: PrivilegedState, cfg: dict,
+    initial_physical_pairs: Optional[Set[Tuple[str, str]]] = None,
+    capture_initial: bool = False,
 ) -> None:
     """Append every admissible fact to ``graph.edges`` in place."""
     graph.edges.extend(ee_object_spatial_edges(graph, state, cfg))
@@ -915,6 +1019,27 @@ def build_absolute_edges(
     # separate axis.
     if bool(cfg.get("object_object_spatial", False)):
         graph.edges.extend(object_object_spatial_edges(graph, state, cfg))
-    graph.edges.extend(object_object_physical_edges(graph, state, cfg))
+    physical_edges = object_object_physical_edges(graph, state, cfg)
+    graph.edges.extend(physical_edges)
+
+    aff_cfg = cfg.get("affordances", {})
+    suppress_initial = bool(
+        aff_cfg.get("suppress_initial_physical_pair_compatibility", True)
+    )
+    # Capture is driven by the caller's once-per-episode flag, not by frame
+    # numbering: a builder stepped without an episode boundary would otherwise
+    # union a second scene's pairs onto the first.
+    if (
+        suppress_initial
+        and capture_initial
+        and initial_physical_pairs is not None
+    ):
+        held_labels = {HOLDS, SRC_HOLDS, DST_HOLDS}
+        for edge in physical_edges:
+            if edge.label in held_labels:
+                initial_physical_pairs.add(tuple(sorted((edge.src, edge.dst))))
     if bool(cfg.get("affordances", {}).get("object_object_compatibility", True)):
-        graph.edges.extend(object_object_affordance_edges(graph, state, cfg))
+        skip_pairs = initial_physical_pairs if suppress_initial else None
+        graph.edges.extend(object_object_affordance_edges(
+            graph, state, cfg, skip_pairs=skip_pairs,
+        ))

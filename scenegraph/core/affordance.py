@@ -20,13 +20,13 @@ component lists, one per affordance relation:
 All frames are OBJECT-local, metres. Asset shape::
 
     {
-      "_schema_version": 3,
+      "_schema_version": 4,
       "objects": {
         "<canonical_key>": {
           "grasp_components":  [{"anchor": [..], "approach_dir": [..]?, "width": w}, ...],
           "contact_components": [{"anchor": [..], "outward_normal": [..]?}, ...],
-          "support_components": [{"surface_anchor": [..], "surface_normal": [..], "footprint_radius": r}, ...],
-          "bottom_components":  [{"bottom_anchor": [..], "bottom_normal": [..]}, ...],
+          "support_components": [{"surface_anchor": [..], "surface_normal": [..], "footprint_radius": r, "partner": k}, ...],
+          "bottom_components":  [{"bottom_anchor": [..], "bottom_normal": [..], "partner": k, "radial_offset": r?}, ...],
           "contain_components": [{"entry_anchor": [..], "entry_axis": [..], "opening_radius": r, "depth": d}, ...],
           "key_components":     [{"key_anchor": [..], "key_axis": [..]}, ...]
         }
@@ -82,17 +82,24 @@ class ContactComponent:
 
 @dataclass
 class SupportComponent:
-    """Surface descriptor on a supporter object."""
+    """Surface descriptor on a supporter object, for one partner."""
     surface_anchor_obj_frame: np.ndarray
     surface_normal_obj_frame: np.ndarray   # unit, points OUT of supporter's surface
     footprint_radius: float                # half-extent of the valid xy region
+    # A table carries several things at different places. An anchor mined
+    # against one partner does not describe another.
+    partner_key: Optional[str] = None
 
 
 @dataclass
 class BottomComponent:
-    """Bottom-contact descriptor on a supported object."""
+    """Bottom-contact descriptor on a supported object, for one partner."""
     bottom_anchor_obj_frame: np.ndarray
     bottom_normal_obj_frame: np.ndarray    # unit, points DOWN out of the object
+    partner_key: Optional[str] = None
+    # Spheres have no meaningful local bottom point: rotating one would move
+    # a fixed local anchor. r says use centre - r * up instead.
+    radial_offset: Optional[float] = None
 
 
 @dataclass
@@ -246,10 +253,12 @@ def _parse_support_components(comps_raw) -> List[SupportComponent]:
         radius = _parse_scalar(c.get("footprint_radius"))
         if anchor is None or normal is None or radius is None or radius <= 0:
             continue
+        partner = c.get("partner")
         out.append(SupportComponent(
             surface_anchor_obj_frame=anchor,
             surface_normal_obj_frame=normal,
             footprint_radius=radius,
+            partner_key=str(partner) if partner else None,
         ))
     return out
 
@@ -265,9 +274,13 @@ def _parse_bottom_components(comps_raw) -> List[BottomComponent]:
         normal = _parse_unit_vec3(c.get("bottom_normal"))
         if anchor is None or normal is None:
             continue
+        partner = c.get("partner")
+        radial = _parse_scalar(c.get("radial_offset"))
         out.append(BottomComponent(
             bottom_anchor_obj_frame=anchor,
             bottom_normal_obj_frame=normal,
+            partner_key=str(partner) if partner else None,
+            radial_offset=radial if (radial is not None and radial > 0) else None,
         ))
     return out
 
@@ -604,6 +617,24 @@ def lookup_key_components(
     if aff_set is None:
         return None
     return _lookup_in(aff_set.key_by_object, node)
+
+
+def components_for_partner(components, partner_key: Optional[str]):
+    """Components mined against ``partner_key``.
+
+    Fail-closed on a tagged asset: a table whose only anchors were mined
+    against the bin must not answer for the sphere. Untagged legacy lists are
+    returned whole so old assets keep their previous behaviour.
+    """
+    if not components:
+        return []
+    tagged = [c for c in components if getattr(c, "partner_key", None)]
+    if not tagged:
+        return list(components)
+    if not partner_key:
+        return []
+    return [c for c in components
+            if getattr(c, "partner_key", None) == partner_key]
 
 
 def has_affordance(aff_set: AffordanceSet, node: Node) -> bool:

@@ -23,6 +23,7 @@ from progress import (
     ABS_VERY_NEAR,
     PICK_STAGES,
     ProgressScorer,
+    potential_shaping,
 )
 
 N_ABS = progress.N_ABS
@@ -174,16 +175,76 @@ class ProgressHeadTest(unittest.TestCase):
             self.assertLessEqual(float(out.max()), 1.0)
             self.assertTrue(torch.isfinite(out).all())
 
-    def test_the_shaping_reward_cannot_outgrow_a_unit_return(self):
-        # progress_reward = (1 - discount) * phi with phi <= 1, so the
-        # discounted return of a permanently solved episode is at most one --
-        # and beta therefore means the same thing at any horizon.
+    def test_the_shaping_reward_is_bounded_by_the_potential(self):
+        # F_t = gamma * c * phi' - phi with phi in [0, 1], so |F| <= 1 whatever
+        # the horizon. Nothing downstream clamps it.
         head = self._head()
+        phi = head(torch.randn(256, 6) * 10.0).reshape(1, 256, 1)
+        cont = torch.ones_like(phi)
         for horizon in (16, 333, 1000):
-            step = 1 / horizon
-            reward = step * head(torch.randn(256, 6) * 10.0)
-            self.assertLessEqual(float(reward.max()), step + 1e-9)
-            self.assertLessEqual(float(reward.max()) / step, 1.0 + 1e-6)
+            shaping = potential_shaping(phi, cont, 1 - 1 / horizon)
+            self.assertLessEqual(float(shaping.abs().max()), 1.0 + 1e-6)
+
+
+class PotentialShapingTest(unittest.TestCase):
+    """Potential-difference shaping, not occupancy.
+
+    Occupancy paid for *being* in a high-progress state, so holding still there
+    earned as much as improving and undoing progress cost nothing.
+    """
+
+    GAMMA = 0.9
+
+    def _phi(self, values):
+        return torch.tensor(values, dtype=torch.float32).reshape(1, -1, 1)
+
+    def _discounted(self, shaping):
+        # What _lambda_return accumulates: rewards from index one onward.
+        body = shaping[0, 1:, 0]
+        weights = self.GAMMA ** torch.arange(body.numel(), dtype=torch.float32)
+        return float((body * weights).sum())
+
+    def test_index_zero_is_unused_and_zero(self):
+        phi = self._phi([0.4, 0.5, 0.6])
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        self.assertEqual(float(shaping[0, 0, 0]), 0.0)
+
+    def test_a_round_trip_earns_nothing(self):
+        phi = self._phi([0.0, 0.2, 0.0])
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        self.assertAlmostEqual(self._discounted(shaping), 0.0, places=6)
+
+    def test_a_repeated_cycle_cannot_be_farmed(self):
+        phi = self._phi([0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0])
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        self.assertAlmostEqual(self._discounted(shaping), 0.0, places=6)
+
+    def test_negative_shaping_is_kept(self):
+        phi = self._phi([0.9, 0.1, 0.1])
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        self.assertLess(float(shaping[0, 1, 0]), 0.0)
+
+    def test_it_telescopes_for_an_arbitrary_sequence(self):
+        torch.manual_seed(0)
+        phi = torch.rand(1, 12, 1)
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        expected = (self.GAMMA ** (phi.shape[1] - 1)) * float(phi[0, -1, 0]) \
+            - float(phi[0, 0, 0])
+        self.assertAlmostEqual(self._discounted(shaping), expected, places=5)
+
+    def test_a_terminal_transition_drops_the_bootstrap(self):
+        phi = self._phi([0.3, 0.8])
+        cont = torch.tensor([[[1.0], [0.0]]])
+        shaping = potential_shaping(phi, cont, self.GAMMA)
+        # Continuation zero leaves -phi_t alone: reaching a terminal state is
+        # worth only what the environment reward says it is.
+        self.assertAlmostEqual(float(shaping[0, 1, 0]), -0.3, places=6)
+
+    def test_a_constant_potential_only_reflects_discounting(self):
+        phi = self._phi([0.6] * 5)
+        shaping = potential_shaping(phi, torch.ones_like(phi), self.GAMMA)
+        expected = (self.GAMMA ** 4) * 0.6 - 0.6
+        self.assertAlmostEqual(self._discounted(shaping), expected, places=6)
 
 
 class ReturnNormaliserTest(unittest.TestCase):

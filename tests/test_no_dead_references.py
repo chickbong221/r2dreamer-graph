@@ -341,6 +341,9 @@ class NoOrphanedDefinitionsTest(unittest.TestCase):
         "read_unwrapped_sensor", "recursively_load_optim_state_dict",
         "target_unresolved", "unique_seg_ids", "upsert_node",
         "normal_std_fixed", "merge",
+        # Graph.save: only ever matched because train.py called torch.save.
+        # That call is gone with checkpointing; the method was always dead.
+        "save",
     }
     # Stranded by the DINO/appearance removal; the adapter is kept for mining.
     PENDING = {"patch_tokens"}

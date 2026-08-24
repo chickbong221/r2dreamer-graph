@@ -11,6 +11,10 @@ from scenegraph.adapters.graph_vocab import (
     PAD_TOKEN,
     EntityVocab,
 )
+from scenegraph.core.spatial_metrics import (
+    SPATIAL_SCOPES,
+    spatial_bin_key,
+)
 from scenegraph.core.schedule import (
     ScheduleError,
     compile_schedule,
@@ -29,8 +33,13 @@ MEMBERS = {
     "actor:cubeB": {"interaction_types": ["contact", "support"]},
     "actor:table": {"interaction_types": ["contact", "support"]},
 }
-BINS = {"planar-distance": [0.1, 0.2, 0.3, 0.4],
-        "height-offset": [-0.2, -0.1, 0.1, 0.2]}
+BINS = {
+    k: ([0.1, 0.2, 0.3, 0.4] if k.endswith("planar-distance")
+        else [-0.2, -0.1, 0.1, 0.2])
+    for scope in SPATIAL_SCOPES
+    for k in (spatial_bin_key(scope, "planar-distance"),
+              spatial_bin_key(scope, "height-offset"))
+}
 VOCAB = EntityVocab(token_to_id={PAD_TOKEN: 0, EE_TOKEN: 1, "actor:cubeA": 2,
                                  "actor:cubeB": 3, "actor:table": 4})
 

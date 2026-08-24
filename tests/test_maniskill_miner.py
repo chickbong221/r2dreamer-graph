@@ -16,7 +16,13 @@ import numpy as np
 
 from scenegraph.adapters.interaction_events import EE_KEY
 from scenegraph.core.affordance import load_affordance_set
-from scenegraph.core.relation_rules import REQUIRED_BIN_RELATIONS
+from scenegraph.core.relation_rules import required_bin_keys
+from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    OBJECT_OBJECT_SCOPE,
+    spatial_bin_key,
+    stat_key,
+)
 from scenegraph.core.whitelist import load_whitelist
 from scenegraph.tools import build_maniskill_assets as miner
 
@@ -48,15 +54,20 @@ def _obj_contact(n=300):
                      "normal_b_local": [0.0, 0.0, 1.0]}) for _ in range(n)]
 
 
-def _support(n=300, jitter=0.0):
+def _support(n=300, jitter=0.0, sup="actor:cubeB", sub="actor:cubeA"):
+    """``sup`` carries ``sub``. Contact anchors sit on the supporter's top."""
     out = []
     rng = np.random.default_rng(0)
     for _ in range(n):
         off = rng.uniform(-jitter, jitter, size=2) if jitter else [0.0, 0.0]
         out.append(_sample({
-            "force": 1.0, "key_a": "actor:cubeB", "key_b": "actor:cubeA",
+            "force": 1.0, "key_a": sup, "key_b": sub,
             "pose_a": _pose([0.0, 0.0, 0.0]),
             "pose_b": _pose([float(off[0]), float(off[1]), 0.04]),
+            "anchor_a_local": [float(off[0]), float(off[1]), 0.02],
+            "normal_a_local": [0.0, 0.0, 1.0],
+            "anchor_b_local": [0.0, 0.0, -0.02],
+            "normal_b_local": [0.0, 0.0, -1.0],
         }))
     return out
 
@@ -70,6 +81,31 @@ def _contain(n=300):
             for _ in range(n)]
 
 
+def _ee_stats(planar=0.8, height=0.4):
+    return {
+        stat_key(EE_OBJECT_SCOPE, "planar-distance"): planar,
+        stat_key(EE_OBJECT_SCOPE, "height-offset"): height,
+        stat_key(EE_OBJECT_SCOPE, "planar-distance") + "_change": 0.05,
+        stat_key(EE_OBJECT_SCOPE, "height-offset") + "_change": 0.03,
+    }
+
+
+def _pose_pairs(a="actor:cubeA", b="actor:cubeB", n=8):
+    """Two objects drifting apart, so both object scales are non-degenerate."""
+    out = []
+    for i in range(n):
+        pose_a = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        pose_b = [0.05 * i, 0.0, 0.02 * i, 1.0, 0.0, 0.0, 0.0]
+        prev_b = [0.05 * (i - 1), 0.0, 0.02 * (i - 1), 1.0, 0.0, 0.0, 0.0]
+        out.append({
+            "key_a": a, "key_b": b,
+            "pose_a": pose_a, "pose_b": pose_b,
+            "prev_pose_a": pose_a if i else None,
+            "prev_pose_b": prev_b if i else None,
+        })
+    return out
+
+
 class MinerTestBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -80,10 +116,12 @@ class MinerTestBase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def write_shard(self, env_id, samples, **kw):
+        # Object-object scales come from reprojected pose pairs, so a
+        # shard without them calibrates nothing on that scope.
         d = self.shards / env_id
         d.mkdir(parents=True, exist_ok=True)
         payload = {
-            "_schema_version": kw.get("schema", 3), "env_id": env_id,
+            "_schema_version": kw.get("schema", 4), "env_id": env_id,
             "target": 300,
             "episodes": kw.get("episodes", 300), "samples": samples,
             "seen_counts": {k: len(v) for k, v in samples.items()},
@@ -94,10 +132,8 @@ class MinerTestBase(unittest.TestCase):
             "excluded": kw.get("excluded", {}),
             "symmetry": kw.get("symmetry", {}),
             "capability": kw.get("capability"),
-            "bin_stats": kw.get("bin_stats", {
-                "planar_distance": 0.8, "height_offset": 0.4,
-                "planar_distance_change": 0.05,
-                "height_offset_change": 0.03}),
+            "bin_stats": kw.get("bin_stats", _ee_stats()),
+            "bin_pose_pairs": kw.get("bin_pose_pairs", _pose_pairs()),
             "complete": list(samples),
             "incomplete": [], "late": {},
         }
@@ -142,8 +178,8 @@ class AssetShapeTest(MinerTestBase):
 
     def test_every_required_bin_relation_is_calibrated(self):
         _, wl = self._stack()
-        for relation in REQUIRED_BIN_RELATIONS:
-            self.assertTrue(wl["bin_edges"].get(relation), relation)
+        for key in required_bin_keys({"object_object_spatial": True}):
+            self.assertTrue(wl["bin_edges"].get(key), key)
 
     def test_interaction_types_come_from_evidence(self):
         _, wl = self._stack()
@@ -202,8 +238,10 @@ class OrientationTest(MinerTestBase):
     def test_dominant_orientation_wins_over_force_sign_noise(self):
         self.write_shard("PegInsertionSide-v1", {
             f"grasp / {EE_KEY} / actor:peg": _grasp(),
-            "support / actor:box / actor:peg": _support(300),
-            "support / actor:peg / actor:box": _support(300)[:5],
+            "support / actor:box / actor:peg": _support(
+                300, sup="actor:box", sub="actor:peg"),
+            "support / actor:peg / actor:box": _support(
+                300, sup="actor:box", sub="actor:peg")[:5],
         })
         aff, _ = self.mine("PegInsertionSide-v1")
         self.assertIn("support_components", aff["objects"]["actor:box"])
@@ -213,8 +251,10 @@ class OrientationTest(MinerTestBase):
     def test_a_genuinely_close_split_raises(self):
         self.write_shard("Ambiguous-v1", {
             f"grasp / {EE_KEY} / actor:x": _grasp(),
-            "support / actor:x / actor:y": _support(300),
-            "support / actor:y / actor:x": _support(300)[:280],
+            "support / actor:x / actor:y": _support(
+                300, sup="actor:x", sub="actor:y"),
+            "support / actor:y / actor:x": _support(
+                300, sup="actor:x", sub="actor:y")[:280],
         })
         with self.assertRaises(SystemExit):
             self.mine("Ambiguous-v1")
@@ -259,16 +299,16 @@ class MergeTest(MinerTestBase):
     def test_shards_merge_and_maxima_take_the_max(self):
         key = f"grasp / {EE_KEY} / actor:cube"
         self.write_shard("PickCube-v1", {key: _grasp(150)}, shard=0,
-                         bin_stats={"planar_distance": 0.5,
-                                    "height_offset": 0.2})
+                         bin_stats=_ee_stats(0.5, 0.2))
         self.write_shard("PickCube-v1", {key: _grasp(150)}, shard=1,
-                         bin_stats={"planar_distance": 0.9,
-                                    "height_offset": 0.1})
+                         bin_stats=_ee_stats(0.9, 0.1))
         merged = miner.load_shards("PickCube-v1", self.shards)
         self.assertEqual(len(merged["samples"][key]), 300)
         self.assertEqual(merged["episodes"], 600)
-        self.assertAlmostEqual(merged["bin_stats"]["planar_distance"], 0.9)
-        self.assertAlmostEqual(merged["bin_stats"]["height_offset"], 0.2)
+        pd = stat_key(EE_OBJECT_SCOPE, "planar-distance")
+        ho = stat_key(EE_OBJECT_SCOPE, "height-offset")
+        self.assertAlmostEqual(merged["bin_stats"][pd], 0.9)
+        self.assertAlmostEqual(merged["bin_stats"][ho], 0.2)
 
 
 if __name__ == "__main__":
@@ -282,7 +322,7 @@ class FinalPresenceTest(MinerTestBase):
         drifter = "support / actor:cube / actor:tool"
         self.write_shard("PullCubeTool-v1", {
             f"grasp / {EE_KEY} / actor:tool": _grasp(),
-            drifter: _support(),
+            drifter: _support(sup="actor:cube", sub="actor:tool"),
         })
         # Freeze kept it; the full run says 16%. Expressed as a count, which
         # is what the shard carries -- the rate is recomputed on merge.
@@ -362,8 +402,11 @@ class PairedComparisonTest(MinerTestBase):
 
 
 class QuantileBinTest(MinerTestBase):
-    """Equal-width bins over a max collapse a bimodal distribution; the table
-    origin sits ~0.9m below its own surface, so heights are bimodal."""
+    """Only unsigned distance may use distribution quantiles.
+
+    Height and temporal change have signed vocabulary, so their edges must be
+    symmetric around zero even when the observed scene distribution is not.
+    """
 
     def _bimodal(self):
         import random
@@ -375,9 +418,7 @@ class QuantileBinTest(MinerTestBase):
     def _mine_with(self, samples, height_max=0.4):
         self.write_shard("StackCube-v1", {
             f"grasp / {EE_KEY} / actor:cubeA": _grasp()},
-            bin_stats={"planar_distance": 0.8, "height_offset": height_max,
-                       "planar_distance_change": 0.05,
-                       "height_offset_change": 0.03})
+            bin_stats=_ee_stats(0.8, height_max))
         path = next((self.shards / "StackCube-v1").glob("*.pkl"))
         with open(path, "rb") as f:
             shard = pickle.load(f)
@@ -386,54 +427,97 @@ class QuantileBinTest(MinerTestBase):
             pickle.dump(shard, f)
         return self.mine("StackCube-v1")[1]["bin_edges"]
 
-    def _labels(self, edges, values):
-        from scenegraph.core.relation_rules import SPATIAL_LABELS, bin_label
-        labels = SPATIAL_LABELS["height-offset"]
+    def _labels(self, relation, edges, values):
+        from scenegraph.core.relation_rules import (
+            CHANGE_LABELS, SPATIAL_LABELS, bin_label,
+        )
+        labels = (CHANGE_LABELS if relation.endswith("-change")
+                  else SPATIAL_LABELS[relation])
         return [bin_label(v, edges, labels) for v in values]
 
-    def test_quantile_edges_resolve_within_the_object_mode(self):
-        import numpy as np
-        edges = self._mine_with(
-            {"height_offset": np.asarray(self._bimodal(), dtype=np.float32)}
-        )["height-offset"]
-        # A stacked cube (0.02) and an adjacent one (0.05) must differ.
-        stacked, adjacent = self._labels(edges, [0.02, 0.05])
-        self.assertNotEqual(stacked, adjacent)
+    @staticmethod
+    def _ee(relation):
+        return spatial_bin_key(EE_OBJECT_SCOPE, relation)
 
-    def test_max_derived_edges_collapse_the_object_mode(self):
-        """Why this needed fixing: StackCube measured height_offset max 1.134,
-        because the table origin sits 0.92m below its own surface."""
-        edges = self._mine_with({}, height_max=1.134)["height-offset"]
-        stacked, adjacent = self._labels(edges, [0.02, 0.05])
-        self.assertEqual(stacked, adjacent)
-        self.assertEqual(stacked, "level")
+    def test_planar_distance_uses_quantiles(self):
+        import numpy as np
+        values = np.linspace(0.01, 0.80, 1000, dtype=np.float32)
+        edges = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "planar-distance"): values},
+        )[self._ee("planar-distance")]
+        expected = [float(np.quantile(values, p)) for p in miner._EDGE_PROBS]
+        np.testing.assert_allclose(edges, expected)
+
+    def test_signed_edges_ignore_skewed_quantiles(self):
+        import numpy as np
+        values = np.asarray(self._bimodal(), dtype=np.float32)
+        key = self._ee("height-offset")
+        sampled = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "height-offset"): values})[key]
+        derived = self._mine_with({})[key]
+        self.assertEqual(sampled, derived)
+        self.assertAlmostEqual(sampled[0], -sampled[3])
+        self.assertAlmostEqual(sampled[1], -sampled[2])
+
+    def test_zero_is_level_and_stable(self):
+        edges = self._mine_with({})
+        self.assertEqual(
+            self._labels("height-offset",
+                         edges[self._ee("height-offset")], [0.0]),
+            ["level"],
+        )
+        for scope in (EE_OBJECT_SCOPE, OBJECT_OBJECT_SCOPE):
+            for relation in ("planar-distance", "height-offset"):
+                key = spatial_bin_key(scope, relation) + "-change"
+                self.assertEqual(
+                    self._labels(relation + "-change", edges[key], [0.0]),
+                    ["stable"], key,
+                )
 
     def test_degenerate_statistic_keeps_the_max_scale(self):
         import numpy as np
         flat = np.zeros(500, dtype=np.float32)
-        edges = self._mine_with({"height_offset": flat})["height-offset"]
+        edges = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "planar-distance"): flat},
+        )[self._ee("planar-distance")]
         self.assertGreater(max(edges), 0.0)
 
     def test_too_few_samples_keeps_the_max_scale(self):
         """A thin reservoir gives unstable quantiles, so fall back."""
         import numpy as np
         tiny = np.asarray(self._bimodal()[:50], dtype=np.float32)
-        got = self._mine_with({"height_offset": tiny})["height-offset"]
-        self.assertEqual(got, self._mine_with({})["height-offset"])
+        got = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "planar-distance"): tiny}
+        )[self._ee("planar-distance")]
+        self.assertEqual(got, self._mine_with({})[self._ee("planar-distance")])
 
     def test_reservoirs_concatenate_across_shards(self):
         import numpy as np
         from scenegraph.adapters.interaction_events import BinStats
         b = BinStats()
         for _ in range(3):
-            b.observe({"a": [0, 0, 0, 1, 0, 0, 0],
+            b.observe({"ee": [0, 0, 0, 1, 0, 0, 0],
                        "b": [1, 0, 0.5, 1, 0, 0, 0]}, 0)
-        self.assertEqual(len(b.reservoir()["height_offset"]), 3)
+        self.assertEqual(
+            len(b.reservoir()[stat_key(EE_OBJECT_SCOPE, "height-offset")]), 3)
+
+    def test_change_statistics_use_runtime_horizon(self):
+        import numpy as np
+        from scenegraph.adapters.interaction_events import BinStats
+        b = BinStats(horizon=5)
+        for frame in range(6):
+            b.observe({
+                "ee": [0, 0, 0, 1, 0, 0, 0],
+                "b": [10 - frame, 0, 0, 1, 0, 0, 0],
+            }, frame)
+        changes = b.reservoir()[
+            stat_key(EE_OBJECT_SCOPE, "planar-distance") + "_change"]
+        np.testing.assert_allclose(changes, [-5.0])
 
     def test_missing_quantiles_fall_back(self):
         edges = self._mine_with({})
-        self.assertTrue(edges["planar-distance"])
-        self.assertTrue(edges["height-offset"])
+        self.assertTrue(edges[self._ee("planar-distance")])
+        self.assertTrue(edges[self._ee("height-offset")])
 
 
 class ShardMergeTest(MinerTestBase):
@@ -462,10 +546,11 @@ class ShardMergeTest(MinerTestBase):
         the last shard happened to write."""
         key = f"grasp / {EE_KEY} / actor:cube"
         rare = "support / actor:cube / actor:tool"
-        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: _support()},
+        tool = _support(sup="actor:cube", sub="actor:tool")
+        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: tool},
                          shard=0, episodes=100,
                          episode_presence={key: 100, rare: 100})
-        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: _support()},
+        self.write_shard("PullCubeTool-v1", {key: _grasp(), rare: tool},
                          shard=1, episodes=100,
                          episode_presence={key: 100, rare: 0})
         merged = miner.load_shards("PullCubeTool-v1", self.shards)
@@ -508,7 +593,8 @@ class SpatialOnlyMemberTest(MinerTestBase):
     def _mine_with_goal(self, symmetry):
         self.write_shard("PickCube-v1", {
             f"grasp / {EE_KEY} / actor:cube": _grasp(),
-            "support / actor:table / actor:cube": _support(),
+            "support / actor:table / actor:cube": _support(
+                sup="actor:table", sub="actor:cube"),
         }, symmetry=symmetry)
         return self.mine("PickCube-v1")
 

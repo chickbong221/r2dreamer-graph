@@ -16,6 +16,7 @@ from .relation_rules import (
     TEMPORAL_RELATIONS,
     _get_bin_spec,
     bin_label,
+    change_bin_key,
     temporal_bin_key,
 )
 
@@ -58,7 +59,12 @@ class TemporalBuffer:
             hist.append(float(e.raw_value))
             if len(hist) <= self.K:
                 continue
-            spec = _get_bin_spec(cfg, temporal_bin_key(e.relation))
+            # Scope comes from the edge's own calibration key. Deriving it
+            # from e.relation would give ee-object and object-object changes
+            # one shared scale while their absolute bins are split.
+            key = (change_bin_key(e.bin_key) if e.bin_key
+                   else temporal_bin_key(e.relation))
+            spec = _get_bin_spec(cfg, key)
             if spec is None:
                 continue
             e.temp_label = bin_label(hist[-1] - hist[0], spec[0], spec[1])

@@ -462,9 +462,9 @@ class ProgressHead(nn.Module):
 
     Deliberately not an :class:`MLPHead`. The environment reward is unbounded
     and gets a twohot distribution; progress is a potential with a known range
-    and a regression target, so a sigmoid over one logit is both the right
-    support and the thing that makes ``(1 - discount) * phi`` provably unable
-    to outgrow the task return it is added to. Nothing downstream clamps it.
+    and a regression target, so a sigmoid over one logit is the right support.
+    The bound also caps the shaping reward: with potential-difference shaping
+    ``|F_t| <= 1``, and a reversible cycle nets to zero. Nothing clamps it.
     """
 
     def __init__(self, config, inp_dim):
@@ -493,12 +493,13 @@ class ReturnEMA(nn.Module):
     """running mean and std
 
     ``min_scale`` floors the inter-quantile spread the advantage is divided by.
-    One is right for an unbounded environment return -- it stops a run whose
-    rewards are all near zero from amplifying noise to unit scale. It is wrong
-    for a bounded auxiliary return: a potential in ``[0, 1]`` discounted by
-    ``(1 - discount)`` produces a spread far below one, so a floor of one would
-    divide by a constant and silently rescale the whole term instead of
-    normalising it. Such heads pass their own floor.
+    One is right for an unbounded return -- it stops a run whose rewards are
+    all near zero from amplifying noise to unit scale.
+
+    There is one instance. Progress had a second with its own floor, which
+    normalised each advantage against its own spread and destroyed their
+    relative magnitude; the actor now combines raw advantages and divides
+    once, by the scale of the combined return.
     """
 
     def __init__(self, device, alpha=1e-2, min_scale=1.0):

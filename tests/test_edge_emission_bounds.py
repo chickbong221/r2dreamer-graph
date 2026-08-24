@@ -24,7 +24,8 @@ _SENTINEL = [object()]
 
 
 def _cfg():
-    bins = {r: [0.1, 0.2, 0.3, 0.4] for r in rr.SPATIAL_RELATIONS}
+    bins = {rr.spatial_bin_key(scope, r): [0.1, 0.2, 0.3, 0.4]
+            for scope in rr.SPATIAL_SCOPES for r in rr.SPATIAL_RELATIONS}
     bins.update({r: [1 / 3, 2 / 3] for r in rr.AFFORDANCE_RELATIONS})
     return {
         "bin_edges": bins,
@@ -198,6 +199,72 @@ class EmissionTest(unittest.TestCase):
         self.assertEqual(support[0].label, rr.SRC_HOLDS)
         self.assertEqual(support[0].src, a.node_id)
         self.assertEqual(support[0].dst, b.node_id)
+
+    def test_initial_physical_pair_keeps_facts_but_loses_affordances(self):
+        graph = _graph(2)
+        state, cfg = _state(graph), _cfg()
+        state.pairwise_force_vector = lambda x, y: np.array([0.0, 0.0, -1.0])
+        initial = set()
+        stubs = _stubs(_ROLES)
+        for s in stubs:
+            s.start()
+        try:
+            rr.build_absolute_edges(
+                graph, state, cfg, initial_physical_pairs=initial,
+                capture_initial=True,
+            )
+        finally:
+            for s in stubs:
+                s.stop()
+
+        self.assertEqual(initial, {("actor:o0", "actor:o1")})
+        counts = _by_relation(graph.edges)
+        self.assertEqual(counts, {
+            "contact": 1, "support": 1, "contain": 1,
+            "planar-distance": 1, "height-offset": 1,
+        })
+
+        # The decision is episode-scoped: compatibility must not reappear just
+        # because the initially supported object is later lifted away. Capture
+        # is off from here, so a pair that turns physical later is unaffected.
+        later = _graph(2)
+        later.frame = 1
+        later_state = _state(later)
+        stubs = _stubs(_ROLES)
+        for s in stubs:
+            s.start()
+        try:
+            rr.build_absolute_edges(
+                later, later_state, cfg, initial_physical_pairs=initial,
+            )
+        finally:
+            for s in stubs:
+                s.stop()
+        later_counts = _by_relation(later.edges)
+        self.assertNotIn("contact-compatibility", later_counts)
+        self.assertNotIn("support-compatibility", later_counts)
+        self.assertNotIn("contain-compatibility", later_counts)
+
+    def test_initially_separate_pair_keeps_affordances(self):
+        graph = _graph(2)
+        state, cfg = _state(graph), _cfg()
+        initial = set()
+        stubs = _stubs(_ROLES)
+        for s in stubs:
+            s.start()
+        try:
+            rr.build_absolute_edges(
+                graph, state, cfg, initial_physical_pairs=initial,
+                capture_initial=True,
+            )
+        finally:
+            for s in stubs:
+                s.stop()
+        self.assertFalse(initial)
+        counts = _by_relation(graph.edges)
+        self.assertEqual(counts["contact-compatibility"], 1)
+        self.assertEqual(counts["support-compatibility"], 1)
+        self.assertEqual(counts["contain-compatibility"], 1)
 
     def test_ambiguous_role_raises(self):
         with self.assertRaises(ValueError):

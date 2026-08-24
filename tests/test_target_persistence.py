@@ -28,6 +28,13 @@ from scenegraph.core.graph_builder import (
     VISIBILITY_PROJECTED,
     GraphBuilder,
 )
+from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    OBJECT_OBJECT_SCOPE,
+    SPATIAL_SCOPES,
+    change_bin_key,
+    spatial_bin_key,
+)
 from scenegraph.core.relation_rules import (
     _eligible_objects,
     _ee_object_nodes,
@@ -47,7 +54,8 @@ E_MAX = 24
 # Fixtures
 # --------------------------------------------------------------------------- #
 def _node(node_id, name, *, visible=True, in_frame=None, pose=(0.0, 0.0, 0.0),
-          seg=(1,), node_type="object", box=0.4):
+          seg=(1,), node_type="object", box=0.4,
+          quat=(1.0, 0.0, 0.0, 0.0)):
     node = Node(
         node_id=node_id,
         node_type=node_type,
@@ -55,7 +63,7 @@ def _node(node_id, name, *, visible=True, in_frame=None, pose=(0.0, 0.0, 0.0),
         visible=visible,
         in_frame=visible if in_frame is None else in_frame,
         segmentation_ids=list(seg),
-        pose_world=[*pose, 1.0, 0.0, 0.0, 0.0],
+        pose_world=[*pose, *quat],
         attributes={"whitelist_key": name, "interaction_types": {"grasp", "contact"}},
     )
     node.bbox = np.full((2, 4), box, np.float32)
@@ -101,8 +109,11 @@ def _pack(graph, names, n_max=N_MAX):
 
 # Labels come from the relation vocabulary; cfg supplies edges only.
 _BINS = {
-    "planar-distance": [0.1, 0.2, 0.6, 1.0],
-    "height-offset": [-0.4, -0.1, 0.1, 0.4],
+    k: ([0.1, 0.2, 0.6, 1.0] if k.endswith("planar-distance")
+        else [-0.4, -0.1, 0.1, 0.4])
+    for scope in SPATIAL_SCOPES
+    for k in (spatial_bin_key(scope, "planar-distance"),
+              spatial_bin_key(scope, "height-offset"))
 }
 
 
@@ -501,6 +512,163 @@ class SeedGateTest(unittest.TestCase):
         question there, camera coverage is."""
         builder = _builder(VISIBILITY_PROJECTED)
         self.assertIsNone(builder._seed_gate)
+
+
+# --------------------------------------------------------------------------- #
+# Surface anchors and scoped calibration
+# --------------------------------------------------------------------------- #
+def _anchored(partner="actor:bin", radial=None):
+    from scenegraph.core.affordance import (
+        AffordanceSet, BottomComponent, SupportComponent,
+    )
+    return AffordanceSet(
+        support_by_object={"table": [SupportComponent(
+            surface_anchor_obj_frame=np.array([0.0, 0.0, 0.9]),
+            surface_normal_obj_frame=np.array([0.0, 0.0, 1.0]),
+            footprint_radius=0.5,
+            partner_key=partner,
+        )]},
+        bottom_by_object={"bin": [BottomComponent(
+            bottom_anchor_obj_frame=np.array([0.0, 0.0, -0.05]),
+            bottom_normal_obj_frame=np.array([0.0, 0.0, -1.0]),
+            partner_key="actor:table",
+            radial_offset=radial,
+        )]},
+    )
+
+
+class SupportAnchorSpatialTest(unittest.TestCase):
+    """A link origin is not a contact point.
+
+    A table's origin sits ~0.9m below its own top, so origin geometry reported
+    a bin resting on it as far-above and a metre away.
+    """
+
+    def _pair(self, bin_z, quat=(1.0, 0.0, 0.0, 0.0), radial=None,
+              bin_x=0.0, aff=None):
+        table = _node("obj-0", "table", pose=(0.0, 0.0, 0.0))
+        table.attributes["entity_key"] = "actor:table"
+        table.attributes["whitelist_key"] = "actor:table"
+        obj = _node("obj-1", "bin", pose=(bin_x, 0.0, bin_z), quat=quat)
+        obj.attributes["entity_key"] = "actor:bin"
+        obj.attributes["whitelist_key"] = "actor:bin"
+        cfg = {"bin_edges": _BINS,
+               "affordance_set": aff if aff is not None else _anchored(radial=radial)}
+        edges = object_object_spatial_edges(_graph([table, obj], None), None, cfg)
+        # Pair order is by key, so ``actor:bin`` is the source: a positive
+        # height offset means the bin is above the table.
+        return {e.relation: e for e in edges}
+
+    def test_a_resting_pair_is_very_near_and_level(self):
+        # Bin bottom at 0.95 - 0.05 = 0.90: exactly the table's top face.
+        edges = self._pair(0.95)
+        self.assertAlmostEqual(edges["planar-distance"].raw_value, 0.0)
+        self.assertAlmostEqual(edges["height-offset"].raw_value, 0.0)
+        self.assertEqual(edges["height-offset"].label, "level")
+        self.assertEqual(edges["planar-distance"].label, "very-near")
+
+    def test_origin_geometry_would_not_have_agreed(self):
+        """The bug this replaces, pinned so it cannot come back quietly."""
+        edges = self._pair(0.95)
+        self.assertNotAlmostEqual(edges["height-offset"].raw_value, 0.95)
+
+    def test_lifting_changes_only_height(self):
+        rest = self._pair(0.95)
+        lifted = self._pair(1.25)
+        self.assertAlmostEqual(lifted["planar-distance"].raw_value,
+                               rest["planar-distance"].raw_value)
+        self.assertAlmostEqual(lifted["height-offset"].raw_value, 0.30)
+        self.assertEqual(lifted["height-offset"].label, "above")
+
+    def test_lateral_movement_changes_only_planar_distance(self):
+        rest = self._pair(0.95)
+        moved = self._pair(0.95, bin_x=0.4)
+        self.assertAlmostEqual(moved["planar-distance"].raw_value, 0.4)
+        self.assertAlmostEqual(moved["height-offset"].raw_value,
+                               rest["height-offset"].raw_value)
+
+    def test_anchors_survive_support_ending(self):
+        """Physical support is false once lifted; the pair keeps its scale."""
+        lifted = self._pair(1.55)
+        self.assertEqual(lifted["planar-distance"].label, "very-near")
+        self.assertIsNotNone(lifted["height-offset"].label)
+
+    def test_rotating_a_stationary_sphere_changes_nothing(self):
+        """A fixed local bottom point would orbit with the ball."""
+        upright = self._pair(0.95, radial=0.05)
+        spun = self._pair(0.95, quat=(0.0, 1.0, 0.0, 0.0), radial=0.05)
+        self.assertAlmostEqual(upright["height-offset"].raw_value,
+                               spun["height-offset"].raw_value)
+        self.assertAlmostEqual(upright["planar-distance"].raw_value,
+                               spun["planar-distance"].raw_value)
+
+    def test_a_rotated_local_anchor_would_have_moved(self):
+        """Control for the test above: without the radial form, it does move."""
+        upright = self._pair(0.95)
+        spun = self._pair(0.95, quat=(0.0, 1.0, 0.0, 0.0))
+        self.assertNotAlmostEqual(upright["height-offset"].raw_value,
+                                  spun["height-offset"].raw_value)
+
+    def test_an_anchor_mined_against_another_partner_does_not_match(self):
+        edges = self._pair(0.95, aff=_anchored(partner="actor:sphere"))
+        # Falls back to origins rather than borrowing the sphere's anchor.
+        self.assertAlmostEqual(edges["height-offset"].raw_value, 0.95)
+
+    def test_a_pair_with_no_anchor_falls_back_to_origins(self):
+        from scenegraph.core.affordance import AffordanceSet
+        edges = self._pair(0.95, aff=AffordanceSet())
+        self.assertAlmostEqual(edges["height-offset"].raw_value, 0.95)
+
+
+class ScopedCalibrationTest(unittest.TestCase):
+    """One vocabulary, two scales. Change bins must split with absolute ones."""
+
+    def _both(self, cfg, offset):
+        a = _node("obj-0", "cubeA", pose=(0.0, 0.0, 0.0))
+        b = _node("obj-1", "cubeB", pose=(0.3 + offset, 0.0, 0.0))
+        graph = _graph([a, b], None)
+        graph.edges.extend(object_object_spatial_edges(graph, None, cfg))
+        ee = _node("ee", "ee", pose=(0.0, 0.0, 0.0), node_type="ee")
+        ee_graph = _graph([ee, _node("obj-1", "cubeB",
+                                     pose=(0.3 + offset, 0.0, 0.0))], None)
+        graph.edges.extend(ee_object_spatial_edges(ee_graph, None, cfg))
+        return graph
+
+    def test_each_scope_labels_with_its_own_key(self):
+        graph = self._both({"bin_edges": _BINS}, 0.0)
+        by_src = {(e.src, e.relation): e.bin_key for e in graph.edges}
+        self.assertEqual(by_src[("ee", "planar-distance")],
+                         spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance"))
+        self.assertEqual(by_src[("obj-0", "planar-distance")],
+                         spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
+
+    def test_identical_raw_changes_take_different_change_bins(self):
+        from scenegraph.core.temporal_buffer import TemporalBuffer
+
+        ee_change = change_bin_key(
+            spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance"))
+        obj_change = change_bin_key(
+            spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
+        cfg = {
+            "temporal": {"K": 1},
+            "bin_edges": {
+                **_BINS,
+                # Wide for the arm, tight for two objects on a table.
+                ee_change: [-0.4, -0.2, 0.2, 0.4],
+                obj_change: [-0.04, -0.02, 0.02, 0.04],
+            },
+        }
+        buffer = TemporalBuffer(K=1)
+        for offset in (0.0, 0.10):
+            graph = self._both(cfg, offset)
+            buffer.annotate(graph, cfg)
+
+        by_src = {(e.src, e.relation): e for e in graph.edges}
+        ee_edge = by_src[("ee", "planar-distance")]
+        obj_edge = by_src[("obj-0", "planar-distance")]
+        self.assertAlmostEqual(ee_edge.raw_value, obj_edge.raw_value)
+        self.assertEqual(ee_edge.temp_label, "stable")
+        self.assertEqual(obj_edge.temp_label, "increase-fast")
 
 
 if __name__ == "__main__":

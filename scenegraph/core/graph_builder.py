@@ -12,7 +12,7 @@ decision, and overflow raises rather than evicting.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -20,7 +20,13 @@ from .affordance import canonical_affordance_key
 from .entity_identity import stable_entity_key, stable_node_id
 from .schema import Edge, Graph, Node
 from .node_builder import build_nodes
-from .relation_rules import REQUIRED_BIN_RELATIONS, build_absolute_edges
+from .relation_rules import (
+    DST_HOLDS,
+    HOLDS,
+    SRC_HOLDS,
+    build_absolute_edges,
+    required_bin_keys,
+)
 from .temporal_buffer import TemporalBuffer
 from .mask_extractor import MaskAccumulator
 from .selector import EntityRegistry, NodeSelector
@@ -101,6 +107,32 @@ class GraphBuilder:
         self._match_key_cache: Dict[int, Tuple[Any, Optional[str]]] = {}
         # Last frame's relation-eligible vertex count, for logging only.
         self.last_in_frame: int = 0
+        # Unordered object pairs whose physical relation already held on the
+        # first frame. Their compatibility facts describe static scene layout,
+        # not an affordance the policy needs to achieve.
+        self._initial_physical_pairs: Set[Tuple[str, str]] = set()
+        self._initial_captured: bool = False
+        # Once per builder, not per episode.
+        self._reported_initial: bool = False
+
+    def _report_initial_pairs(self, graph) -> None:
+        """Print the first episode's capture once.
+
+        Reset-time contact forces are the one thing that would turn the filter
+        into a silent no-op, and zero captured pairs in a scene that plainly
+        has objects resting on furniture is what that looks like.
+        """
+        if self._reported_initial:
+            return
+        self._reported_initial = True
+        held = [e for e in graph.edges
+                if e.relation in ("contact", "support", "contain")
+                and e.label in (HOLDS, SRC_HOLDS, DST_HOLDS)]
+        print(f"[graph] {self.env_id}: {len(self._initial_physical_pairs)} "
+              f"initial physical pair(s) captured", flush=True)
+        for edge in held:
+            print(f"[graph]   {edge.src} --{edge.relation}={edge.label}--> "
+                  f"{edge.dst}", flush=True)
 
     def reset_episode(self) -> None:
         self.selector.reset_episode()
@@ -108,6 +140,8 @@ class GraphBuilder:
         self.temporal = TemporalBuffer(K=self.cfg["temporal"]["K"])
         self._last_seen.clear()
         self._match_key_cache.clear()
+        self._initial_physical_pairs.clear()
+        self._initial_captured = False
         self._entities.clear()
         if self._coverage is not None:
             # Reconfiguration destroys the actors the AABB cache describes.
@@ -141,14 +175,23 @@ class GraphBuilder:
             )
         union = load_whitelist(path)
         self._check_task_group(union, path)
+        if union.migrated_pre_anchor:
+            raise ValueError(
+                f"union whitelist {path!r} was key-migrated, not re-mined: its "
+                "object-object scales still come from link origins while the "
+                "runtime measures surface anchors. Re-collect and re-mine "
+                "with tools/prepare_assets.py before training."
+            )
         bin_edges = dict(union.bin_edges or {})
-        missing = [r for r in REQUIRED_BIN_RELATIONS if not bin_edges.get(r)]
+        missing = [r for r in required_bin_keys(self.cfg)
+                   if not bin_edges.get(r)]
         if missing:
             raise ValueError(
                 f"union whitelist {path!r} calibrates no bins for "
                 f"{', '.join(missing)}; those relations would emit nothing for "
-                "the whole run. Re-mine the whitelists against the task being "
-                "run with tools/prepare_assets.py."
+                "the whole run. Pre-split assets carry unscoped keys and fail "
+                "here. Re-mine against the task being run with "
+                "tools/prepare_assets.py."
             )
         self.cfg["bin_edges"] = bin_edges
         self._bin_edges_subtask = subtask
@@ -465,7 +508,14 @@ class GraphBuilder:
         )
 
         self.last_in_frame = graph.meta["n_in_frame"]
-        build_absolute_edges(graph, state, self.cfg)
+        build_absolute_edges(
+            graph, state, self.cfg,
+            initial_physical_pairs=self._initial_physical_pairs,
+            capture_initial=not self._initial_captured,
+        )
+        if not self._initial_captured:
+            self._report_initial_pairs(graph)
+        self._initial_captured = True
         self.temporal.annotate(graph, self.cfg)
         self.selector.commit(nodes, frame)
         return graph, masks, cam, rgb

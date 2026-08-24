@@ -23,7 +23,7 @@ from graph import (
 )
 from networks import Projector
 from progress import (
-    ProgressReward,
+    potential_shaping,
     ProgressScorer,
     TaskScheduleReplayPotential,
     load_stages,
@@ -286,7 +286,6 @@ class Dreamer(nn.Module):
                 "progress.enabled requires graph.enabled: the potential is "
                 "read off the graph state"
             )
-        self.progress = None
         self.progress_value = None
         self.progress_head = None
         # Which potential imagination reads. `world_model` is the bounded
@@ -324,8 +323,6 @@ class Dreamer(nn.Module):
             else None
         )
         if self.progress_enabled:
-            scorer = self.progress_scorer
-            self.progress = ProgressReward(scorer, 1 - 1 / self.horizon)
             # Exactly the latent the policy and the ordinary critic read, and
             # nothing else: the potential is a scalar function of that same
             # feature, so a second view of it would hand the critic a shortcut
@@ -337,10 +334,6 @@ class Dreamer(nn.Module):
             self._slow_progress = copy.deepcopy(self.progress_value)
             for param in self._slow_progress.parameters():
                 param.requires_grad = False
-            self.progress_return_ema = networks.ReturnEMA(
-                device=self.device,
-                min_scale=float(getattr(progress_config, "return_min_scale", 1.0)),
-            )
         if self.progress_scorer is not None:
             self.register_buffer(
                 "progress_relations",
@@ -1231,26 +1224,32 @@ class Dreamer(nn.Module):
         ret = self._lambda_return(
             last, term, imag_reward, imag_value, imag_value, disc, self.lamb
         )  # (B*T, T_imag-1, 1)
-        ret_offset, ret_scale = self.return_ema(ret)
-        # (B*T, T_imag-1, 1)
-        adv = (ret - imag_value[:, :-1]) / ret_scale
+        env_adv_raw = ret - imag_value[:, :-1]
 
         if self.progress_enabled:
-            # A second return on the shaping reward, with its own critic and its
-            # own normalisation, added to the advantage rather than to the
-            # reward: the environment return the run reports stays untouched.
+            # Two critics, one scale. Normalising each advantage by its own
+            # return spread throws away their relative magnitude, so beta
+            # stops meaning "this fraction of the task advantage" and a flat
+            # potential gets amplified to the same size as a task signal.
+            # Lambda return is linear in (reward, value, bootstrap), so
+            # combining raw advantages equals forming one combined return
+            # for the actor while each critic keeps its own target.
             progress_feat = imag_extra["progress_feat"].detach()
-            progress_reward = imag_extra["progress_reward"].detach()
+            progress_reward = potential_shaping(
+                imag_extra["progress_potential"], imag_cont, disc
+            ).detach()
             progress_value = self._frozen_progress_value(progress_feat).mode()
             progress_slow = self._frozen_slow_progress(progress_feat).mode()
             progress_ret = self._lambda_return(
                 last, term, progress_reward, progress_value, progress_value, disc, self.lamb
             )
-            _, progress_scale = self.progress_return_ema(progress_ret)
-            progress_adv = (progress_ret - progress_value[:, :-1]) / progress_scale
+            progress_adv_raw = progress_ret - progress_value[:, :-1]
             progress_beta = self._progress_beta_at(self._env_step)
-            env_adv_abs = torch.mean(adv.abs())
-            adv = adv + progress_beta * progress_adv
+            combined_ret = ret + progress_beta * progress_ret
+            ret_offset, ret_scale = self.return_ema(combined_ret)
+            adv = (env_adv_raw + progress_beta * progress_adv_raw) / ret_scale
+            env_adv_abs = torch.mean(env_adv_raw.abs())
+            progress_adv_abs = torch.mean(progress_adv_raw.abs())
             progress_dist = self.progress_value(progress_feat)
             progress_padded = torch.cat([progress_ret, 0 * progress_ret[:, -1:]], 1)
             losses["progress_value"] = torch.mean(
@@ -1261,40 +1260,38 @@ class Dreamer(nn.Module):
                 )[:, :-1].unsqueeze(-1)
             )
             potential = imag_extra["progress_potential"]
-            progress_adv_abs = torch.mean(progress_adv.abs())
-            # --- primary ---------------------------------------------------
-            # How much of the actor's advantage the shaping term accounts for:
-            # beta * E|A_progress| / E|A_env|. This, not beta alone, is what
-            # says whether the ramp landed: roughly 5-20% at the plateau, under
-            # 1% means beta is doing nothing, and much over 25% means progress
-            # is doing the steering. A wrong value here is a normalisation or
-            # beta problem, not a head problem.
-            # In float32: early on the environment advantage is near zero,
-            # and a float16 autocast would overflow the ratio to inf.
-            metrics["progress/influence"] = progress_beta * progress_adv_abs.float() / (
-                env_adv_abs.float() + 1e-8
+            # Influence before normalisation. Both advantages are now in the
+            # same units, so this is the real weight beta buys: ~5-15% at the
+            # plateau. Not comparable with the old separately-normalised
+            # chart of the same idea, hence the different name.
+            metrics["progress/influence_raw"] = (
+                progress_beta * progress_adv_abs.float()
+                / (env_adv_abs.float() + 1e-8)
             )
-            # Whether the critic has caught up with its own return yet.
+            # Whether the critic has caught up with its own return yet. As it
+            # does, progress_adv_raw goes to zero and influence falls -- that
+            # is the design, not a fault.
             metrics["progress/critic_mae"] = torch.mean(
                 (progress_value[:, :-1] - progress_ret).abs()
             )
-            # --- raw log ---------------------------------------------------
-            # Kept for debugging, not for the dashboard. ``horizon_std`` is the
-            # one worth reaching for first: it is the spread within a single
-            # rollout, i.e. whether acting changes predicted progress at all.
-            # A flat potential produces a zero advantage no matter what beta
-            # is, so it says whether beta is even the thing worth changing.
-            metrics["progress_potential"] = torch.mean(potential)
-            metrics["progress_potential_horizon_std"] = torch.mean(
+            # Spread within one rollout: whether acting changes predicted
+            # progress at all. Flat means beta is not the thing to change.
+            metrics["progress/potential_horizon_std"] = torch.mean(
                 torch.std(potential, dim=1)
             )
-            metrics["progress_reward"] = torch.mean(progress_reward)
-            metrics["progress_ret"] = torch.mean(progress_ret)
-            metrics["progress_adv"] = torch.mean(progress_adv)
-            metrics["progress_val"] = torch.mean(progress_value)
-            metrics["progress_adv_abs"] = progress_adv_abs
-            metrics["env_adv_abs"] = env_adv_abs
+            metrics["progress/potential_mean"] = torch.mean(potential)
+            metrics["progress/adv_raw_abs"] = progress_adv_abs
+            metrics["env/adv_raw_abs"] = env_adv_abs
+            # Shaping must span both signs. All-positive means something
+            # clipped it, and a reversible cycle would then pay.
+            metrics["progress/shaping_mean"] = torch.mean(progress_reward)
+            metrics["progress/shaping_positive_fraction"] = torch.mean(
+                (progress_reward > 0).float()
+            )
             metrics["progress_beta"] = progress_beta
+        else:
+            ret_offset, ret_scale = self.return_ema(ret)
+            adv = env_adv_raw / ret_scale
 
         policy = self.actor(imag_feat)
         # (B*T, T_imag-1, 1)
@@ -1317,6 +1314,7 @@ class Dreamer(nn.Module):
         metrics["ret_005"] = self.return_ema.ema_vals[0]
         metrics["ret_095"] = self.return_ema.ema_vals[1]
         metrics["adv"] = torch.mean(adv)
+        metrics["actor_scale"] = ret_scale
         metrics["adv_std"] = torch.std(adv)
         metrics["con"] = torch.mean(imag_cont)
         metrics["rew"] = torch.mean(imag_reward)
@@ -1469,11 +1467,11 @@ class Dreamer(nn.Module):
         if self.progress_enabled and self.graph_pooled_simple:
             # One bounded head over the feature the policy just read. Frozen,
             # so imagination pushes nothing back into it.
+            # The shaping reward needs imag_cont, which is predicted outside
+            # this loop, so only the potential is returned here.
             potential = self._frozen_progress_head(imag_feat).squeeze(-1)
-            reward = (1.0 - self.progress.discount) * potential
             extra.update(
                 {
-                    "progress_reward": reward.unsqueeze(-1),
                     "progress_potential": potential.unsqueeze(-1),
                     # The critic reads the policy's own feature and nothing
                     # else: the potential is already a function of it.

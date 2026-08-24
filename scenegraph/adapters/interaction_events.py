@@ -8,11 +8,13 @@ stored once in canonical entity-key order, matching runtime pair ordering.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+
+from ..core.spatial_metrics import EE_OBJECT_SCOPE, stat_key
 
 EE_KEY = "ee"
 
@@ -568,24 +570,36 @@ class GroupAccumulator:
 # Spatial statistics for relation bin derivation
 # --------------------------------------------------------------------------- #
 class BinStats:
-    """Running maxima over every pair, every step.
+    """Spatial statistics for bin derivation, split by calibration scope.
 
-    Relation bins must describe the range a run actually spans. Sampling only
-    when a predicate fires would calibrate every bin against contact distance
-    alone, so "far" would never be reachable and the token would mean nothing.
+    Bins must describe the range a run actually spans, so this samples every
+    pair every step rather than only when a predicate fires.
+
+    EE-object scales are recorded here directly. Object-object scales are not:
+    they are measured at runtime through mined surface anchors, and an object
+    origin is not that point -- a table's sits ~0.9m below its own top. What
+    travels instead is a reservoir of raw pose pairs at ``t`` and ``t - K``,
+    which the miner reprojects once the anchors exist. Changes use the same
+    ``K`` as the runtime temporal buffer.
     """
 
-    def __init__(self, reservoir: int = 20000, seed: int = 0) -> None:
+    def __init__(self, reservoir: int = 20000, seed: int = 0,
+                 horizon: int = 5, pose_reservoir: int = 20000) -> None:
         self.maxes: Dict[str, float] = defaultdict(float)
-        # A max alone cannot bin a bimodal distribution: tabletop scenes put
-        # object pairs near zero and table pairs near the table origin, 0.9m
-        # below its own surface, so equal-width bins over the max collapse
-        # both modes into one label. Quantiles adapt to where the data is.
         self.samples: Dict[str, List[float]] = defaultdict(list)
         self.seen: Dict[str, int] = defaultdict(int)
         self.capacity = int(reservoir)
         self._rng = __import__("random").Random(seed)
-        self._prev: Dict[Tuple[str, str], Tuple[float, float]] = {}
+        self.horizon = max(1, int(horizon))
+        self.pose_capacity = int(pose_reservoir)
+        self.pose_pairs: List[Dict[str, Any]] = []
+        self.pose_seen = 0
+        self._history: Dict[
+            Tuple[str, str], deque[Tuple[float, float]]
+        ] = defaultdict(lambda: deque(maxlen=self.horizon + 1))
+        self._pose_history: Dict[
+            Tuple[str, str], deque[Tuple[List[float], List[float]]]
+        ] = defaultdict(lambda: deque(maxlen=self.horizon + 1))
 
     def _record(self, key: str, value: float) -> None:
         self.maxes[key] = max(self.maxes[key], abs(value))
@@ -598,8 +612,18 @@ class BinStats:
         if j < self.capacity:
             bucket[j] = float(value)
 
+    def _record_pose_pair(self, sample: Dict[str, Any]) -> None:
+        self.pose_seen += 1
+        if len(self.pose_pairs) < self.pose_capacity:
+            self.pose_pairs.append(sample)
+            return
+        j = self._rng.randrange(self.pose_seen)
+        if j < self.pose_capacity:
+            self.pose_pairs[j] = sample
+
     def new_episode(self) -> None:
-        self._prev.clear()
+        self._history.clear()
+        self._pose_history.clear()
 
     def observe(self, poses: Dict[str, Any], frame: int) -> None:
         import itertools as _it
@@ -610,15 +634,43 @@ class BinStats:
         for a, b in _it.combinations(keys, 2):
             pa = np.asarray(poses[a], dtype=float)
             pb = np.asarray(poses[b], dtype=float)
-            planar = float(np.linalg.norm(pa[:2] - pb[:2]))
-            height = float(pa[2] - pb[2])
-            self._record("planar_distance", planar)
-            self._record("height_offset", height)
-            prev = self._prev.get((a, b))
-            if prev is not None:
-                self._record("planar_distance_change", planar - prev[0])
-                self._record("height_offset_change", height - prev[1])
-            self._prev[(a, b)] = (planar, height)
+            if a == EE_KEY or b == EE_KEY:
+                self._observe_ee(a, b, pa, pb)
+            else:
+                self._observe_object_pair(a, b, pa, pb)
+
+    def _observe_ee(self, a, b, pa, pb) -> None:
+        import numpy as np
+
+        scope = EE_OBJECT_SCOPE
+        planar = float(np.linalg.norm(pa[:2] - pb[:2]))
+        height = float(pa[2] - pb[2])
+        self._record(stat_key(scope, "planar-distance"), planar)
+        self._record(stat_key(scope, "height-offset"), height)
+        history = self._history[(a, b)]
+        history.append((planar, height))
+        if len(history) == self.horizon + 1:
+            old_planar, old_height = history[0]
+            self._record(
+                f"{stat_key(scope, 'planar-distance')}_change",
+                planar - old_planar)
+            self._record(
+                f"{stat_key(scope, 'height-offset')}_change",
+                height - old_height)
+
+    def _observe_object_pair(self, a, b, pa, pb) -> None:
+        history = self._pose_history[(a, b)]
+        pose_a = [float(v) for v in pa[:7]]
+        pose_b = [float(v) for v in pb[:7]]
+        history.append((pose_a, pose_b))
+        prev_a = prev_b = None
+        if len(history) == self.horizon + 1:
+            prev_a, prev_b = history[0]
+        self._record_pose_pair({
+            "key_a": a, "key_b": b,
+            "pose_a": pose_a, "pose_b": pose_b,
+            "prev_pose_a": prev_a, "prev_pose_b": prev_b,
+        })
 
     def merge(self, other: Dict[str, float]) -> None:
         for key, value in (other or {}).items():
@@ -626,6 +678,10 @@ class BinStats:
 
     def as_dict(self) -> Dict[str, float]:
         return {k: float(v) for k, v in self.maxes.items()}
+
+    def pose_samples(self) -> List[Dict[str, Any]]:
+        """Raw object-pair poses the miner reprojects through mined anchors."""
+        return list(self.pose_pairs)
 
     def reservoir(self) -> Dict[str, Any]:
         """The raw sample per statistic, as float32.

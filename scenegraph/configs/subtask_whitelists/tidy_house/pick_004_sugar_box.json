@@ -30,25 +30,49 @@
       0.00021067034885471884,
       0.0015168265117539755
     ],
-    "height-offset": [
+    "ee-object-height-offset": [
       -0.6744648014008998,
       -0.22482160046696661,
       0.22482160046696661,
       0.6744648014008998
     ],
-    "height-offset-change": [
+    "object-object-height-offset": [
+      -0.6744648014008998,
+      -0.22482160046696661,
+      0.22482160046696661,
+      0.6744648014008998
+    ],
+    "ee-object-height-offset-change": [
       -0.04800521850585937,
       -0.006667391459147135,
       0.006667391459147135,
       0.04800521850585937
     ],
-    "planar-distance": [
+    "object-object-height-offset-change": [
+      -0.04800521850585937,
+      -0.006667391459147135,
+      0.006667391459147135,
+      0.04800521850585937
+    ],
+    "ee-object-planar-distance": [
       0.14260781943252282,
       0.28521563886504564,
       0.4278234582975684,
       0.5704312777300913
     ],
-    "planar-distance-change": [
+    "object-object-planar-distance": [
+      0.14260781943252282,
+      0.28521563886504564,
+      0.4278234582975684,
+      0.5704312777300913
+    ],
+    "ee-object-planar-distance-change": [
+      -0.052534789115778545,
+      -0.0072964984883025765,
+      0.0072964984883025765,
+      0.052534789115778545
+    ],
+    "object-object-planar-distance-change": [
       -0.052534789115778545,
       -0.0072964984883025765,
       0.0072964984883025765,
@@ -82,10 +106,14 @@
     "contact_compatibility_change": 0.0016502429831733772,
     "grasp_compatibility": 0.6974652893586218,
     "grasp_compatibility_change": 0.002528044186256626,
-    "height_offset": 1.124108002334833,
-    "height_offset_change": 0.08000869750976562,
-    "planar_distance": 0.713039097162614,
-    "planar_distance_change": 0.08755798185963092,
+    "ee_object_height_offset": 1.124108002334833,
+    "object_object_height_offset": 1.124108002334833,
+    "ee_object_height_offset_change": 0.08000869750976562,
+    "object_object_height_offset_change": 0.08000869750976562,
+    "ee_object_planar_distance": 0.713039097162614,
+    "object_object_planar_distance": 0.713039097162614,
+    "ee_object_planar_distance_change": 0.08755798185963092,
+    "object_object_planar_distance_change": 0.08755798185963092,
     "support_compatibility": 1.0,
     "support_compatibility_change": 0.011469380857564347
   },
@@ -135,5 +163,6 @@
   "membership_policy": "target-supporters",
   "subtask": "pick",
   "target": "actor:004_sugar_box",
-  "task_group": "tidy_house"
+  "task_group": "tidy_house",
+  "_bins_migrated_pre_anchor": true
 }

@@ -37,6 +37,11 @@ affordances:
   object_object_contact_compatibility: true
   object_object_support_compatibility: true
   object_object_contain_compatibility: true
+  # A physical object-object relation already holding in the initial state is
+  # scene layout, not an action opportunity the policy must discover. Keep its
+  # physical and spatial facts, but suppress compatibility facts for that pair
+  # for the rest of the episode.
+  suppress_initial_physical_pair_compatibility: true
   # Beyond this centre distance an obj-obj pair skips scoring and reports
   # unobserved with no value, so no change is accumulated for a pair that is
   # nowhere near interacting. ee-obj is never distance-gated.

@@ -392,12 +392,13 @@ def _accumulate_obj_obj_samples(
     frames; the final component lists are computed downstream from these
     aggregates so we can apply a single mean / spread per object.
     """
-    # canonical_key -> list of (anchor_obj, outward_normal_obj_unit)
-    contact_obs: Dict[str, List[Tuple[np.ndarray, Optional[np.ndarray]]]] = {}
-    # canonical_key -> list of (supported_pos_in_supporter_frame, force_along_normal_sign)
-    support_obs: Dict[str, List[np.ndarray]] = {}
-    # canonical_key -> list of supporter_pos_in_supported_frame
-    bottom_obs: Dict[str, List[np.ndarray]] = {}
+    # Keyed by (canonical_key, partner_key). A flat per-object list cannot
+    # say which anchor belongs to which pair, so an object touching two
+    # things lets one pair match the other's anchor.
+    contact_obs: Dict[Tuple[str, str],
+                      List[Tuple[np.ndarray, Optional[np.ndarray]]]] = {}
+    support_obs: Dict[Tuple[str, str], List[np.ndarray]] = {}
+    bottom_obs: Dict[Tuple[str, str], List[np.ndarray]] = {}
 
     for rollout in rollouts:
         for ev in rollout.get("obj_contacts", []) or []:
@@ -418,7 +419,7 @@ def _accumulate_obj_obj_samples(
                 continue
             f_unit_world = f / f_norm
             midpoint_world = 0.5 * (a_pose[:3] + b_pose[:3])
-            if a_key:
+            if a_key and b_key:
                 anchor_a = _inv_transform_point(a_pose, midpoint_world)
                 # Outward normal on A is OPPOSITE to the contact force that B
                 # exerts on A (force_vector is the force on the first body in
@@ -427,13 +428,15 @@ def _accumulate_obj_obj_samples(
                 outward_world = -f_unit_world
                 outward_obj_a = _inv_rotate_dir(a_pose, outward_world)
                 if anchor_a is not None:
-                    contact_obs.setdefault(a_key, []).append((anchor_a, outward_obj_a))
-            if b_key:
+                    contact_obs.setdefault((a_key, b_key), []).append(
+                        (anchor_a, outward_obj_a))
+            if a_key and b_key:
                 anchor_b = _inv_transform_point(b_pose, midpoint_world)
                 outward_world_b = f_unit_world  # opposite of A's outward
                 outward_obj_b = _inv_rotate_dir(b_pose, outward_world_b)
                 if anchor_b is not None:
-                    contact_obs.setdefault(b_key, []).append((anchor_b, outward_obj_b))
+                    contact_obs.setdefault((b_key, a_key), []).append(
+                        (anchor_b, outward_obj_b))
 
         for rec in rollout.get("supports", []) or []:
             if not isinstance(rec, dict):
@@ -450,20 +453,22 @@ def _accumulate_obj_obj_samples(
             # Surface anchor on supporter: supported center projected into
             # supporter's local frame. We trust the supporter's surface to be
             # the local +z plane (matches MS-HAB drawer/counter convention).
-            if supporter_key:
+            if supporter_key and supported_key:
                 anchor = _inv_transform_point(sp_sup, sp_subj[:3])
                 if anchor is not None:
-                    support_obs.setdefault(supporter_key, []).append(anchor)
+                    support_obs.setdefault(
+                        (supporter_key, supported_key), []).append(anchor)
             # Bottom anchor on supported: supporter center in supported frame.
-            if supported_key:
+            if supporter_key and supported_key:
                 anchor = _inv_transform_point(sp_subj, sp_sup[:3])
                 if anchor is not None:
-                    bottom_obs.setdefault(supported_key, []).append(anchor)
+                    bottom_obs.setdefault(
+                        (supported_key, supporter_key), []).append(anchor)
 
     # Emit components: one per canonical key per relation. Clustering is
     # deliberately kept simple (mean + spread) -- can be upgraded to k-means
     # later if multi-modality is needed.
-    for key, samples in contact_obs.items():
+    for (key, partner), samples in contact_obs.items():
         anchors = np.stack([s[0] for s in samples], axis=0)
         anchor_mean = anchors.mean(axis=0)
         normals = [s[1] for s in samples if s[1] is not None]
@@ -479,12 +484,13 @@ def _accumulate_obj_obj_samples(
         comp = {
             "anchor": [round(float(x), 6) for x in anchor_mean],
             **normal_field,
+            "partner": partner,
             "n_samples": int(len(samples)),
         }
         entry = _ensure_obj_obj_entry(by_object, key)
         entry["contact_components"].append(comp)
 
-    for key, samples in support_obs.items():
+    for (key, partner), samples in support_obs.items():
         arr = np.stack(samples, axis=0)
         anchor_mean = arr.mean(axis=0)
         # Footprint radius: max in-plane distance from the mean (xy in
@@ -501,12 +507,13 @@ def _accumulate_obj_obj_samples(
             ],
             "surface_normal": [0.0, 0.0, 1.0],
             "footprint_radius": round(footprint, 6),
+            "partner": partner,
             "n_samples": int(len(samples)),
         }
         entry = _ensure_obj_obj_entry(by_object, key)
         entry["support_components"].append(comp)
 
-    for key, samples in bottom_obs.items():
+    for (key, partner), samples in bottom_obs.items():
         arr = np.stack(samples, axis=0)
         anchor_mean = arr.mean(axis=0)
         comp = {
@@ -516,6 +523,7 @@ def _accumulate_obj_obj_samples(
                 round(float(anchor_mean[2]), 6),
             ],
             "bottom_normal": [0.0, 0.0, -1.0],
+            "partner": partner,
             "n_samples": int(len(samples)),
         }
         entry = _ensure_obj_obj_entry(by_object, key)
@@ -718,7 +726,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "contain_components / key_components: PegInsertionSide-style "
             "container entry + containee key descriptors (empty for MS-HAB)."
         ),
-        "_schema_version": 3,
+        "_schema_version": 4,
         "objects": by_object,
     }
 

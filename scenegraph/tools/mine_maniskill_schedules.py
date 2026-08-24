@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 
 from scenegraph.adapters.interaction_events import EE_KEY
+from scenegraph.core.spatial_metrics import SPATIAL_SCOPES, spatial_bin_key
 from scenegraph.core.schedule import (
     ScheduleError,
     load_assets,
@@ -371,7 +372,9 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
                       if (objects.get(k) or {}).get(field))
             for k in keys
         },
-        "spatial_bins": {r: bool(bins.get(r)) for r in SPATIAL_RELATIONS},
+        "spatial_bins": {spatial_bin_key(scope, r): bool(
+            bins.get(spatial_bin_key(scope, r)))
+            for scope in SPATIAL_SCOPES for r in SPATIAL_RELATIONS},
         "scorable": scorable_relations(objects, members, bins),
     }
 

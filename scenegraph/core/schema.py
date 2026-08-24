@@ -79,6 +79,9 @@ class Edge:
     temp_label: Optional[str] = None    # temporal change delta, None when absent
     raw_value: Optional[float] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
+    # Which mined scale labelled this fact. The relation name is vocabulary and
+    # is shared by ee-object and object-object; the calibration is not.
+    bin_key: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
