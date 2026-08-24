@@ -145,8 +145,13 @@ second table.
 Validity is strict. The stage weights sum to one only when every relation the
 scorer names is present, so a frame missing one would score low through no
 fault of the robot, and regressing on that teaches the head that losing a fact
-is losing progress. A frame is supervised only when all six relations are
-present and none is duplicated; anything else is *masked*, never scored zero.
+is losing progress. A frame is supervised only when every relation the
+scorer names is present and none is duplicated; anything else is *masked*,
+never scored zero. `contact` is not one of them: a grasped object is also
+in contact, so scoring both paid twice for one event. The graph still emits
+it and the scorer ignores relations it does not name, so the edge neither
+earns nor invalidates. The schedule miner drops a `contact` milestone on a
+pair that already has `grasp`, `support` or `contain`.
 `train/progress/valid_fraction` is that mask, and a low value is a persistence
 or relation bug rather than a hard task.
 

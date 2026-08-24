@@ -47,6 +47,34 @@ _QUANTILE_KEYS = {
     for scope in SPATIAL_SCOPES
 }
 
+# Signed scales come from one magnitude, and a raw maximum hands that
+# magnitude to the worst frame in the run. PullCubeTool knocks its cube off
+# the table in ~9% of frames; the 0.88m that produces is a true measurement
+# and a useless scale, since it puts every on-table height in one bin.
+# Equal-population planar edges never had this problem -- a tail cannot move
+# a quantile -- so only the signed streams need the guard.
+#
+# Changes take a much higher quantile than absolutes. Most frames are
+# stationary, so their distribution is a spike at zero with a thin tail of
+# real motion; a low quantile would shrink the stable band to nothing and
+# report every frame as moving. Only the discontinuity a fall produces
+# (0.38 against a clean maximum of 0.08) needs dropping.
+_ABS_QUANTILE = 0.9
+_CHANGE_QUANTILE = 0.99
+# Below this a quantile is noise; keep the maximum instead.
+_MIN_ROBUST_SAMPLES = 100
+
+
+def _robust_scale(values, is_change: bool) -> Optional[float]:
+    """Quantile of the magnitudes, or None when there is too little data."""
+    arr = np.abs(np.asarray(values, dtype=float).reshape(-1))
+    arr = arr[np.isfinite(arr)]
+    if arr.size < _MIN_ROBUST_SAMPLES:
+        return None
+    q = _CHANGE_QUANTILE if is_change else _ABS_QUANTILE
+    value = float(np.quantile(arr, q))
+    return value if value > 0.0 else None
+
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
 AFFORDANCE_SCHEMA_VERSION = 4
@@ -552,6 +580,7 @@ def _object_pair_stats(merged, objects):
     pd_key = stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")
     ho_key = stat_key(OBJECT_OBJECT_SCOPE, "height-offset")
     planar_samples = []
+    signed = defaultdict(list)
     for rec in merged.get("bin_pose_pairs") or []:
         a, b = rec.get("key_a"), rec.get("key_b")
         pose_a, pose_b = rec.get("pose_a"), rec.get("pose_b")
@@ -560,6 +589,7 @@ def _object_pair_stats(merged, objects):
         planar, height = _pair_measures(index, a, b, pose_a, pose_b)
         stats[pd_key] = max(stats[pd_key], abs(planar))
         stats[ho_key] = max(stats[ho_key], abs(height))
+        signed[ho_key].append(height)
         planar_samples.append(planar)
         prev_a, prev_b = rec.get("prev_pose_a"), rec.get("prev_pose_b")
         if prev_a is None or prev_b is None:
@@ -569,6 +599,13 @@ def _object_pair_stats(merged, objects):
             stats[pd_key + "_change"], abs(planar - old_planar))
         stats[ho_key + "_change"] = max(
             stats[ho_key + "_change"], abs(height - old_height))
+        signed[pd_key + "_change"].append(planar - old_planar)
+        signed[ho_key + "_change"].append(height - old_height)
+
+    for key, values in signed.items():
+        robust = _robust_scale(values, key.endswith("_change"))
+        if robust is not None:
+            stats[key] = robust
     return dict(stats), np.asarray(planar_samples, dtype=np.float32)
 
 
@@ -581,12 +618,20 @@ def _bin_edges(merged, objects):
     """
     stats = dict(merged["bin_stats"])
     object_stats, object_planar = _object_pair_stats(merged, objects)
-    stats.update(object_stats)
-    edges = derive_bin_edges(stats)
 
     samples = {k: np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
                for k, chunks in (merged.get("bin_samples") or {}).items()
                if len(chunks)}
+    # Same guard on the ee-object side: a dropped object contaminates its
+    # end-effector heights too.
+    for key, values in samples.items():
+        if key.endswith("planar_distance"):
+            continue
+        robust = _robust_scale(values, key.endswith("_change"))
+        if robust is not None:
+            stats[key] = robust
+    stats.update(object_stats)
+    edges = derive_bin_edges(stats)
     if object_planar.size:
         samples[stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")] = object_planar
 

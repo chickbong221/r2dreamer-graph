@@ -34,7 +34,9 @@ N_REL = 11
 REL_PLANAR, REL_HEIGHT, REL_CCOMPAT, REL_GCOMPAT, REL_CONTACT, REL_GRASP = (
     5, 6, 8, 7, 1, 2,
 )
-ALL_SIX = (REL_PLANAR, REL_HEIGHT, REL_CCOMPAT, REL_GCOMPAT, REL_CONTACT, REL_GRASP)
+# contact is emitted by the graph but is not a rung: a grasped object is
+# also in contact, so scoring both paid twice for one event.
+SCORED = (REL_PLANAR, REL_HEIGHT, REL_CCOMPAT, REL_GCOMPAT, REL_GRASP)
 
 SOLVED = {
     REL_PLANAR: ABS_VERY_NEAR,
@@ -107,13 +109,36 @@ class ReplayPotentialTest(unittest.TestCase):
         self.assertAlmostEqual(float(observed[0]), 0.35, places=6)
 
     def test_a_missing_relation_masks_the_frame_instead_of_lowering_it(self):
-        partial = [(r, SOLVED[r]) for r in ALL_SIX if r != REL_GRASP]
+        partial = [(r, SOLVED[r]) for r in SCORED if r != REL_GRASP]
         observed, valid = _potential({0: partial}, 1)
         self.assertFalse(bool(valid[0]))
-        # And is zeroed rather than left at the 0.70 it would otherwise read,
+        # And is zeroed rather than left at the 0.50 it would otherwise read,
         # so a caller that forgets the mask gets an obvious number, not a
         # plausible one.
         self.assertEqual(float(observed[0]), 0.0)
+
+    def test_an_unscored_contact_edge_neither_earns_nor_invalidates(self):
+        """The graph still reports contact; the ladder stops paying for it.
+
+        The scorer ignores relations it does not name, so the edge is free --
+        it must not add weight, and it must not mask the frame either.
+        """
+        without = [(r, SOLVED[r]) for r in SCORED]
+        with_contact = without + [(REL_CONTACT, ABS_HOLDS)]
+        bare, bare_valid = _potential({0: without}, 1)
+        full, full_valid = _potential({0: with_contact}, 1)
+        self.assertTrue(bool(bare_valid[0]))
+        self.assertTrue(bool(full_valid[0]))
+        self.assertAlmostEqual(float(bare[0]), float(full[0]), places=6)
+        self.assertAlmostEqual(float(full[0]), 1.0, places=6)
+
+    def test_grasping_carries_the_whole_physical_budget(self):
+        """Half the potential, in one step, at the moment of the grasp."""
+        ungrasped = [(r, SOLVED[r]) for r in SCORED if r != REL_GRASP]
+        ungrasped.append((REL_GRASP, ABS_NOT_HOLDS))
+        observed, valid = _potential({0: ungrasped}, 1)
+        self.assertTrue(bool(valid[0]))
+        self.assertAlmostEqual(float(observed[0]), 0.50, places=6)
 
     def test_a_duplicated_relation_masks_the_frame(self):
         doubled = list(SOLVED.items()) + [(REL_PLANAR, ABS_VERY_FAR)]

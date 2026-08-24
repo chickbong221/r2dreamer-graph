@@ -93,8 +93,14 @@ class ProgressStage:
 # Pick. Each relation has cumulative rungs: the worst label scores zero and
 # every improvement satisfies one more rung. The increments within a relation
 # sum to its original budget (planar .15, height .10, contact compatibility
-# .10, grasp compatibility .15, contact .20, grasp .30), so the best joint
-# state still scores exactly one. Cumulative label sets are important here: an
+# .10, grasp compatibility .15, grasp .50), so the best joint state still
+# scores exactly one.
+#
+# ``contact`` is deliberately not a rung. A grasped object is also in
+# contact, so scoring both paid twice for one event, and it gave an
+# incidental brush on the way in a fifth of the whole potential. The graph
+# still emits the fact; the scorer ignores relations it does not name, so
+# the edge costs nothing and the frame stays valid. Cumulative label sets are important here: an
 # exact-label table would make mutually exclusive labels compete in the global
 # weight normalisation and the maximum potential would fall below one.
 PICK_STAGES: tuple[ProgressStage, ...] = (
@@ -165,8 +171,7 @@ PICK_STAGES: tuple[ProgressStage, ...] = (
     ProgressStage(
         "grasp_compat_match", REL_GRASP_COMPAT, (ABS_MATCH,), 0.06
     ),
-    ProgressStage("contact", REL_CONTACT, (ABS_HOLDS,), 0.20),
-    ProgressStage("grasp", REL_GRASP, (ABS_HOLDS,), 0.30),
+    ProgressStage("grasp", REL_GRASP, (ABS_HOLDS,), 0.50),
 )
 
 

@@ -189,6 +189,25 @@ def _pair(milestone: Milestone) -> Tuple[str, str]:
     return tuple(sorted((src, dst)))  # type: ignore[return-value]
 
 
+# Physical relations that already imply contact on the same pair.
+_SUBSUMES_CONTACT = frozenset({"grasp", "support", "contain"})
+
+
+def _drop_subsumed_contact(names: List[str],
+                           stats: Dict[str, Any]) -> List[str]:
+    """Drop a ``contact`` milestone the pair's own grasp/support/contain implies.
+
+    A grasped object is also in contact, so a phase scoring both pays twice
+    for one event and hands the brush on the way in a rung of its own.
+    Dropped here rather than at compile time so the bundle a human reviews
+    is the schedule that will run.
+    """
+    relations = {stats[n]["relation"] for n in names}
+    if not (relations & _SUBSUMES_CONTACT):
+        return names
+    return [n for n in names if stats[n]["relation"] != "contact"]
+
+
 def propose_phases(traces: List[Dict[str, Any]],
                    stats: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Group candidate milestones by the pair they act on, ordered by onset.
@@ -205,6 +224,7 @@ def propose_phases(traces: List[Dict[str, Any]],
 
     phases = []
     for pair, names in grouped.items():
+        names = _drop_subsumed_contact(names, stats)
         onsets = [stats[n]["onset"].get("median", 0.0) for n in names]
         phases.append({
             "pair": list(pair),

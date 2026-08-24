@@ -448,16 +448,44 @@ class QuantileBinTest(MinerTestBase):
         expected = [float(np.quantile(values, p)) for p in miner._EDGE_PROBS]
         np.testing.assert_allclose(edges, expected)
 
-    def test_signed_edges_ignore_skewed_quantiles(self):
+    def test_signed_edges_stay_symmetric_however_skewed_the_samples(self):
+        """Skew may set the scale; it may never move zero out of the middle."""
         import numpy as np
         values = np.asarray(self._bimodal(), dtype=np.float32)
-        key = self._ee("height-offset")
-        sampled = self._mine_with(
-            {stat_key(EE_OBJECT_SCOPE, "height-offset"): values})[key]
-        derived = self._mine_with({})[key]
-        self.assertEqual(sampled, derived)
-        self.assertAlmostEqual(sampled[0], -sampled[3])
-        self.assertAlmostEqual(sampled[1], -sampled[2])
+        edges = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "height-offset"): values},
+        )[self._ee("height-offset")]
+        self.assertAlmostEqual(edges[0], -edges[3])
+        self.assertAlmostEqual(edges[1], -edges[2])
+        self.assertEqual(self._labels("height-offset", edges, [0.0]), ["level"])
+
+    def test_a_second_mode_is_not_an_outlier(self):
+        """Half the data is the run's range, not a failure to discard."""
+        import numpy as np
+        values = np.asarray(self._bimodal(), dtype=np.float32)
+        edges = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "height-offset"): values},
+        )[self._ee("height-offset")]
+        # The 0.92 mode still reaches the outer bins.
+        self.assertGreater(edges[3], 0.4)
+
+    def test_a_thin_tail_does_not_set_the_signed_scale(self):
+        """PullCubeTool drops its cube in ~9% of frames.
+
+        Those 0.88m readings are true and useless: taken as the maximum they
+        put every on-table height in one bin.
+        """
+        import numpy as np
+        rng = np.random.default_rng(0)
+        real = rng.uniform(-0.3, 0.3, size=940)
+        fallen = np.full(60, -5.0)
+        values = np.concatenate([real, fallen]).astype(np.float32)
+        edges = self._mine_with(
+            {stat_key(EE_OBJECT_SCOPE, "height-offset"): values},
+        )[self._ee("height-offset")]
+        self.assertLess(edges[3], 1.0, "the tail set the scale")
+        self.assertGreater(edges[3], 0.1, "the real range was clipped away")
+        self.assertAlmostEqual(edges[0], -edges[3])
 
     def test_zero_is_level_and_stable(self):
         edges = self._mine_with({})
