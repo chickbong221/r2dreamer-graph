@@ -22,7 +22,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: beta=0.05 (warm-up 400k-700k)"
+echo "Arm: beta=0.05 (warm-up 200k-700k)"
 echo "================================="
 
 # Activate conda
