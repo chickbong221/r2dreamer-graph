@@ -177,9 +177,13 @@ class ReplayPotentialTest(unittest.TestCase):
     def test_row_of_maps_relation_ids_not_positions(self):
         scorer = _scorer()
         self.assertEqual(int(scorer.row_of[REL_PLANAR]), 0)
-        self.assertEqual(int(scorer.row_of[REL_GRASP]), 5)
+        self.assertEqual(int(scorer.row_of[REL_GRASP]), scorer.n_relations - 1)
         # Relations no stage names are -1, which is what excludes them.
         self.assertEqual(int(scorer.row_of[3]), -1)
+        # contact is emitted by the graph and scored by nothing, so it is
+        # excluded the same way. That is what keeps a grasping frame valid
+        # instead of masking it for carrying an extra fact.
+        self.assertEqual(int(scorer.row_of[REL_CONTACT]), -1)
 
 
 class ProgressHeadTest(unittest.TestCase):

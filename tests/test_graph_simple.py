@@ -597,14 +597,16 @@ class PotentialMatrixTest(unittest.TestCase):
 
     def test_matrix_matches_the_cumulative_stage_sum(self):
         torch.manual_seed(0)
-        probs = torch.softmax(torch.randn(5, 6, N_ABS), -1)
+        probs = torch.softmax(
+            torch.randn(5, self.scorer.n_relations, N_ABS), -1)
         self.assertTrue(torch.allclose(
             self.scorer.potential(probs), self._stagewise(probs), atol=1e-6
         ))
 
     def test_potential_stays_bounded(self):
         torch.manual_seed(1)
-        probs = torch.softmax(torch.randn(64, 6, N_ABS) * 4.0, -1)
+        probs = torch.softmax(
+            torch.randn(64, self.scorer.n_relations, N_ABS) * 4.0, -1)
         phi = self.scorer.potential(probs)
         self.assertGreaterEqual(float(phi.min()), 0.0)
         self.assertLessEqual(float(phi.max()), 1.0)
