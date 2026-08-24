@@ -523,9 +523,6 @@ class SweepScriptTest(unittest.TestCase):
     """Every command in every arm carries the same knobs."""
 
     PATHS = sorted(Path("runs/maniskill").glob("slurm_*.sh"))
-    TASKS = 6
-    REWARDS = 2          # the task's native reward, and sparse
-    PER_ARM = TASKS * REWARDS
 
     @staticmethod
     def _commands(path):
@@ -540,11 +537,15 @@ class SweepScriptTest(unittest.TestCase):
             out.append(pairs)
         return out
 
-    def test_there_are_three_arms_of_every_task_and_reward(self):
+    def test_there_are_three_arms_and_none_is_empty(self):
+        """How many tasks are live is an experiment decision and changes
+        between runs, so only the arms are pinned. Emptiness is not: an
+        arm whose commands were all commented out would make every
+        per-command check below pass by having nothing to check."""
         self.assertEqual(len(self.PATHS), 3)
         for path in self.PATHS:
             with self.subTest(script=path.name):
-                self.assertEqual(len(self._commands(path)), self.PER_ARM)
+                self.assertTrue(self._commands(path))
 
     def test_no_command_restates_a_shared_default(self):
         """Anything the same in all runs belongs in config."""
@@ -609,7 +610,7 @@ class SweepScriptTest(unittest.TestCase):
         needs switching off. Three flags to read instead of none was the whole
         problem."""
         commands = self._commands(Path("runs/maniskill/slurm_baseline.sh"))
-        self.assertEqual(len(commands), self.PER_ARM)
+        self.assertTrue(commands)
         for cmd in commands:
             with self.subTest(run=cmd["wandb.name"]):
                 self.assertEqual(cmd["model"], "size50M")
@@ -624,15 +625,17 @@ class SweepScriptTest(unittest.TestCase):
         for path in self.PATHS:
             with self.subTest(script=path.name):
                 groups = [c["wandb.group"] for c in self._commands(path)]
-                self.assertEqual(len(groups), self.PER_ARM)
+                self.assertTrue(groups)
                 self.assertTrue(all(g.startswith("maniskill_") for g in groups))
-                # Both reward modes of a task land in that task's group.
-                self.assertEqual(len(set(groups)), self.TASKS)
+                # Both reward modes of a task land in that task's group,
+                # whichever tasks the arm currently runs.
+                self.assertEqual(len(groups), 2 * len(set(groups)))
 
     def test_each_arm_has_its_own_names(self):
+        """Two arms sharing a run name overwrite each other in wandb."""
         names = [c["wandb.name"] for p in self.PATHS for c in self._commands(p)]
-        self.assertEqual(len(names), 3 * self.PER_ARM)
-        self.assertEqual(len(set(names)), 3 * self.PER_ARM)
+        self.assertTrue(names)
+        self.assertEqual(len(set(names)), len(names))
 
     def test_the_graph_arms_keep_segmentation(self):
         """Nodes are seeded from it; rgb alone would build an empty graph. The
