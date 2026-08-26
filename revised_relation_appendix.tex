@@ -1,0 +1,195 @@
+\subsection{Simulation-Based Relation Label Construction}
+\label{app:relation_label_construction}
+
+\paragraph{Simulator supervision and task-specific assets.}
+At each environment step, we construct the scene graph from privileged
+simulator state. We use object poses, the end-effector pose, gripper width,
+contact forces, and the simulator grasp predicate only to construct graph
+labels; these quantities are not provided directly to the world model or the
+policy. Before training, the task-mining phase processes successful rollouts
+once to obtain the task-relevant object set, the admissible interaction types
+for each entity, object-local affordance components, and relation-specific
+discretization thresholds. These assets are then fixed throughout training.
+
+An admissible relation must have a valid endpoint type, be supported by the
+mined interaction types of its endpoints, and have the required affordance
+components and calibration thresholds. A relation is emitted only when every
+object endpoint lies within a camera view. The end effector need not be
+visually observed because its state is available from robot proprioception.
+When an object leaves the camera views, we retain its vertex with zero bounding
+boxes but omit its incident relations. We do not carry forward their previous
+labels; if the relation later becomes admissible again, it is recomputed from
+the current state.
+
+\paragraph{Relation vocabulary.}
+Table~\ref{tab:main_relation_vocab} summarizes the relation vocabulary.
+Physical-state relations describe realized interactions. Spatial relations
+describe coarse pairwise geometry, whereas affordance relations measure
+whether the current relative configuration is suitable for an interaction.
+All relations carry an absolute state, and spatial and affordance relations
+additionally carry a temporal-change state.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.08}
+\caption{Relation vocabulary and admissible endpoint types. Spatial and
+affordance relations carry both absolute and temporal-change states; physical
+relations carry only an absolute state.}
+\label{tab:main_relation_vocab}
+\begin{tabularx}{0.99\linewidth}{@{}
+>{\raggedright\arraybackslash}p{0.18\linewidth}
+>{\raggedright\arraybackslash}p{0.30\linewidth}
+>{\raggedright\arraybackslash}p{0.24\linewidth}
+>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Family} & \textbf{Relation} & \textbf{Pair type} & \textbf{Temporal state} \\
+\midrule
+\multirow{4}{*}{\textbf{Physical}}
+& \texttt{contact} & \texttt{ee--obj}, \texttt{obj--obj} & -- \\
+& \texttt{grasp} & \texttt{ee--obj} & -- \\
+& \texttt{support} & \texttt{obj--obj} & -- \\
+& \texttt{contain} & \texttt{obj--obj} & -- \\
+\midrule
+\multirow{2}{*}{\textbf{Spatial}}
+& \texttt{planar-distance} & \texttt{ee--obj}, \texttt{obj--obj} & change \\
+& \texttt{height-offset} & \texttt{ee--obj}, \texttt{obj--obj} & change \\
+\midrule
+\multirow{4}{*}{\textbf{Affordance}}
+& \texttt{contact-compatibility} & \texttt{ee--obj}, \texttt{obj--obj} & change \\
+& \texttt{grasp-compatibility} & \texttt{ee--obj} & change \\
+& \texttt{support-compatibility} & \texttt{obj--obj} & change \\
+& \texttt{contain-compatibility} & \texttt{obj--obj} & change \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Physical-state relations.}
+The \texttt{contact} label is obtained by thresholding the simulator contact
+force, and \texttt{grasp} is given by the simulator grasp predicate. These
+relations take labels in \(\{\texttt{holds},\texttt{not-holds}\}\). For
+object--object pairs, \texttt{support} is determined from contact and the
+vertical component of the pairwise force, while \texttt{contain} tests whether
+the containee's mined key point lies inside the container's entry volume.
+Because support and containment are directed, their labels are
+\(\{\texttt{not-holds},\texttt{src-holds},\texttt{dst-holds}\}\), where the
+endpoints follow a fixed ordering. The physical predicates are evaluated
+independently, so several may hold for the same pair. We do not assign a
+separate temporal label to physical relations, since their transitions are
+already represented by consecutive absolute states.
+
+\paragraph{Spatial relations.}
+For an end-effector--object pair, \texttt{planar-distance} is the horizontal
+distance between the TCP and the object centroid, and \texttt{height-offset}
+is their signed vertical displacement. For an object--object pair, we use the
+corresponding mined interaction-surface anchors when available. This avoids
+measuring support or containment geometry from body-frame origins that may lie
+far from the relevant surfaces. The planar-distance labels are
+\(\{\texttt{very-near},\texttt{near},\texttt{medium},\texttt{far},
+\texttt{very-far}\}\), and the height-offset labels are
+\(\{\texttt{far-below},\texttt{below},\texttt{level},\texttt{above},
+\texttt{far-above}\}\). Their bin edges are derived from successful-rollout
+statistics and fixed before training. End-effector--object and
+object--object measurements are calibrated separately because they occupy
+different spatial ranges. A spatial relation without a mined calibration is
+not emitted.
+
+\paragraph{Affordance relations.}
+Successful interactions define a set of object-local components for each
+affordance. Grasp components contain an interaction anchor, approach direction,
+and gripper width; contact components contain surface anchors and normals;
+support components describe a support surface and the corresponding object
+bottom; and containment components describe an entry region and the
+containee's key axis. Multiple components preserve distinct successful
+interaction modes.
+
+For each admissible pair, we select the applicable component or component pair
+and compute a normalized incompatibility score
+\begin{equation}
+d_{ij,t}^{\rho}
+=
+\frac{1}{|\mathcal M_{ij,t}^{\rho}|}
+\sum_{m\in\mathcal M_{ij,t}^{\rho}}
+\min\!\left(\frac{\epsilon_{ij,t}^{m}}{\alpha_m},1\right),
+\qquad d_{ij,t}^{\rho}\in[0,1],
+\label{eq:affordance_score}
+\end{equation}
+where \(\epsilon_{ij,t}^{m}\) is an available relation-specific mismatch and
+\(\alpha_m\) is its normalization scale. The mismatches comprise position,
+orientation, and gripper width for grasp; anchor position and surface
+orientation for contact; planar alignment, vertical gap, and surface
+orientation for support; and radial offset, axial offset, and entry alignment
+for containment. Missing optional components are excluded from the average.
+A lower score denotes a configuration closer to a demonstrated successful
+interaction.
+
+Fine-grained compatibility is exposed after the pair enters the
+\texttt{very-near} or \texttt{near} planar-distance bins. The absolute state is
+\begin{equation}
+\sigma_{ij,t}^{\rho}
+=
+\begin{cases}
+\texttt{unobserved},
+& \text{the pair is not near},\\
+\texttt{match},
+& \text{the pair is near and } d_{ij,t}^{\rho}<\frac{1}{3},\\
+\texttt{partial-match},
+& \text{the pair is near and }
+  \frac{1}{3}\le d_{ij,t}^{\rho}<\frac{2}{3},\\
+\texttt{poor-match},
+& \text{the pair is near and } d_{ij,t}^{\rho}\ge\frac{2}{3}.
+\end{cases}
+\label{eq:affordance_bins}
+\end{equation}
+Thus, \texttt{unobserved} denotes an admissible pair outside the fine-grained
+evaluation range, whereas \texttt{poor-match} denotes an evaluated but
+incompatible configuration. Whenever the score is measurable, we retain its
+continuous value for temporal labeling even if the absolute state is
+\texttt{unobserved}. For object pairs already connected by a physical relation
+at episode initialization, we omit their compatibility relations so
+that the affordance set represents interaction configurations that can be
+acted upon rather than static scene layout.
+
+\paragraph{Temporal-change relations.}
+For each spatial or affordance relation with a contiguous history of raw
+measurements, we compute
+\begin{equation}
+\Delta u_{ij,t}^{\rho}
+=
+u_{ij,t}^{\rho}-u_{ij,t-K}^{\rho},
+\label{eq:temporal_difference}
+\end{equation}
+where \(u_{ij,t}^{\rho}\) is the continuous spatial measurement or
+incompatibility score underlying the absolute label. Negative changes in
+planar distance denote approach, negative changes in height offset denote
+downward relative motion, and negative changes in incompatibility denote
+improving affordance alignment.
+
+Let \(m_{\rho}>0\) be the robust change scale mined for relation \(\rho\).
+We discretize the signed difference as
+\begin{equation}
+\delta_{ij,t}^{\rho}
+=
+\begin{cases}
+\texttt{decrease-fast},
+& \Delta u_{ij,t}^{\rho}< -3m_{\rho}/5,\\
+\texttt{decrease-slow},
+& -3m_{\rho}/5\le\Delta u_{ij,t}^{\rho}< -m_{\rho}/12,\\
+\texttt{stable},
+& |\Delta u_{ij,t}^{\rho}|\le m_{\rho}/12,\\
+\texttt{increase-slow},
+& m_{\rho}/12<\Delta u_{ij,t}^{\rho}\le 3m_{\rho}/5,\\
+\texttt{increase-fast},
+& \Delta u_{ij,t}^{\rho}>3m_{\rho}/5.
+\end{cases}
+\label{eq:temporal_bins}
+\end{equation}
+The change scales are calibrated separately for each affordance relation and
+for each spatial endpoint type. A temporal label is produced only after
+\(K+1\) consecutive valid measurements. If a relation is omitted or its raw
+measurement is unavailable, its history is cleared and
+\(\delta_{ij,t}^{\rho}=\varnothing\) until a new window is accumulated. The
+affordance near gate does not by itself clear this history: continuous scores
+can therefore reveal movement toward or away from an interaction-ready
+configuration before the coarse absolute label changes.
