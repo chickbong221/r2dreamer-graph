@@ -99,9 +99,10 @@
         }
       ],
       "completion": {
-        "relation": "contact",
+        "relation": "planar-distance",
         "labels": [
-          "holds"
+          "near",
+          "very-near"
         ]
       }
     },
@@ -230,7 +231,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03125
+          "weight": 0.015625
         },
         {
           "relation": "planar-distance",
@@ -241,7 +242,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03125
+          "weight": 0.015625
         },
         {
           "relation": "planar-distance",
@@ -251,7 +252,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.03125
+          "weight": 0.015625
         },
         {
           "relation": "planar-distance",
@@ -260,7 +261,7 @@
           "labels": [
             "very-near"
           ],
-          "weight": 0.03125
+          "weight": 0.015625
         },
         {
           "relation": "support-compatibility",
@@ -271,7 +272,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.041666
+          "weight": 0.020833
         },
         {
           "relation": "support-compatibility",
@@ -281,7 +282,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.041667
+          "weight": 0.020833
         },
         {
           "relation": "support-compatibility",
@@ -290,13 +291,99 @@
           "labels": [
             "match"
           ],
-          "weight": 0.041667
+          "weight": 0.020834
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.015625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.015625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.015625
+        },
+        {
+          "relation": "planar-distance",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.015625
+        },
+        {
+          "relation": "support-compatibility",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.020833
+        },
+        {
+          "relation": "support-compatibility",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.020833
+        },
+        {
+          "relation": "support-compatibility",
+          "src": "movable",
+          "dst": "base_right",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.020834
         }
       ],
       "completion": {
-        "relation": "contact",
-        "labels": [
-          "holds"
+        "all_of": [
+          {
+            "relation": "contact",
+            "src": "movable",
+            "dst": "base_left",
+            "labels": [
+              "holds"
+            ]
+          },
+          {
+            "relation": "contact",
+            "src": "movable",
+            "dst": "base_right",
+            "labels": [
+              "holds"
+            ]
+          }
         ]
       }
     },
@@ -328,8 +415,20 @@
         }
       ],
       "completion": {
-        "relation": "support",
-        "holder": "base_left"
+        "all_of": [
+          {
+            "relation": "support",
+            "src": "movable",
+            "dst": "base_left",
+            "holder": "base_left"
+          },
+          {
+            "relation": "support",
+            "src": "movable",
+            "dst": "base_right",
+            "holder": "base_right"
+          }
+        ]
       }
     }
   ]

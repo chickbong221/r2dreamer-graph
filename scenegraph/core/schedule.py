@@ -78,7 +78,17 @@ class Phase:
     name: str
     weight: float
     clauses: Tuple[Clause, ...]
-    completion: Clause
+    completions: Tuple[Clause, ...]
+
+    @property
+    def completion(self) -> Clause:
+        """First completion clause, for legacy callers and diagnostics.
+
+        Runtime completion is the conjunction of :attr:`completions`. Existing
+        schedules have exactly one, so their compiled API and behaviour stay
+        unchanged.
+        """
+        return self.completions[0]
 
 
 @dataclass(frozen=True)
@@ -94,7 +104,7 @@ class CompiledSchedule:
         reads, in stable order. Several rungs usually share one."""
         seen: List[Tuple[int, int, int]] = []
         for phase in self.phases:
-            for clause in (*phase.clauses, phase.completion):
+            for clause in (*phase.clauses, *phase.completions):
                 if clause.slot not in seen:
                     seen.append(clause.slot)
         return tuple(seen)
@@ -289,13 +299,36 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                 "never be completed."
             )
         completion = dict(rawphase.get("completion") or {})
-        completion.setdefault("src", rawphase.get("src", EE_ROLE))
-        completion.setdefault("dst", rawphase.get("dst", EE_ROLE))
-        completion.setdefault("weight", 0.0)
+        if "all_of" in completion:
+            if set(completion) != {"all_of"}:
+                raise ScheduleError(
+                    f"{where}/completion: 'all_of' cannot be mixed with a "
+                    "single completion clause"
+                )
+            raw_completions = completion["all_of"]
+            if not isinstance(raw_completions, list) or not raw_completions:
+                raise ScheduleError(
+                    f"{where}/completion: 'all_of' must be a non-empty list"
+                )
+        else:
+            raw_completions = [completion]
+        completions = []
+        for raw_completion in raw_completions:
+            if not isinstance(raw_completion, dict):
+                raise ScheduleError(
+                    f"{where}/completion: every 'all_of' item must be a clause"
+                )
+            item = dict(raw_completion)
+            item.setdefault("src", rawphase.get("src", EE_ROLE))
+            item.setdefault("dst", rawphase.get("dst", EE_ROLE))
+            item.setdefault("weight", 0.0)
+            completions.append(_clause(
+                item, key_of, scorable, relations, absolute, entity_id,
+                f"{where}/completion",
+            ))
         phases.append(Phase(
             name=name, weight=weight, clauses=clauses,
-            completion=_clause(completion, key_of, scorable, relations,
-                               absolute, entity_id, f"{where}/completion"),
+            completions=tuple(completions),
         ))
 
     if not phases:

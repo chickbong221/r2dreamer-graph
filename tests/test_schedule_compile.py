@@ -225,6 +225,55 @@ class WeightTest(unittest.TestCase):
         self.assertAlmostEqual(sum(p.weight for p in compiled.phases), 1.0)
 
 
+class CompletionConjunctionTest(unittest.TestCase):
+    def _completion(self):
+        return {"all_of": [
+            _done("contact", "movable", "destination"),
+            _done("contact", "movable", "surface"),
+        ]}
+
+    def _compiled(self):
+        raw = _schedule(
+            [
+                _phase(
+                    "approach",
+                    [_clause("contact", "ee", "movable", weight=0.5)],
+                    _done("contact", "ee", "movable"),
+                    weight=0.5,
+                ),
+                _phase(
+                    "settle",
+                    [
+                        _clause(
+                            "contact", "movable", "destination", weight=0.25),
+                        _clause("contact", "movable", "surface", weight=0.25),
+                    ],
+                    self._completion(),
+                    weight=0.5,
+                ),
+            ],
+            roles={
+                "movable": "actor:cubeA",
+                "destination": "actor:cubeB",
+                "surface": "actor:table",
+            },
+        )
+        return _compile(raw)
+
+    def test_all_of_compiles_every_completion_clause(self):
+        phase = self._compiled().phases[-1]
+        self.assertEqual(len(phase.completions), 2)
+        self.assertIs(phase.completion, phase.completions[0])
+
+    def test_all_of_must_be_a_non_empty_list(self):
+        raw = _schedule([_phase(
+            "a", [_clause("grasp", "ee", "movable")],
+            {"all_of": []},
+        )])
+        with self.assertRaisesRegex(ScheduleError, "non-empty list"):
+            _compile(raw)
+
+
 class RoleTest(unittest.TestCase):
     def test_two_roles_sharing_an_entity_are_rejected(self):
         raw = _schedule(

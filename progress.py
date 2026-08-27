@@ -384,7 +384,9 @@ class TaskScheduleReplayPotential(torch.nn.Module):
 
         index = {slot: i for i, slot in enumerate(slots)}
         clause_slot, clause_phase, clause_weight, clause_mask = [], [], [], []
-        done_slot, done_mask, phase_weight = [], [], []
+        done_slot, done_phase, done_mask, done_required, phase_weight = (
+            [], [], [], [], []
+        )
         phase_uses = torch.zeros(self.n_phases, self.n_slots, dtype=torch.bool)
         for p, phase in enumerate(schedule.phases):
             phase_weight.append(phase.weight)
@@ -395,10 +397,14 @@ class TaskScheduleReplayPotential(torch.nn.Module):
                 clause_weight.append(clause.weight)
                 clause_mask.append(_label_mask(clause.label_ids, self.n_abs))
                 phase_uses[p, slot] = True
-            slot = index[phase.completion.slot]
-            done_slot.append(slot)
-            done_mask.append(_label_mask(phase.completion.label_ids, self.n_abs))
-            phase_uses[p, slot] = True
+            done_required.append(len(phase.completions))
+            for completion in phase.completions:
+                slot = index[completion.slot]
+                done_slot.append(slot)
+                done_phase.append(p)
+                done_mask.append(_label_mask(
+                    completion.label_ids, self.n_abs))
+                phase_uses[p, slot] = True
 
         self.register_buffer("clause_slot", long_buf(clause_slot), persistent=False)
         self.register_buffer("clause_phase", long_buf(clause_phase), persistent=False)
@@ -407,7 +413,10 @@ class TaskScheduleReplayPotential(torch.nn.Module):
             persistent=False)
         self.register_buffer("clause_mask", torch.stack(clause_mask), persistent=False)
         self.register_buffer("done_slot", long_buf(done_slot), persistent=False)
+        self.register_buffer("done_phase", long_buf(done_phase), persistent=False)
         self.register_buffer("done_mask", torch.stack(done_mask), persistent=False)
+        self.register_buffer(
+            "done_required", long_buf(done_required), persistent=False)
         self.register_buffer(
             "phase_weight", torch.tensor(phase_weight, dtype=torch.float32),
             persistent=False)
@@ -473,8 +482,18 @@ class TaskScheduleReplayPotential(torch.nn.Module):
                               device=satisfied.device, dtype=satisfied.dtype)
         quality.index_add_(1, self.clause_phase, satisfied * self.clause_weight)
 
-        done = (onehot.index_select(1, self.done_slot) * self.done_mask).sum(-1)
-        done = (done > 0) & present.index_select(1, self.done_slot)
+        done_clause = (
+            onehot.index_select(1, self.done_slot) * self.done_mask
+        ).sum(-1)
+        done_clause = (
+            (done_clause > 0) & present.index_select(1, self.done_slot)
+        )
+        done_count = torch.zeros(
+            int(graph_count), self.n_phases,
+            device=done_clause.device, dtype=torch.long,
+        )
+        done_count.index_add_(1, self.done_phase, done_clause.long())
+        done = done_count.eq(self.done_required)
 
         # OR over strictly later phases, so a completed settle carries the grasp
         # that is no longer held.

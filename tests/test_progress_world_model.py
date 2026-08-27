@@ -23,11 +23,112 @@ from progress import (
     ABS_VERY_NEAR,
     PICK_STAGES,
     ProgressScorer,
+    TaskScheduleReplayPotential,
     potential_shaping,
 )
 
 N_ABS = progress.N_ABS
 N_REL = 11
+
+
+class ScheduleCompletionConjunctionTest(unittest.TestCase):
+    def _compiled(self):
+        from scenegraph.adapters.graph_vocab import (
+            EE_TOKEN,
+            PAD_TOKEN,
+            EntityVocab,
+        )
+        from scenegraph.core.schedule import compile_schedule
+        from scenegraph.core.spatial_metrics import (
+            SPATIAL_SCOPES,
+            spatial_bin_key,
+        )
+
+        objects = {
+            "actor:cubeA": {"contact_components": [{}]},
+            "actor:cubeB": {"contact_components": [{}]},
+            "actor:table": {"contact_components": [{}]},
+        }
+        members = {
+            key: {"interaction_types": ["contact"]} for key in objects
+        }
+        bins = {
+            spatial_bin_key(scope, relation): [0.1, 0.2, 0.3, 0.4]
+            for scope in SPATIAL_SCOPES
+            for relation in ("planar-distance", "height-offset")
+        }
+        vocab = EntityVocab(token_to_id={
+            PAD_TOKEN: 0,
+            EE_TOKEN: 1,
+            "actor:cubeA": 2,
+            "actor:cubeB": 3,
+            "actor:table": 4,
+        })
+        done = lambda src, dst: {
+            "relation": "contact", "src": src, "dst": dst,
+            "labels": ["holds"],
+        }
+        clause = lambda src, dst, weight: {
+            **done(src, dst), "weight": weight,
+        }
+        raw = {
+            "_schema_version": 1,
+            "env_id": "Conjunction-v1",
+            "roles": {
+                "movable": "actor:cubeA",
+                "destination": "actor:cubeB",
+                "surface": "actor:table",
+            },
+            "phases": [
+                {
+                    "name": "approach", "weight": 0.5,
+                    "clauses": [clause("ee", "movable", 0.5)],
+                    "completion": done("ee", "movable"),
+                },
+                {
+                    "name": "settle", "weight": 0.5,
+                    "clauses": [
+                        clause("movable", "destination", 0.25),
+                        clause("movable", "surface", 0.25),
+                    ],
+                    "completion": {"all_of": [
+                        done("movable", "destination"),
+                        done("movable", "surface"),
+                    ]},
+                },
+            ],
+        }
+        return compile_schedule(raw, objects, members, bins, vocab)
+
+    def test_every_completion_fact_is_required_before_backfilling(self):
+        from scenegraph.adapters.graph_vocab import build_absolute_vocab
+
+        schedule = self._compiled()
+        absolute = build_absolute_vocab()
+        scorer = TaskScheduleReplayPotential(schedule, len(absolute))
+        entities = list(schedule.entity_ids)
+        row = {entity: index for index, entity in enumerate(entities)}
+        holds = absolute.encode("holds")
+        not_holds = absolute.encode("not-holds")
+
+        def potential(second_completion_holds):
+            labels = [not_holds, holds,
+                      holds if second_completion_holds else not_holds]
+            slots = list(schedule.slots)
+            edge_rel = torch.tensor([slot[0] for slot in slots])
+            edge_abs = torch.tensor(labels)
+            edge_src = torch.tensor([row[slot[1]] for slot in slots])
+            edge_dst = torch.tensor([row[slot[2]] for slot in slots])
+            edge_graph = torch.zeros(len(slots), dtype=torch.long)
+            value, valid = scorer(
+                torch.tensor([entities]), edge_rel, edge_abs,
+                edge_src, edge_dst, edge_graph, 1,
+            )
+            self.assertTrue(bool(valid.item()))
+            return float(value.item())
+
+        self.assertAlmostEqual(potential(False), 0.25, places=6)
+        self.assertAlmostEqual(potential(True), 1.0, places=6)
 
 # The scorer's own relation order, which is the stage table's order of first
 # appearance -- not the relation vocabulary's.
