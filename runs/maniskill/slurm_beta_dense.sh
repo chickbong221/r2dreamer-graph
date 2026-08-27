@@ -124,6 +124,7 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M \
+  steps=8e6 \
   env.reward_mode=sparse \
   'env.reward_fallback=[]' \
   env.task=maniskill_StackPyramid-v1 \
@@ -143,12 +144,15 @@ python train.py \
 
 python train.py \
   env=maniskill \
-  model=size50M_graph_simple \
+  model=size50M \
+  steps=8e6 \
+  env.reward_mode=sparse \
+  'env.reward_fallback=[]' \
   env.task=maniskill_PlugCharger-v1 \
-  model.progress.beta=0.2 \
+  env.obs_mode=rgb \
   wandb.group=maniskill_PlugCharger-v1 \
-  wandb.name=PlugCharger-v1-beta02 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-beta02
+  wandb.name=PlugCharger-v1-sparse-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-sparse-baseline
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

@@ -126,6 +126,7 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M_graph_simple \
+  steps=8e6 \
   env.reward_mode=sparse \
   'env.reward_fallback=[]' \
   env.task=maniskill_StackPyramid-v1 \
@@ -148,6 +149,7 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M_graph_simple \
+  steps=8e6 \
   env.reward_mode=sparse \
   'env.reward_fallback=[]' \
   env.task=maniskill_PlugCharger-v1 \
