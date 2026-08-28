@@ -267,7 +267,7 @@ def parse_args(argv=None):
     p.add_argument("--label-offset", action="append", metavar="NODE_ID=DX,DY",
                    help="nudge one chip in pixels, for figure tuning "
                         "(repeatable)")
-    p.add_argument("--font-size", type=int, default=16,
+    p.add_argument("--font-size", type=int, default=60,
                    help="camera-frame label text size in px; pass 0 to scale "
                         "with the frame")
     p.add_argument("--label-lift", type=float, default=0.0,
