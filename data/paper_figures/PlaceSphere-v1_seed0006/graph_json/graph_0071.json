@@ -1,0 +1,422 @@
+{
+  "frame": 71,
+  "env_id": "PlaceSphere-v1",
+  "camera": "base_camera",
+  "nodes": [
+    {
+      "node_id": "ee",
+      "node_type": "ee",
+      "name": "end_effector",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        12,
+        14
+      ],
+      "pixel_area": 50,
+      "pose_world": [
+        -0.07411590218544006,
+        0.01065128669142723,
+        0.12135591357946396,
+        -2.8701579140033573e-05,
+        0.9758241772651672,
+        -0.21855708956718445,
+        -0.00028181870584376156
+      ],
+      "bbox": [
+        [
+          0.453125,
+          0.578125,
+          0.3125,
+          0.3828125
+        ]
+      ],
+      "appearance": null,
+      "index": 0,
+      "source": "segmentation",
+      "attributes": {}
+    },
+    {
+      "node_id": "actor:bin",
+      "node_type": "object",
+      "name": "bin",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        19
+      ],
+      "pixel_area": 150,
+      "pose_world": [
+        0.09868299216032028,
+        0.021605923771858215,
+        0.002499999711290002,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bbox": [
+        [
+          0.4921875,
+          0.59375,
+          0.609375,
+          0.703125
+        ]
+      ],
+      "appearance": null,
+      "index": 1,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:bin",
+        "body_type": "kinematic",
+        "whitelist_key": "actor:bin",
+        "whitelist_roles": [
+          "interacted",
+          "support"
+        ],
+        "interaction_types": [
+          "contact",
+          "support"
+        ]
+      }
+    },
+    {
+      "node_id": "actor:sphere",
+      "node_type": "object",
+      "name": "sphere",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        18
+      ],
+      "pixel_area": 38,
+      "pose_world": [
+        -0.07164154946804047,
+        0.009856904856860638,
+        0.12009090185165405,
+        0.9999971985816956,
+        -0.0003946262877434492,
+        -0.002357951831072569,
+        0.00016986773698590696
+      ],
+      "bbox": [
+        [
+          0.484375,
+          0.5390625,
+          0.34375,
+          0.3984375
+        ]
+      ],
+      "appearance": null,
+      "index": 2,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:sphere",
+        "body_type": "dynamic",
+        "whitelist_key": "actor:sphere",
+        "whitelist_roles": [
+          "interacted"
+        ],
+        "interaction_types": [
+          "contact",
+          "grasp",
+          "support"
+        ],
+        "affordance_a_star": 0
+      }
+    },
+    {
+      "node_id": "actor:table-workspace",
+      "node_type": "object",
+      "name": "table-workspace",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        16
+      ],
+      "pixel_area": 10295,
+      "pose_world": [
+        -0.11999999731779099,
+        0.0,
+        -0.9196429252624512,
+        0.7071068286895752,
+        0.0,
+        0.0,
+        0.7071068286895752
+      ],
+      "bbox": [
+        [
+          0.0,
+          1.0,
+          0.359375,
+          1.0
+        ]
+      ],
+      "appearance": null,
+      "index": 3,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:table-workspace",
+        "body_type": "kinematic",
+        "whitelist_key": "actor:table-workspace",
+        "whitelist_roles": [
+          "interacted",
+          "support"
+        ],
+        "interaction_types": [
+          "contact",
+          "support"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "src": "ee",
+      "dst": "actor:bin",
+      "relation": "planar-distance",
+      "label": "very-far",
+      "temp_label": "stable",
+      "raw_value": 0.17314578239356915,
+      "attributes": {},
+      "bin_key": "ee-object-planar-distance"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:bin",
+      "relation": "height-offset",
+      "label": "level",
+      "temp_label": "increase-slow",
+      "raw_value": 0.11885591386817396,
+      "attributes": {},
+      "bin_key": "ee-object-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "planar-distance",
+      "label": "very-near",
+      "temp_label": "stable",
+      "raw_value": 0.0025987427477902,
+      "attributes": {},
+      "bin_key": "ee-object-planar-distance"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "height-offset",
+      "label": "level",
+      "temp_label": "stable",
+      "raw_value": 0.001265011727809906,
+      "attributes": {},
+      "bin_key": "ee-object-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "relation": "planar-distance",
+      "label": "near",
+      "temp_label": "stable",
+      "raw_value": 0.04710414094639243,
+      "attributes": {},
+      "bin_key": "ee-object-planar-distance"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "relation": "height-offset",
+      "label": "far-above",
+      "temp_label": "increase-slow",
+      "raw_value": 1.0409988388419151,
+      "attributes": {},
+      "bin_key": "ee-object-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:bin",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "contact",
+      "label": "holds",
+      "temp_label": null,
+      "raw_value": 54.74666228382745,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "grasp",
+      "label": "holds",
+      "temp_label": null,
+      "raw_value": 1.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "grasp-compatibility",
+      "label": "match",
+      "temp_label": null,
+      "raw_value": 0.014941419455785688,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:sphere",
+      "relation": "contact-compatibility",
+      "label": "match",
+      "temp_label": null,
+      "raw_value": 0.02890280010775558,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "planar-distance",
+      "label": "very-far",
+      "temp_label": "stable",
+      "raw_value": 0.16989994498220212,
+      "attributes": {},
+      "bin_key": "object-object-planar-distance"
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "height-offset",
+      "label": "far-below",
+      "temp_label": "decrease-slow",
+      "raw_value": -0.09511990214036405,
+      "attributes": {},
+      "bin_key": "object-object-height-offset"
+    },
+    {
+      "src": "actor:sphere",
+      "dst": "actor:table-workspace",
+      "relation": "planar-distance",
+      "label": "very-near",
+      "temp_label": "stable",
+      "raw_value": 0.013540769328548235,
+      "attributes": {},
+      "bin_key": "object-object-planar-distance"
+    },
+    {
+      "src": "actor:sphere",
+      "dst": "actor:table-workspace",
+      "relation": "height-offset",
+      "label": "far-above",
+      "temp_label": "increase-slow",
+      "raw_value": 0.10008782711410524,
+      "attributes": {},
+      "bin_key": "object-object-height-offset"
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "support",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:sphere",
+      "dst": "actor:table-workspace",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:sphere",
+      "dst": "actor:table-workspace",
+      "relation": "support",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "contact-compatibility",
+      "label": "unobserved",
+      "temp_label": null,
+      "raw_value": 0.5828227583524579,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:bin",
+      "dst": "actor:sphere",
+      "relation": "support-compatibility",
+      "label": "unobserved",
+      "temp_label": null,
+      "raw_value": 1.0,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    }
+  ],
+  "meta": {
+    "is_mshab": false,
+    "active_subtask": null,
+    "active_obj_id": null,
+    "active_target_node_id": null,
+    "n_objects": 3,
+    "n_visible": 4,
+    "n_in_frame": 4
+  }
+}
