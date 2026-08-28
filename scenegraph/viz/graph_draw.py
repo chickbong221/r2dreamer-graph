@@ -45,6 +45,11 @@ _RELATION_FAMILY: Dict[str, str] = {
 
 _FAMILY_ORDER = (_FAMILY_PHYSICAL_STATE, _FAMILY_SPATIAL, _FAMILY_AFFORDANCE)
 
+# Entity names need to remain legible when the 1200 px graph is reduced to a
+# paper panel. Relation chips intentionally stay smaller so the visual
+# hierarchy still leads with the entities.
+_NODE_LABEL_FONTSIZE = 16.0
+
 _INTRA_FAMILY_ORDER = {
     _FAMILY_PHYSICAL_STATE: ("contact", "grasp", "support", "contain"),
     _FAMILY_SPATIAL: ("planar-distance", "height-offset"),
@@ -373,7 +378,7 @@ def render_graph(
         label_color = tuple(0.45 * np.asarray(face))
         ax.text(
             x, y - node_r - 0.18, label,
-            fontsize=12.5, fontweight="bold",
+            fontsize=_NODE_LABEL_FONTSIZE, fontweight="bold",
             ha="center", va="top",
             color=label_color, zorder=5,
         )
