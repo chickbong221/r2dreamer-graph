@@ -112,28 +112,16 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 #   wandb.name=PullCubeTool-v1-sparse-beta1 \
 #   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-sparse-beta1
 
-python train.py \
-  env=maniskill \
-  model=size50M_graph_simple \
-  env.reward_mode=sparse \
-  'env.reward_fallback=[]' \
-  env.task=maniskill_PickCube-v1 \
-  model.progress.beta=1.0 \
-  wandb.group=maniskill_PickCube-v1 \
-  wandb.name=PickCube-v1-sparse-beta1 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-sparse-beta1
-
-python train.py \
-  env=maniskill \
-  model=size50M_graph_simple \
-  steps=8e6 \
-  env.reward_mode=sparse \
-  'env.reward_fallback=[]' \
-  env.task=maniskill_StackPyramid-v1 \
-  model.progress.beta=1.0 \
-  wandb.group=maniskill_StackPyramid-v1 \
-  wandb.name=StackPyramid-v1-sparse-beta1 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackPyramid-v1-sparse-beta1
+# python train.py \
+#   env=maniskill \
+#   model=size50M_graph_simple \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_PickCube-v1 \
+#   model.progress.beta=1.0 \
+#   wandb.group=maniskill_PickCube-v1 \
+#   wandb.name=PickCube-v1-sparse-beta1 \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-sparse-beta1
 
 python train.py \
   env=maniskill \
@@ -149,14 +137,26 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M_graph_simple \
-  steps=8e6 \
+  steps=10e6 \
   env.reward_mode=sparse \
   'env.reward_fallback=[]' \
-  env.task=maniskill_PlugCharger-v1 \
+  env.task=maniskill_StackPyramid-v1 \
   model.progress.beta=1.0 \
-  wandb.group=maniskill_PlugCharger-v1 \
-  wandb.name=PlugCharger-v1-sparse-beta1 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-sparse-beta1
+  wandb.group=maniskill_StackPyramid-v1 \
+  wandb.name=StackPyramid-v1-sparse-beta1 \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackPyramid-v1-sparse-beta1
+
+# python train.py \
+#   env=maniskill \
+#   model=size50M_graph_simple \
+#   steps=8e6 \
+#   env.reward_mode=sparse \
+#   'env.reward_fallback=[]' \
+#   env.task=maniskill_PlugCharger-v1 \
+#   model.progress.beta=1.0 \
+#   wandb.group=maniskill_PlugCharger-v1 \
+#   wandb.name=PlugCharger-v1-sparse-beta1 \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlugCharger-v1-sparse-beta1
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID
