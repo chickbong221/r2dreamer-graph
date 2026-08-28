@@ -579,6 +579,16 @@ def _looks_like_mshab(env) -> bool:
     )
 
 
+def looks_like_mshab(env_or_wrapped) -> bool:
+    """Public form, tolerant of wrappers.
+
+    Callers use it to pick an identity convention: MS-HAB resolves a merged
+    handle to the per-env actual, ordinary ManiSkill needs the reverse.
+    """
+    env = getattr(env_or_wrapped, "unwrapped", env_or_wrapped)
+    return _looks_like_mshab(env)
+
+
 def _subtask_type(subtask) -> Optional[str]:
     # *Subtask dataclasses expose ``.type`` ("pick"/"place"/"open"/"close"/...).
     return getattr(subtask, "type", None)

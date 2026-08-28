@@ -112,6 +112,9 @@ class GraphBuilder:
         # not an affordance the policy needs to achieve.
         self._initial_physical_pairs: Set[Tuple[str, str]] = set()
         self._initial_captured: bool = False
+        # One admission check per builder, on the first frame that
+        # produced any object at all.
+        self._checked_admission: bool = False
         # Contact forces do not describe the reset state until physics has
         # stepped: on GPU sim the pairwise buffer at the reset frame reports
         # touches between bodies 15cm apart. Capture after the first step.
@@ -120,6 +123,28 @@ class GraphBuilder:
                 "initial_physical_pair_frame", 1))
         # Once per builder, not per episode.
         self._reported_initial: bool = False
+
+    def _check_admission(self, built, kept) -> None:
+        """Refuse a scene whose objects the whitelist rejects entirely.
+
+        The gate filters on the entity key, so one naming mismatch --
+        ``actor:peg_0`` against a whitelist mined as ``actor:peg`` -- leaves a
+        graph of nothing but the end effector. Every downstream number stays
+        finite and every relation reads unobserved, so nothing else notices.
+        """
+        if self._checked_admission or not built:
+            return
+        self._checked_admission = True
+        if any(n.node_type != "ee" for n in kept.values()):
+            return
+        whitelist = self.selector.whitelist
+        expected = sorted((getattr(whitelist, "by_key", None) or {}))
+        raise ValueError(
+            "graph: the whitelist admitted none of this scene's objects. "
+            f"Scene offered {sorted(built)}; the whitelist expects {expected}. "
+            "A per-sub-scene suffix such as 'peg_0' against a mined 'peg' "
+            "means merged-view aliasing is off for this env."
+        )
 
     def _report_initial_pairs(self, graph) -> None:
         """Print the first episode's capture once.
@@ -483,7 +508,9 @@ class GraphBuilder:
                     active_target_node_id = stable_node_id(state.active_obj)
                 except Exception:
                     active_target_node_id = None
+        built = {k: n for k, n in nodes.items() if n.node_type != "ee"}
         nodes = self.selector.apply_whitelist(nodes)
+        self._check_admission(built, nodes)
         nodes = self.selector.merge_retained(nodes, frame)
         self._refresh_live_state(nodes, state)
         self._apply_visibility(nodes, state)

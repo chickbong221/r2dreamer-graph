@@ -25,7 +25,9 @@ from .privileged_state import (
     clear_privileged_state_caches,
     clear_resolve_cache,
     end_frame_cache,
+    looks_like_mshab,
     purge_scene_caches,
+    set_merged_view_aliasing,
 )
 from .graph_pack import graph_keys, pack_graph
 from .graph_vocab import GraphVocab, build_graph_vocab
@@ -173,6 +175,12 @@ class GraphObsBuilder:
         # Overlay rendering and the offline tools need one frame to draw on.
         # The model reads every camera independently and never sees this.
         self.record_camera = self.cameras[0]
+        # Ordinary ManiSkill needs per-sub-scene actors resolved to their
+        # merged view or the whitelist rejects every one of them by name.
+        # Decided once here, re-applied whenever the scene is rebuilt.
+        self._merged_view_aliasing = not looks_like_mshab(env)
+        self._apply_merged_view_aliasing()
+
         self.builders = []
         for i in range(self.num_envs):
             cfg_i = _shallow_copy(teemo_cfg)
@@ -421,6 +429,23 @@ class GraphObsBuilder:
             link_ids.extend(id(link) for link in getattr(art, "links", []) or [])
         return (id(scene), actor_ids, tuple(sorted(link_ids)))
 
+    def _apply_merged_view_aliasing(self) -> None:
+        """Resolve per-sub-scene actors to their merged view.
+
+        Without it PegInsertionSide names its actors ``peg_0`` and
+        ``box_with_hole_0`` while the mined whitelist says ``actor:peg``
+        and ``actor:box_with_hole``, so the hard gate drops both and the
+        graph keeps only the end effector and the table.
+
+        MS-HAB is excluded: it resolves the other way, merged handle to
+        per-env actual, and a global default would rewrite its
+        identities. Re-applied after a reconfigure, because the flag
+        lives on the scene object and a rebuilt scene never saw it.
+        """
+        if not self._merged_view_aliasing:
+            return
+        set_merged_view_aliasing(self.env, True)
+
     def _refresh_scene_caches_if_needed(self) -> None:
         sig = self._current_scene_signature()
         if sig is None:
@@ -431,6 +456,7 @@ class GraphObsBuilder:
         if sig == self._scene_cache_signature:
             return
         clear_privileged_state_caches(self.env)
+        self._apply_merged_view_aliasing()
         self._scene_cache_signature = sig
 
     def _purge_caches(self) -> None:

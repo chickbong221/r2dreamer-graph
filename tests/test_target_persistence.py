@@ -8,6 +8,7 @@ pairs with whatever the cameras do cover.
 """
 
 import unittest
+from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
@@ -763,6 +764,66 @@ class InitialCaptureFrameTest(unittest.TestCase):
     def test_zero_restores_the_reset_frame(self):
         builder = self._builder({"initial_physical_pair_frame": 0})
         self.assertEqual(self._capture_frames(builder, [0, 1]), [True, False])
+
+
+class WhitelistAdmissionTest(unittest.TestCase):
+    """A whitelist that rejects every object must fail, not emit a stub graph.
+
+    PegInsertionSide names its actors ``peg_0`` / ``box_with_hole_0`` per
+    sub-scene while the mined whitelist says ``actor:peg`` / ``actor:box_with_hole``.
+    Without merged-view aliasing the hard gate drops both, and what survives is
+    the end effector and the table -- a graph that stays finite, reports every
+    relation as unobserved, and trains on nothing.
+    """
+
+    class _Selector:
+        def __init__(self, keep):
+            self.whitelist = SimpleNamespace(by_key={"actor:peg": {"interacted"}})
+            self._keep = keep
+
+        def apply_whitelist(self, nodes):
+            return {k: v for k, v in nodes.items() if k in self._keep}
+
+    def _builder(self, keep):
+        builder = GraphBuilder.__new__(GraphBuilder)
+        builder._checked_admission = False
+        builder.selector = self._Selector(keep)
+        return builder
+
+    def _nodes(self):
+        ee = _node("ee", "ee", node_type="ee")
+        peg = _node("actor:peg_0", "peg_0")
+        box = _node("actor:box_with_hole_0", "box_with_hole_0")
+        return {n.node_id: n for n in (ee, peg, box)}
+
+    def _run(self, builder, keep):
+        nodes = self._nodes()
+        built = {k: n for k, n in nodes.items() if n.node_type != "ee"}
+        builder._check_admission(built, {k: nodes[k] for k in keep})
+
+    def test_rejecting_every_object_raises(self):
+        builder = self._builder({"ee"})
+        with self.assertRaises(ValueError) as caught:
+            self._run(builder, {"ee"})
+        message = str(caught.exception)
+        self.assertIn("actor:peg_0", message)
+        self.assertIn("actor:peg", message)
+        self.assertIn("merged-view aliasing", message)
+
+    def test_one_admitted_object_is_enough(self):
+        builder = self._builder({"ee", "actor:peg_0"})
+        self._run(builder, {"ee", "actor:peg_0"})
+
+    def test_a_scene_with_no_objects_is_not_an_error(self):
+        """Nothing was rejected, so there is nothing to diagnose."""
+        builder = self._builder({"ee"})
+        builder._check_admission({}, {"ee": _node("ee", "ee", node_type="ee")})
+
+    def test_the_check_runs_once(self):
+        builder = self._builder({"ee", "actor:peg_0"})
+        self._run(builder, {"ee", "actor:peg_0"})
+        # Already checked, so a later empty frame does not raise.
+        self._run(builder, {"ee"})
 
 
 if __name__ == "__main__":

@@ -537,12 +537,12 @@ class SweepScriptTest(unittest.TestCase):
             out.append(pairs)
         return out
 
-    def test_there_are_three_arms_and_none_is_empty(self):
-        """How many tasks are live is an experiment decision and changes
-        between runs, so only the arms are pinned. Emptiness is not: an
-        arm whose commands were all commented out would make every
-        per-command check below pass by having nothing to check."""
-        self.assertEqual(len(self.PATHS), 3)
+    def test_no_arm_is_empty(self):
+        """How many arms and tasks are live is an experiment decision and
+        changes between sweeps. Emptiness is not: an arm whose commands were
+        all commented out would make every per-command check below pass by
+        having nothing to check."""
+        self.assertGreaterEqual(len(self.PATHS), 3)
         for path in self.PATHS:
             with self.subTest(script=path.name):
                 self.assertTrue(self._commands(path))
@@ -582,15 +582,14 @@ class SweepScriptTest(unittest.TestCase):
                     else:
                         self.assertNotIn("env.reward_mode", cmd)
 
-    def test_beta_is_the_only_thing_that_varies_between_graph_arms(self):
-        """The control holds beta at zero under both rewards. The treatment
-        raises it to 1 under sparse, where the environment advantage it is
-        being weighed against is nearly absent."""
-        expected = {
-            "slurm_baseline.sh": {},
-            "slurm_beta0.sh": {"native": "0.0", "sparse": "0.0"},
-            "slurm_beta005.sh": {"native": "0.05", "sparse": "1.0"},
-        }
+    def test_beta_is_constant_within_a_reward_mode(self):
+        """One arm, one beta per reward mode.
+
+        Which betas an arm runs is an experiment decision and changes between
+        sweeps, so nothing here pins the values. Mixing two betas across runs
+        that share a reward mode is not a decision -- it makes the arm
+        uninterpretable, because a difference cannot be attributed.
+        """
         for path in self.PATHS:
             seen = {}
             for cmd in self._commands(path):
@@ -600,10 +599,9 @@ class SweepScriptTest(unittest.TestCase):
                 kind = "sparse" if "-sparse-" in cmd["wandb.name"] else "native"
                 seen.setdefault(kind, set()).add(beta)
             with self.subTest(script=path.name):
-                collapsed = {k: v.pop() for k, v in seen.items() if len(v) == 1}
-                self.assertEqual(len(collapsed), len(seen),
-                                 f"{path.name} mixes betas within a reward mode")
-                self.assertEqual(collapsed, expected[path.name])
+                mixed = {k: sorted(v) for k, v in seen.items() if len(v) > 1}
+                self.assertFalse(
+                    mixed, f"{path.name} mixes betas within a reward mode: {mixed}")
 
     def test_the_baseline_is_a_plain_preset(self):
         """No graph overrides: the preset carries no graph block, so nothing
@@ -624,12 +622,18 @@ class SweepScriptTest(unittest.TestCase):
         it in a different wandb group than the arms it is the control for."""
         for path in self.PATHS:
             with self.subTest(script=path.name):
-                groups = [c["wandb.group"] for c in self._commands(path)]
-                self.assertTrue(groups)
-                self.assertTrue(all(g.startswith("maniskill_") for g in groups))
-                # Both reward modes of a task land in that task's group,
-                # whichever tasks the arm currently runs.
-                self.assertEqual(len(groups), 2 * len(set(groups)))
+                commands = self._commands(path)
+                self.assertTrue(commands)
+                for cmd in commands:
+                    group, task = cmd.get("wandb.group"), cmd.get("env.task")
+                    with self.subTest(run=cmd["wandb.name"]):
+                        self.assertTrue(str(group).startswith("maniskill_"))
+                        # The group is the task, so every run of a task lands
+                        # beside the others whatever else the arm varies.
+                        # How many runs an arm holds is not pinned: that is an
+                        # experiment decision and changes between sweeps.
+                        if task is not None:
+                            self.assertEqual(group, task)
 
     def test_each_arm_has_its_own_names(self):
         """Two arms sharing a run name overwrite each other in wandb."""
