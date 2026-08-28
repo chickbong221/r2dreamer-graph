@@ -288,13 +288,20 @@ class LabelLayoutTest(unittest.TestCase):
         draw_callouts(_blank(), [call], font_size=20, lift=10)
         self.assertGreater(call.chip[0], call.box[2])
 
-    def test_a_wide_surface_uses_a_short_above_callout(self):
+    def test_a_point_entity_prefers_a_short_callout_above_it(self):
+        call = Callout("ee", "ee", (200.0, 200.0), (10, 20, 30))
+        draw_callouts(_blank(), [call], font_size=20, lift=10)
+        self.assertLess(call.chip[3], call.anchor[1])
+
+    def test_a_wide_surface_is_labelled_near_its_anchor(self):
         call = Callout(
             "actor:table-workspace", "table", (200.0, 280.0), (10, 20, 30),
             box=(0.0, 120.0, 400.0, 400.0),
         )
-        draw_callouts(_blank(), [call], font_size=20, lift=10)
-        self.assertLess(call.chip[3], call.box[1])
+        image = draw_callouts(_blank(), [call], font_size=20, lift=10)
+        self.assertGreater(call.chip[1], call.box[1])
+        self.assertLess(call.chip[3], call.anchor[1])
+        np.testing.assert_array_equal(image[280, 200], call.color)
 
     def test_every_chip_stays_inside_the_frame(self):
         graph = _graph([

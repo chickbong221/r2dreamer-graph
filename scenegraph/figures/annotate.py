@@ -145,12 +145,11 @@ def draw_callouts(
 ) -> np.ndarray:
     """Return ``frame`` with a chip per callout. The input is not modified.
 
-    Chips prefer the free side of an object instead of forming a column above
-    it.  This makes the association readable as a short sideways callout and,
-    in particular, stops a large surface such as the table from sending a
-    leader line through every smaller object in front of it.  Candidate
-    positions on all four sides still provide de-collision when projected
-    objects are close together.
+    Compact objects prefer a free side. Point entities such as the end effector
+    prefer a short vertical callout, and large background surfaces are labelled
+    near their anchor *inside* the projected region: there is no meaningful
+    outside edge close to the centre of a table. Candidate positions on all
+    four sides still provide de-collision when projected objects are close.
     """
     from PIL import Image, ImageDraw
 
@@ -229,15 +228,33 @@ def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
     if call.anchor[0] >= width / 2.0:
         horizontal.reverse()
 
-    candidates = [
-        *horizontal,
-        (vertical_x, top - gap - half_h),
-        (vertical_x, bottom + gap + half_h),
-    ]
+    above = (vertical_x, top - gap - half_h)
+    below = (vertical_x, bottom + gap + half_h)
+    surface = _is_large_surface(call, width, height)
+    if surface:
+        # A table often spans the image. Its projected boundary may be behind
+        # the robot or far from the visible patch we mean to name, so keep the
+        # name and dot together around the entity anchor on the surface.
+        ax, ay = (float(v) for v in call.anchor)
+        candidates = [
+            (ax, ay - gap - half_h),
+            (ax, ay + gap + half_h),
+            (ax - gap - half_w, ay),
+            (ax + gap + half_w, ay),
+            *horizontal,
+            above,
+            below,
+        ]
+    elif call.box is None:
+        # The end effector has a tool-centre point rather than an actor AABB.
+        # Above/below reads more clearly than a line crossing the robot body.
+        candidates = [above, below, *horizontal]
+    else:
+        candidates = [*horizontal, above, below]
     # At the top edge a sideways chip would be clamped partly over the object;
     # put it below instead. This is common for a raised gripper.
     if top - gap - chip_h < margin:
-        candidates.insert(0, (vertical_x, bottom + gap + half_h))
+        candidates.insert(0, below)
 
     # Extra lanes keep ``--labels-all`` usable when more than four entities
     # project to almost the same pixel.
@@ -258,7 +275,9 @@ def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
     ]
     for rect in choices:
         covers_object = (
-            call.box is not None and _overlaps(rect, call.box, 1.0)
+            call.box is not None
+            and not surface
+            and _overlaps(rect, call.box, 1.0)
         )
         covers_chip = any(_overlaps(rect, other, pad) for other in placed)
         if not covers_object and not covers_chip:
@@ -284,10 +303,23 @@ def _leader_target(call, rect):
         return call.anchor
     cx = 0.5 * (rect[0] + rect[2])
     cy = 0.5 * (rect[1] + rect[3])
+    if call.box[0] <= cx <= call.box[2] and call.box[1] <= cy <= call.box[3]:
+        # Large surfaces are deliberately labelled inside their projection.
+        # Their real anchor is both more accurate and close enough for a short
+        # leader; snapping to an arbitrary AABB boundary misidentifies them.
+        return call.anchor
     return (
         min(max(cx, call.box[0]), call.box[2]),
         min(max(cy, call.box[1]), call.box[3]),
     )
+
+
+def _is_large_surface(call, width, height) -> bool:
+    if call.box is None:
+        return False
+    box_w = max(0.0, float(call.box[2]) - float(call.box[0]))
+    box_h = max(0.0, float(call.box[3]) - float(call.box[1]))
+    return box_w >= 0.65 * width or box_h >= 0.65 * height
 
 
 def _clamp(cx, cy, w, h, width, height, margin):
