@@ -17,7 +17,7 @@ import numpy as np
 
 from scenegraph.core.schema import Edge, Graph, Node
 from scenegraph.figures.annotate import (
-    DEFAULT_LABELS, build_callouts, draw_callouts, fixed_labels,
+    Callout, DEFAULT_LABELS, build_callouts, draw_callouts, fixed_labels,
     label_every_node,
 )
 from scenegraph.figures.render_camera import FigureCamera
@@ -279,6 +279,22 @@ class LabelLayoutTest(unittest.TestCase):
                 overlap = not (a[2] <= b[0] or b[2] <= a[0]
                                or a[3] <= b[1] or b[3] <= a[1])
                 self.assertFalse(overlap, f"{a} overlaps {b}")
+
+    def test_a_name_prefers_the_side_of_its_object(self):
+        call = Callout(
+            "actor:sphere", "sphere", (200.0, 200.0), (10, 20, 30),
+            box=(180.0, 180.0, 220.0, 220.0),
+        )
+        draw_callouts(_blank(), [call], font_size=20, lift=10)
+        self.assertGreater(call.chip[0], call.box[2])
+
+    def test_a_wide_surface_uses_a_short_above_callout(self):
+        call = Callout(
+            "actor:table-workspace", "table", (200.0, 280.0), (10, 20, 30),
+            box=(0.0, 120.0, 400.0, 400.0),
+        )
+        draw_callouts(_blank(), [call], font_size=20, lift=10)
+        self.assertLess(call.chip[3], call.box[1])
 
     def test_every_chip_stays_inside_the_frame(self):
         graph = _graph([

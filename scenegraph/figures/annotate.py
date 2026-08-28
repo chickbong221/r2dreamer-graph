@@ -145,10 +145,12 @@ def draw_callouts(
 ) -> np.ndarray:
     """Return ``frame`` with a chip per callout. The input is not modified.
 
-    Chips are laid out top-down and pushed away from ones already placed, the
-    same de-collision the node-link diagram runs on its relation chips: two
-    objects a metre apart in the world can be twenty pixels apart in a
-    third-person view, and two overlapping names would name neither.
+    Chips prefer the free side of an object instead of forming a column above
+    it.  This makes the association readable as a short sideways callout and,
+    in particular, stops a large surface such as the table from sending a
+    leader line through every smaller object in front of it.  Candidate
+    positions on all four sides still provide de-collision when projected
+    objects are close together.
     """
     from PIL import Image, ImageDraw
 
@@ -165,49 +167,31 @@ def draw_callouts(
     stroke = max(1, int(round(size / 14.0)))
 
     placed: List[Tuple[float, float, float, float]] = []
-    # Farthest-up first: the object highest in the frame claims the space above
-    # it, and the ones below stack downward from there rather than crossing it.
+    # Farthest-up first: labels for the robot and background claim their nearby
+    # space before labels for foreground objects are considered.
     for call in sorted(callouts, key=lambda c: c.anchor[1]):
         x0, y0, x1, y1 = draw.textbbox((0, 0), call.text, font=font)
         chip_w, chip_h = (x1 - x0) + 2 * pad, (y1 - y0) + 2 * pad
 
-        top = call.box[1] if call.box is not None else call.anchor[1]
-        bottom = call.box[3] if call.box is not None else call.anchor[1]
-        cx = call.anchor[0] + call.offset[0]
-        cy = top - lift + call.offset[1]
-        push = -1.0
-        if cy - chip_h / 2.0 < margin:
-            # No room above: hang the chip under the object and push downward
-            # from there, so a de-collision never walks it back off the top.
-            cy = bottom + lift + call.offset[1]
-            push = 1.0
-
-        rect = _clamp(cx, cy, chip_w, chip_h, width, height, margin)
-        for _ in range(24):
-            hit = next((p for p in placed if _overlaps(rect, p, pad)), None)
-            if hit is None:
-                break
-            step = (chip_h + pad) * push
-            rect = _clamp(
-                0.5 * (rect[0] + rect[2]),
-                0.5 * (rect[1] + rect[3]) + step,
-                chip_w, chip_h, width, height, margin,
-            )
+        rect = _place_chip(
+            call, chip_w, chip_h, width, height, lift, margin, pad, placed
+        )
         placed.append(rect)
         call.chip = rect
 
         if draw_boxes and call.box is not None:
             draw.rectangle(list(call.box), outline=call.color, width=stroke)
 
-        _leader(draw, rect, call.anchor, call.color, stroke)
+        target = _leader_target(call, rect)
+        _leader(draw, rect, target, call.color, stroke)
         draw.ellipse(
-            [call.anchor[0] - dot - stroke, call.anchor[1] - dot - stroke,
-             call.anchor[0] + dot + stroke, call.anchor[1] + dot + stroke],
+            [target[0] - dot - stroke, target[1] - dot - stroke,
+             target[0] + dot + stroke, target[1] + dot + stroke],
             fill=(255, 255, 255),
         )
         draw.ellipse(
-            [call.anchor[0] - dot, call.anchor[1] - dot,
-             call.anchor[0] + dot, call.anchor[1] + dot],
+            [target[0] - dot, target[1] - dot,
+             target[0] + dot, target[1] + dot],
             fill=call.color,
         )
         draw.rounded_rectangle(
@@ -225,6 +209,87 @@ def draw_callouts(
 # --------------------------------------------------------------------------- #
 # Layout helpers
 # --------------------------------------------------------------------------- #
+def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
+    """Pick the nearest non-overlapping side of ``call`` for its name chip."""
+    if call.box is None:
+        left = right = float(call.anchor[0])
+        top = bottom = float(call.anchor[1])
+    else:
+        left, top, right, bottom = (float(v) for v in call.box)
+
+    half_w, half_h = chip_w / 2.0, chip_h / 2.0
+    side_y = min(max(float(call.anchor[1]), top), bottom)
+    vertical_x = min(max(float(call.anchor[0]), left), right)
+    horizontal = [
+        (left - gap - half_w, side_y),
+        (right + gap + half_w, side_y),
+    ]
+    # Put the chip toward the nearest frame edge. This leaves the centre of the
+    # scene, where the task action happens, as clear as possible.
+    if call.anchor[0] >= width / 2.0:
+        horizontal.reverse()
+
+    candidates = [
+        *horizontal,
+        (vertical_x, top - gap - half_h),
+        (vertical_x, bottom + gap + half_h),
+    ]
+    # At the top edge a sideways chip would be clamped partly over the object;
+    # put it below instead. This is common for a raised gripper.
+    if top - gap - chip_h < margin:
+        candidates.insert(0, (vertical_x, bottom + gap + half_h))
+
+    # Extra lanes keep ``--labels-all`` usable when more than four entities
+    # project to almost the same pixel.
+    lane_y = chip_h + pad
+    lane_x = chip_w + pad
+    for lane in (1.0, -1.0, 2.0, -2.0):
+        candidates.extend([
+            (horizontal[0][0], side_y + lane * lane_y),
+            (horizontal[1][0], side_y + lane * lane_y),
+            (vertical_x + lane * lane_x, top - gap - half_h),
+            (vertical_x + lane * lane_x, bottom + gap + half_h),
+        ])
+
+    dx, dy = (float(v) for v in call.offset)
+    choices = [
+        _clamp(cx + dx, cy + dy, chip_w, chip_h, width, height, margin)
+        for cx, cy in candidates
+    ]
+    for rect in choices:
+        covers_object = (
+            call.box is not None and _overlaps(rect, call.box, 1.0)
+        )
+        covers_chip = any(_overlaps(rect, other, pad) for other in placed)
+        if not covers_object and not covers_chip:
+            return rect
+
+    # A huge projected box can leave no formally free location. Prefer the
+    # candidate that obscures the least object/chip area, with stable ordering
+    # as the final tie-breaker.
+    def obstruction(rect):
+        own = 0.0 if call.box is None else _overlap_area(rect, call.box)
+        other = sum(_overlap_area(rect, old) for old in placed)
+        return other * 1000.0 + own
+
+    ranked = enumerate(choices)
+    return min(
+        ranked, key=lambda item: (obstruction(item[1]), item[0])
+    )[1]
+
+
+def _leader_target(call, rect):
+    """Nearest point on the projected object, avoiding a line through it."""
+    if call.box is None:
+        return call.anchor
+    cx = 0.5 * (rect[0] + rect[2])
+    cy = 0.5 * (rect[1] + rect[3])
+    return (
+        min(max(cx, call.box[0]), call.box[2]),
+        min(max(cy, call.box[1]), call.box[3]),
+    )
+
+
 def _clamp(cx, cy, w, h, width, height, margin):
     """A ``w x h`` rectangle centred on ``(cx, cy)``, kept inside the frame."""
     cx = min(max(float(cx), margin + w / 2.0), width - margin - w / 2.0)
@@ -236,6 +301,12 @@ def _overlaps(a, b, gap: float = 0.0) -> bool:
     return not (
         a[2] + gap <= b[0] or b[2] + gap <= a[0]
         or a[3] + gap <= b[1] or b[3] + gap <= a[1]
+    )
+
+
+def _overlap_area(a, b) -> float:
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(
+        0.0, min(a[3], b[3]) - max(a[1], b[1])
     )
 
 
