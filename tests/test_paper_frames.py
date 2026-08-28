@@ -195,11 +195,14 @@ class CalloutTest(unittest.TestCase):
 
     def test_the_gripper_is_labelled_without_an_entity(self):
         """``ee`` is a tool-centre pose, not an actor, so it has no AABB to
-        project and has to fall back to its own world position."""
+        project. Its visual target is raised from the TCP onto the housing."""
         calls = build_callouts(self.graph, self.camera, self.entities)
         ee = next(c for c in calls if c.node_id == "ee")
         self.assertIsNone(ee.box)
         self.assertTrue(all(np.isfinite(ee.anchor)))
+        tcp = self.camera.point_pixel([0.0, -0.2, 1.0])
+        self.assertAlmostEqual(ee.anchor[0], tcp[0])
+        self.assertAlmostEqual(ee.anchor[1], tcp[1] - 0.05 * H)
 
     def test_labels_all_names_every_vertex(self):
         calls = build_callouts(
@@ -288,12 +291,15 @@ class LabelLayoutTest(unittest.TestCase):
         draw_callouts(_blank(), [call], font_size=20, lift=10)
         self.assertGreater(call.chip[0], call.box[2])
 
-    def test_a_point_entity_prefers_a_short_callout_above_it(self):
+    def test_the_ee_chip_is_left_of_its_visual_target(self):
         call = Callout("ee", "ee", (200.0, 200.0), (10, 20, 30))
-        draw_callouts(_blank(), [call], font_size=20, lift=10)
-        self.assertLess(call.chip[3], call.anchor[1])
+        image = draw_callouts(_blank(), [call], font_size=20, lift=10)
+        self.assertLess(call.chip[2], call.anchor[0])
+        self.assertLess(call.chip[1], call.anchor[1])
+        self.assertGreater(call.chip[3], call.anchor[1])
+        np.testing.assert_array_equal(image[200, 200], call.color)
 
-    def test_a_wide_surface_is_labelled_near_its_anchor(self):
+    def test_a_wide_surface_is_labelled_at_its_right_edge(self):
         call = Callout(
             "actor:table-workspace", "table", (200.0, 280.0), (10, 20, 30),
             box=(0.0, 120.0, 400.0, 400.0),
@@ -301,7 +307,9 @@ class LabelLayoutTest(unittest.TestCase):
         image = draw_callouts(_blank(), [call], font_size=20, lift=10)
         self.assertGreater(call.chip[1], call.box[1])
         self.assertLess(call.chip[3], call.anchor[1])
-        np.testing.assert_array_equal(image[280, 200], call.color)
+        self.assertGreater(call.chip[0], 0.75 * W)
+        dot_x = int(0.5 * (call.chip[0] + call.chip[2]))
+        np.testing.assert_array_equal(image[280, dot_x], call.color)
 
     def test_every_chip_stays_inside_the_frame(self):
         graph = _graph([

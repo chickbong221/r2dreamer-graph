@@ -36,6 +36,12 @@ DEFAULT_LABELS: Dict[str, str] = {
     "actor:table-workspace": "table",
 }
 
+# The graph's end-effector pose is the tool centre between the fingertips. For
+# a human-facing figure, the recognisable entity is the solid gripper housing
+# immediately above that point. This screen-space rise moves only the callout;
+# the graph and its physical TCP pose remain unchanged.
+_EE_VISUAL_RISE = 0.05
+
 LabelFn = Callable[[Node], Optional[str]]
 
 
@@ -120,6 +126,12 @@ def build_callouts(
             )
         if anchor is None:
             continue
+        if node.node_id == "ee" and box is None:
+            _k, _ext, (_width, height) = camera.matrices()
+            anchor = (
+                float(anchor[0]),
+                max(0.0, float(anchor[1]) - _EE_VISUAL_RISE * height),
+            )
         rgb = tuple(int(round(255.0 * c)) for c in cmap.color(node.node_id))
         out.append(
             Callout(
@@ -145,11 +157,11 @@ def draw_callouts(
 ) -> np.ndarray:
     """Return ``frame`` with a chip per callout. The input is not modified.
 
-    Compact objects prefer a free side. Point entities such as the end effector
-    prefer a short vertical callout, and large background surfaces are labelled
-    near their anchor *inside* the projected region: there is no meaningful
-    outside edge close to the centre of a table. Candidate positions on all
-    four sides still provide de-collision when projected objects are close.
+    Compact objects prefer a free side. The end effector uses a horizontal
+    callout on its left, and large background surfaces are labelled at their
+    right-hand edge, where paper frames normally have clear tabletop space.
+    Candidate positions on all four sides still provide de-collision when
+    projected objects are close.
     """
     from PIL import Image, ImageDraw
 
@@ -232,10 +244,11 @@ def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
     below = (vertical_x, bottom + gap + half_h)
     surface = _is_large_surface(call, width, height)
     if surface:
-        # A table often spans the image. Its projected boundary may be behind
-        # the robot or far from the visible patch we mean to name, so keep the
-        # name and dot together around the entity anchor on the surface.
-        ax, ay = (float(v) for v in call.anchor)
+        # Keep both the table name and its dot in the empty space at the right
+        # of the tabletop rather than competing with the manipulated objects.
+        ax = min(right - margin - half_w, width - margin - half_w)
+        ax = max(ax, margin + half_w)
+        ay = min(max(float(call.anchor[1]), top), bottom)
         candidates = [
             (ax, ay - gap - half_h),
             (ax, ay + gap + half_h),
@@ -245,10 +258,17 @@ def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
             above,
             below,
         ]
+    elif call.node_id == "ee":
+        # Keep the chip left of the solid gripper housing, giving it the same
+        # horizontal visual grammar as the sphere callout below it.
+        candidates = [
+            (left - gap - half_w, side_y),
+            (right + gap + half_w, side_y),
+            above,
+            below,
+        ]
     elif call.box is None:
-        # The end effector has a tool-centre point rather than an actor AABB.
-        # Above/below reads more clearly than a line crossing the robot body.
-        candidates = [above, below, *horizontal]
+        candidates = [*horizontal, above, below]
     else:
         candidates = [*horizontal, above, below]
     # At the top edge a sideways chip would be clamped partly over the object;
@@ -303,10 +323,12 @@ def _leader_target(call, rect):
         return call.anchor
     cx = 0.5 * (rect[0] + rect[2])
     cy = 0.5 * (rect[1] + rect[3])
+    if call.node_id == "actor:table-workspace":
+        return (
+            min(max(cx, call.box[0]), call.box[2]),
+            min(max(float(call.anchor[1]), call.box[1]), call.box[3]),
+        )
     if call.box[0] <= cx <= call.box[2] and call.box[1] <= cy <= call.box[3]:
-        # Large surfaces are deliberately labelled inside their projection.
-        # Their real anchor is both more accurate and close enough for a short
-        # leader; snapping to an arbitrary AABB boundary misidentifies them.
         return call.anchor
     return (
         min(max(cx, call.box[0]), call.box[2]),
