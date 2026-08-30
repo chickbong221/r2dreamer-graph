@@ -7,7 +7,7 @@
   },
   "notes": [
     "destination is a non-colliding goal marker: spatial clauses only, since no contact, support or contain can ever hold against it",
-    "carry_to_goal ends on 'reached', which is PickCube's own norm(cube - goal_site) <= goal_thresh read live from the environment. The planar ladder's finest rung ('very-near', < 0.036m in the mined object-object scale) is implied by it at 0.025m, so a successful placement satisfies every clause in the phase and the potential terminates at 1.0."
+    "carry_to_goal has no 'very-near'-only planar rung. 'reached' already is the finest rung and is exact -- norm(cube - goal_site) <= goal_thresh, read live -- while 'very-near' is an equal-population quantile that tightens as the demos spend more time near the goal. Coupling a fixed environment threshold to a mined quantile meant a successful placement could leave the finest rung unpaid and the potential could top out below 1.0. No mined clause in a final phase may be stricter than that phase's exact 'reached' condition; the retained 'level' height rung satisfies that with room to spare."
   ],
   "phases": [
     {
@@ -159,15 +159,6 @@
           "weight": 0.075
         },
         {
-          "relation": "planar-distance",
-          "src": "movable",
-          "dst": "destination",
-          "labels": [
-            "very-near"
-          ],
-          "weight": 0.075
-        },
-        {
           "relation": "height-offset",
           "src": "movable",
           "dst": "destination",
@@ -204,7 +195,7 @@
           "labels": [
             "holds"
           ],
-          "weight": 0.1
+          "weight": 0.175
         }
       ],
       "completion": {

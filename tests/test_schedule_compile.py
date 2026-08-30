@@ -21,6 +21,12 @@ from scenegraph.core.schedule import (
     scorable_relations,
 )
 from scenegraph.core.sites import parse_site_declarations
+from scenegraph.adapters.site_providers import PULL_SUCCESS_RADIUS
+from scenegraph.core.spatial_metrics import (
+    OBJECT_REGION_PLANAR_KEY as _REGION_PD,
+    OBJECT_SITE_HEIGHT_KEY as _SITE_HO,
+    OBJECT_SITE_PLANAR_KEY as _SITE_PD,
+)
 
 OBJECTS = {
     "actor:cubeA": {"grasp_components": [{}], "contact_components": [{}],
@@ -639,3 +645,135 @@ class ReachedImpliesFinestRungTest(unittest.TestCase):
                     f"{path}: phase {phase['name']!r} pays for 'reached' but "
                     "does not complete on it",
                 )
+
+
+class FinalPhaseImplicationTest(unittest.TestCase):
+    """No mined clause in a final phase may be stricter than its exact
+    ``reached`` condition.
+
+    ``reached`` sits in the last phase, so no later phase backfills its
+    credit: the phase pays in full only when every clause in it is satisfied
+    at success. A ladder rung binned by an equal-population quantile can drift
+    tighter than the environment's fixed tolerance as the demos concentrate
+    near the goal, and then a successful episode leaves that rung unpaid and
+    the potential terminates below 1.0 -- silently, and only visible as a
+    training curve that plateaus.
+
+    The tolerances are the environments' own. PickCube's is read live from
+    ``goal_thresh``; the documented default is used here so the arithmetic is
+    re-checked against the mined bins on every run. PegInsertionSide is absent
+    on purpose: its ``reached`` is not in its final phase, and its final phase
+    is a physical ``contain`` milestone with no mined threshold at all.
+    """
+
+    import json as _json
+    import os as _os
+
+    CONFIGS = _os.path.join("scenegraph", "configs")
+    TOLERANCE = {
+        "PickCube-v1": 0.025,                    # PickCubeEnv.goal_thresh
+        "PullCubeTool-v1": PULL_SUCCESS_RADIUS,  # evaluate: dist < 0.6
+    }
+
+    # Best label first: how tight each relation's ladder gets.
+    ORDER = {
+        "planar-distance": ["very-near", "near", "medium", "far", "very-far"],
+        "height-offset": ["level", "below", "above", "far-below", "far-above"],
+    }
+
+    def _schedule(self, env_id):
+        path = self._os.path.join(self.CONFIGS, "schedules", f"{env_id}.json")
+        if not self._os.path.isfile(path):
+            return None
+        with open(path) as handle:
+            return self._json.load(handle)
+
+    def _assets(self, env_id):
+        from scenegraph.core.schedule import load_assets
+        return load_assets(env_id, self.CONFIGS)
+
+    def _bin_key(self, relation, sites, src, dst):
+        """Which mined scale labels this pair, mirroring the runtime rule."""
+        from scenegraph.core.sites import SITE_PREFIX, SITE_REGION
+        for key in (src, dst):
+            entry = (sites or {}).get(key)
+            if entry is None or not key.startswith(SITE_PREFIX):
+                continue
+            if entry.site_type == SITE_REGION:
+                return _REGION_PD if relation == "planar-distance" else None
+            return (_SITE_PD if relation == "planar-distance" else _SITE_HO)
+        return f"object-object-{relation}"
+
+    def _satisfied_interval(self, relation, labels, edges):
+        """``(low, high)`` of the measurement values this clause accepts.
+
+        Bins are upper-exclusive and ascending, so a label's interval is
+        ``[edges[i-1], edges[i])`` with open ends at the extremes.
+        """
+        names = {"planar-distance": ["very-near", "near", "medium", "far",
+                                     "very-far"],
+                 "height-offset": ["far-below", "below", "level", "above",
+                                   "far-above"]}[relation]
+        indices = sorted(names.index(l) for l in labels)
+        lo = -float("inf") if indices[0] == 0 else edges[indices[0] - 1]
+        hi = float("inf") if indices[-1] == len(names) - 1 else edges[indices[-1]]
+        return lo, hi
+
+    def test_no_final_phase_clause_is_stricter_than_reached(self):
+        for env_id, tolerance in sorted(self.TOLERANCE.items()):
+            raw = self._schedule(env_id)
+            if raw is None:
+                continue                      # schedule not written yet
+            final = raw["phases"][-1]
+            if not any(c["relation"] == "reached" for c in final["clauses"]):
+                continue
+            _, _, bins, sites, _ = self._assets(env_id)
+            roles = raw["roles"]
+            for clause in final["clauses"]:
+                relation = clause["relation"]
+                if relation not in self.ORDER:
+                    continue
+                src = roles.get(clause["src"], clause["src"])
+                dst = roles.get(clause["dst"], clause["dst"])
+                key = self._bin_key(relation, sites, src, dst)
+                edges = bins.get(key)
+                if not edges:
+                    continue
+                lo, hi = self._satisfied_interval(
+                    relation, clause["labels"], edges)
+                with self.subTest(env=env_id, relation=relation,
+                                  labels=clause["labels"]):
+                    # reached bounds the 3-D distance, so it bounds both the
+                    # planar distance and the absolute height offset.
+                    self.assertLess(
+                        tolerance, hi,
+                        f"{env_id}/{final['name']}: 'reached' fires at "
+                        f"{tolerance} but {relation} {clause['labels']} needs "
+                        f"< {hi:.4f}. A successful episode would leave this "
+                        "rung unpaid and the potential would top out below 1.0.",
+                    )
+                    if relation == "height-offset":
+                        self.assertLessEqual(
+                            lo, -tolerance,
+                            f"{env_id}/{final['name']}: {relation} "
+                            f"{clause['labels']} excludes a cube {tolerance}m "
+                            "*below* the goal, which 'reached' accepts.",
+                        )
+
+    def test_pick_cube_has_no_quantile_rung_at_the_goal(self):
+        """The 'very-near'-only planar rung was removed: it fired at a mined
+        quantile within 10% of goal_thresh, and 'reached' already is that rung,
+        exactly and in 3-D."""
+        raw = self._schedule("PickCube-v1")
+        final = raw["phases"][-1]
+        planar = [c["labels"] for c in final["clauses"]
+                  if c["relation"] == "planar-distance"]
+        self.assertNotIn(["very-near"], planar)
+        self.assertTrue(planar, "the coarser planar ladder must remain")
+
+    def test_the_tolerances_are_the_environments_own(self):
+        """Not numbers chosen here. PullCubeTool's is the constant the site
+        provider uses, so the two cannot drift apart."""
+        from scenegraph.adapters.site_providers import PULL_SUCCESS_RADIUS as R
+        self.assertEqual(self.TOLERANCE["PullCubeTool-v1"], R)
+        self.assertEqual(R, 0.6)
