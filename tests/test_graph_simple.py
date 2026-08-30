@@ -71,9 +71,12 @@ def graph_config(units=32):
         layers=1,
         n_cams=2,
         entity_vocab=14,
-        n_rel=11,
-        n_abs=19,
-        n_temp=6,
+        # Derived, not written down. The model asserts these against the shared
+        # vocabularies, so a hardcoded size turns "the vocabulary grew" into a
+        # dozen unrelated-looking decoder failures.
+        n_rel=len(build_relation_vocab()),
+        n_abs=len(build_absolute_vocab()),
+        n_temp=len(build_temporal_vocab()),
         embed=8,
         bbox=4,
         bbox_beta=0.1,
