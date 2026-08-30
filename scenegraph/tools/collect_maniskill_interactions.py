@@ -28,10 +28,15 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from scenegraph.adapters.interaction_events import (
-    EE_KEY, GROUP_GAP, GROUP_WINDOW, BucketStore, DiscoveryWindow,
+    EE_KEY, GROUP_GAP, GROUP_WINDOW, KIND_OBJECT_REGION, KIND_OBJECT_SITE,
+    BucketStore, DiscoveryWindow,
     BinStats, EpisodeEvidence, GroupAccumulator, InteractionEvent,
     make_bucket,
 )
+from scenegraph.adapters.site_providers import (
+    collision_half_extents, peg_mouth_geometry, robot_base_pose,
+)
+from scenegraph.core.sites import SITE_HOLE, SITE_PULL_REGION
 from scenegraph.adapters.contact_geometry import (
     paired_contact_frame, symmetry_of,
 )
@@ -46,7 +51,12 @@ from scenegraph.adapters.privileged_state import (
 from scenegraph.configs.loader import default_temporal_k
 from scenegraph.core.entity_identity import stable_entity_key
 
-SCHEMA_VERSION = 4  # 4 adds obj-obj pose pairs and scoped bin stats
+# 5 adds the keyed calibration reservoir (per-family end-effector heights,
+# object-to-site and object-to-region pairs) and per-actor collision extents.
+# The unkeyed end-effector streams stay for the shared MS-HAB scale; what a v4
+# shard cannot do is separate them by object, which is why family calibration
+# needs a re-collection rather than a re-mine.
+SCHEMA_VERSION = 5
 
 
 def _pose(entity, env_idx=0):
@@ -95,6 +105,9 @@ class InteractionRecorder:
         self.bins = BinStats(horizon=temporal_horizon)
         self.capability: Optional[str] = None
         self.symmetry: Dict[str, Any] = {}
+        # Per-actor collision half-extents, read once per entity set. What
+        # separates a tabletop from a bin -- see collision_half_extents.
+        self.extents: Dict[str, Any] = {}
         self.entities: Optional[List[Any]] = None
         self.keys: Dict[int, str] = {}
         self.frame = 0
@@ -136,6 +149,13 @@ class InteractionRecorder:
             self.keys[id(e)]: symmetry_of(e, self.env_idx)
             for e in self.entities
         }
+        # Read here rather than per frame: collision geometry only changes when
+        # the scene reconfigures, which is exactly when this runs.
+        self.extents = {}
+        for e in self.entities:
+            half = collision_half_extents(e, self.env_idx)
+            if half is not None:
+                self.extents[self.keys[id(e)]] = half
 
     def observe(self, info: Optional[dict] = None, state: Any = None) -> None:
         """Record one control step. Called once per ``env.step``.
@@ -248,6 +268,41 @@ class InteractionRecorder:
         if tcp is not None:
             poses[EE_KEY] = tcp
         self.bins.observe(poses, self.frame, dynamic=dynamic)
+        self._reference_stats(poses, dynamic)
+
+    def _reference_stats(self, poses: Dict[str, Any], dynamic) -> None:
+        """Calibration pairs against geometry that is not an actor.
+
+        A goal region and a hole mouth have no segmentation id, so nothing puts
+        them in the pose dict and no pair involving them is ever sampled. Their
+        ladders would then be labelled on a scale mined from unrelated pairs --
+        PullCubeTool's cube starts ~0.9m from the robot base while its
+        object-object planar scale tops out near 0.31m, so every frame of the
+        pull would read ``very-far``.
+        """
+        geometry = peg_mouth_geometry(self.env, self.env_idx)
+        if geometry is not None:
+            # The peg *head*, matching what the runtime measures. Recording the
+            # peg origin here and the head at runtime is the drift the shared
+            # site helpers exist to prevent.
+            head = np.concatenate([geometry["head"], [1.0, 0.0, 0.0, 0.0]])
+            self.bins.observe_keyed_pair(
+                KIND_OBJECT_SITE, "actor:peg", SITE_HOLE,
+                head, geometry["mouth"])
+
+        # Every movable actor, not a named one: which object a task drags into
+        # its goal region is the schedule's business, and guessing here would
+        # put a task registry back in the collector. The miner keeps the stream
+        # for the subject its whitelist declares and ignores the rest.
+        base_pose = robot_base_pose(self.env, self.env_idx)
+        if base_pose is None:
+            return
+        for key in sorted(dynamic or ()):
+            if key == EE_KEY or key not in poses:
+                continue
+            self.bins.observe_keyed_pair(
+                KIND_OBJECT_REGION, key, SITE_PULL_REGION,
+                poses[key], base_pose)
 
     def _containment(self) -> None:
         """The one relation physics cannot find: a hole is not an actor."""
@@ -361,10 +416,12 @@ def collect(args):
 
     # Read before close(): both describe the scene, which close() tears down.
     symmetry = dict(recorder.symmetry or {})
+    extents = dict(recorder.extents or {})
     capability = recorder.capability
     bin_stats = recorder.bins.as_dict()
     bin_samples = recorder.bins.reservoir()
     bin_pose_pairs = recorder.bins.pose_samples()
+    bin_keyed_pairs = list(recorder.bins.keyed_pairs)
     env.close()
     print(f"\nattempts={attempts} successes={successes} "
           f"rate={successes / max(attempts, 1):.1%}")
@@ -381,12 +438,18 @@ def collect(args):
               "-- likely brushes, not task interactions:")
         for b in incidental:
             print(f"  {store.presence(b):.0%}  {b}")
-    return store, symmetry, capability, bin_stats, bin_samples, bin_pose_pairs
+    for key, half in sorted(extents.items()):
+        print(f"extents: {key} -> {[round(v, 4) for v in half]}")
+    print(f"keyed calibration pairs: {len(bin_keyed_pairs)} "
+          f"(seen {recorder.bins.keyed_seen})")
+    return (store, symmetry, capability, bin_stats, bin_samples,
+            bin_pose_pairs, bin_keyed_pairs, extents)
 
 
 def write_shard(store: BucketStore, args, symmetry=None,
                 capability=None, bin_stats=None,
-                bin_samples=None, bin_pose_pairs=None) -> Path:
+                bin_samples=None, bin_pose_pairs=None,
+                bin_keyed_pairs=None, extents=None) -> Path:
     out = Path(args.out) / args.env_id
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"shard_{args.shard:03d}.pkl"
@@ -411,6 +474,13 @@ def write_shard(store: BucketStore, args, symmetry=None,
         "bin_samples": bin_samples or {},
         # Object-object scales are derived from these once anchors are mined.
         "bin_pose_pairs": bin_pose_pairs or [],
+        # Keyed pairs keep both endpoint identities, which the unkeyed
+        # end-effector streams above discard. Per-family end-effector heights,
+        # object-to-site and object-to-region scales all come from here, and
+        # from nothing a v4 shard contains.
+        "bin_keyed_pairs": bin_keyed_pairs or [],
+        # Per-actor collision half-extents: what tells a tabletop from a bin.
+        "extents": extents or {},
         "temporal_horizon": int(args.temporal_horizon),
         "capability": capability,
         "late": {str(b): n for b, n in store.late.items()},
@@ -456,10 +526,11 @@ def main(argv=None) -> int:
     if args.pilot:
         args.max_attempts = min(args.max_attempts, 25)
         args.patience = 10 ** 6      # never freeze; report what appears
-    store, symmetry, capability, bin_stats, bin_s, pose_pairs = collect(args)
+    (store, symmetry, capability, bin_stats, bin_s, pose_pairs,
+     keyed_pairs, extents) = collect(args)
     if not args.pilot:
         write_shard(store, args, symmetry, capability, bin_stats,
-                    bin_s, pose_pairs)
+                    bin_s, pose_pairs, keyed_pairs, extents)
     return 0
 
 

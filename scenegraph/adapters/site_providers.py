@@ -106,6 +106,27 @@ def pick_cube_goal(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
 # --------------------------------------------------------------------------- #
 # PullCubeTool
 # --------------------------------------------------------------------------- #
+def robot_base_pose(env, env_idx: int) -> Optional[np.ndarray]:
+    """The robot base link's world pose, or None if there is no robot.
+
+    Exposed without a declaration because the calibration collector needs the
+    region's centre before any asset exists to declare it.
+    """
+    base = _unwrap(env)
+    robot = getattr(getattr(base, "agent", None), "robot", None)
+    if robot is None:
+        return None
+    # A probe, so it answers "no base here" rather than raising: the
+    # calibration collector asks every environment without knowing which of
+    # them has a robot it can read. ``robot_base_region`` turns the same None
+    # into a hard failure, because by then a schedule has asked for it.
+    try:
+        links = robot.get_links()
+        return _pose7(links[0].pose, env_idx) if links else None
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
 def robot_base_region(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
     """A disc around the robot base link, the radius PullCubeTool succeeds at.
 
@@ -114,20 +135,14 @@ def robot_base_region(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
     than elsewhere -- the base does not move -- but it keeps the site defined
     the same way the predicate is.
     """
-    base = _unwrap(env)
-    robot = getattr(getattr(base, "agent", None), "robot", None)
-    if robot is None:
+    pose = robot_base_pose(env, env_idx)
+    if pose is None:
         raise SiteError(
             f"site {decl.key!r} wants the robot base but the environment "
-            "exposes no agent.robot"
+            "exposes no agent.robot with links"
         )
-    links = robot.get_links()
-    if not links:
-        raise SiteError(f"site {decl.key!r}: the robot reports no links")
     return SiteSpec(
-        declaration=decl,
-        pose_world=_pose7(links[0].pose, env_idx),
-        tolerance=PULL_SUCCESS_RADIUS,
+        declaration=decl, pose_world=pose, tolerance=PULL_SUCCESS_RADIUS,
     )
 
 
@@ -231,6 +246,50 @@ def _shapes_of(obj):
     return None
 
 
+def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
+    """Half-extents of the actor's collision shapes, unioned in its own frame.
+
+    The one measurement that separates an extended support plane from a
+    localized receptacle. Roles cannot: in PlaceSphere the bin and the table
+    carry byte-identical ``roles`` and ``interaction_types``, because both are
+    kinematic and both support the sphere. Their sizes differ by an order of
+    magnitude.
+
+    Shape poses are included, so a surface built from several offset blocks
+    reports the extent of the whole thing rather than of one block. Returns
+    None when the geometry cannot be read, which the miner treats as "cannot
+    classify" rather than "small".
+    """
+    objs = getattr(actor, "_objs", None) or []
+    if not objs:
+        return None
+    shapes = _shapes_of(objs[min(env_idx, len(objs) - 1)])
+    if not shapes:
+        return None
+    lo = np.full(3, np.inf)
+    hi = np.full(3, -np.inf)
+    for shape in shapes:
+        half = getattr(shape, "half_size", None)
+        if half is None:
+            geometry = getattr(shape, "geometry", None)
+            half = getattr(geometry, "half_size", None) if geometry else None
+        if half is None:
+            return None
+        half = _np(half).reshape(-1)[:3]
+        centre = np.zeros(3)
+        pose = getattr(shape, "local_pose", None)
+        if pose is not None:
+            try:
+                centre = _np(pose.p).reshape(-1)[:3]
+            except Exception:
+                centre = np.zeros(3)
+        lo = np.minimum(lo, centre - half)
+        hi = np.maximum(hi, centre + half)
+    if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)):
+        return None
+    return [float(v) for v in (hi - lo) / 2.0]
+
+
 def _collision_x_half_extent(actor, env_idx: int) -> Optional[float]:
     """Half-extent along x shared by the box's four blocks, or None.
 
@@ -269,38 +328,52 @@ def _collision_x_half_extent(actor, env_idx: int) -> Optional[float]:
 _DEPTH_CACHES: Dict[int, _BoxDepthCache] = {}
 
 
-def peg_hole_mouth(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
-    """The hole's entrance plane, with the peg head as the source point.
+def peg_mouth_geometry(env, env_idx: int) -> Optional[Dict[str, Any]]:
+    """``mouth`` pose, entry ``axis``, ``aperture`` and live ``head`` point.
 
     ``box_hole_pose`` sits on the box's centre plane -- its x offset is
     identically zero across every recorded episode -- so the mouth is that
     frame walked back along the hole axis by the box half-depth. Measuring to
     the hole frame instead would put the target inside the box and make the
     approach milestone fire only once the peg was already half inserted.
+
+    Returns None when the environment is not this task, so the calibration
+    collector can ask every environment without knowing which it has.
     """
     base = _unwrap(env)
-    missing = [a for a in _PEG_ATTRS if not hasattr(base, a)]
-    if missing:
-        raise SiteError(
-            f"site {decl.key!r} wants provider {decl.provider!r} but the "
-            f"environment exposes no {missing!r}"
-        )
+    if any(not hasattr(base, a) for a in _PEG_ATTRS):
+        return None
     cache = _DEPTH_CACHES.setdefault(int(env_idx), _BoxDepthCache())
     depth = cache.depth(base, env_idx)
 
     hole = _pose7(base.box_hole_pose, env_idx)
-    rot = _rot(hole)
-    axis = rot @ np.array([1.0, 0.0, 0.0])
-    mouth = np.concatenate([hole[:3] - depth * axis, hole[3:7]])
-
-    return SiteSpec(
-        declaration=decl,
-        pose_world=mouth,
+    axis = _rot(hole) @ np.array([1.0, 0.0, 0.0])
+    return {
+        "mouth": np.concatenate([hole[:3] - depth * axis, hole[3:7]]),
+        "axis": axis,
         # The opening's half-width, so ``reached`` means the head is within the
         # aperture at the mouth plane rather than merely near the box.
-        tolerance=_scalar(base.box_hole_radii, env_idx),
-        subject_point_world=_pose7(base.peg_head_pose, env_idx)[:3],
-        axis_world=axis,
+        "aperture": _scalar(base.box_hole_radii, env_idx),
+        "head": _pose7(base.peg_head_pose, env_idx)[:3],
+        "depth": depth,
+    }
+
+
+def peg_hole_mouth(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
+    """The hole's entrance plane, with the peg head as the source point."""
+    geometry = peg_mouth_geometry(env, env_idx)
+    if geometry is None:
+        missing = [a for a in _PEG_ATTRS if not hasattr(_unwrap(env), a)]
+        raise SiteError(
+            f"site {decl.key!r} wants provider {decl.provider!r} but the "
+            f"environment exposes no {missing!r}"
+        )
+    return SiteSpec(
+        declaration=decl,
+        pose_world=geometry["mouth"],
+        tolerance=geometry["aperture"],
+        subject_point_world=geometry["head"],
+        axis_world=geometry["axis"],
     )
 
 

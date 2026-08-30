@@ -65,6 +65,12 @@ PROVIDERS: Tuple[str, ...] = (
     PROVIDER_ROBOT_BASE_REGION,
 )
 
+# The two virtual site keys the shipped tasks use. Named here so the
+# calibration collector, the miner and the whitelist cannot drift apart on a
+# spelling -- a mismatch would calibrate a scale nothing ever reads.
+SITE_HOLE = f"{SITE_PREFIX}hole_site"
+SITE_PULL_REGION = f"{SITE_PREFIX}pull_goal_region"
+
 
 class SiteError(ValueError):
     """A site declaration or observation that cannot be scored."""

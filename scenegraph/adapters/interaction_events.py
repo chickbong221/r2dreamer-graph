@@ -18,6 +18,12 @@ from ..core.spatial_metrics import EE_OBJECT_SCOPE, stat_key
 
 EE_KEY = "ee"
 
+# Tags on the keyed calibration reservoir, so the miner routes a sample by what
+# it is rather than by re-deriving it from the key strings.
+KIND_EE_OBJECT = "ee-object"
+KIND_OBJECT_SITE = "object-site"
+KIND_OBJECT_REGION = "object-region"
+
 # Symmetric: no semantic direction, so the pair is stored in key order.
 SYMMETRIC_RELATIONS = frozenset({"contact"})
 # Directed: the caller supplies the orientation and it is preserved.
@@ -584,7 +590,8 @@ class BinStats:
     """
 
     def __init__(self, reservoir: int = 20000, seed: int = 0,
-                 horizon: int = 5, pose_reservoir: int = 20000) -> None:
+                 horizon: int = 5, pose_reservoir: int = 20000,
+                 keyed_reservoir: int = 20000) -> None:
         self.maxes: Dict[str, float] = defaultdict(float)
         self.samples: Dict[str, List[float]] = defaultdict(list)
         self.seen: Dict[str, int] = defaultdict(int)
@@ -594,11 +601,21 @@ class BinStats:
         self.pose_capacity = int(pose_reservoir)
         self.pose_pairs: List[Dict[str, Any]] = []
         self.pose_seen = 0
+        # Its own reservoir, deliberately. The object-pair one runs at capacity
+        # for a 300-episode task -- PlaceSphere's shard holds exactly 20000 --
+        # so routing keyed samples into it would evict the object-object
+        # calibration one-for-one with every sample added.
+        self.keyed_capacity = int(keyed_reservoir)
+        self.keyed_pairs: List[Dict[str, Any]] = []
+        self.keyed_seen = 0
         self._history: Dict[
             Tuple[str, str], deque[Tuple[float, float]]
         ] = defaultdict(lambda: deque(maxlen=self.horizon + 1))
         self._pose_history: Dict[
             Tuple[str, str], deque[Tuple[List[float], List[float]]]
+        ] = defaultdict(lambda: deque(maxlen=self.horizon + 1))
+        self._keyed_history: Dict[
+            Tuple[str, str, str], deque[Tuple[List[float], List[float]]]
         ] = defaultdict(lambda: deque(maxlen=self.horizon + 1))
 
     def _record(self, key: str, value: float) -> None:
@@ -621,9 +638,48 @@ class BinStats:
         if j < self.pose_capacity:
             self.pose_pairs[j] = sample
 
+    def _record_keyed_pair(self, sample: Dict[str, Any]) -> None:
+        self.keyed_seen += 1
+        if len(self.keyed_pairs) < self.keyed_capacity:
+            self.keyed_pairs.append(sample)
+            return
+        j = self._rng.randrange(self.keyed_seen)
+        if j < self.keyed_capacity:
+            self.keyed_pairs[j] = sample
+
+    def observe_keyed_pair(self, kind: str, src_key: str, dst_key: str,
+                           src_pose, dst_pose) -> None:
+        """Record one calibration pair that keeps both endpoint identities.
+
+        The unkeyed end-effector streams cannot be split after the fact: they
+        record a height and discard which object produced it, so a shard has no
+        way to tell an end-effector-to-sphere sample from an
+        end-effector-to-table one. Everything that needs a per-family or
+        per-pair scale travels through here instead, tagged with ``kind`` so
+        the miner can route it without re-deriving what it is.
+        """
+        import numpy as np
+
+        src = [float(v) for v in np.asarray(src_pose, dtype=float).reshape(-1)[:7]]
+        dst = [float(v) for v in np.asarray(dst_pose, dtype=float).reshape(-1)[:7]]
+        if len(src) < 3 or len(dst) < 3:
+            return
+        history = self._keyed_history[(kind, src_key, dst_key)]
+        history.append((src, dst))
+        prev_src = prev_dst = None
+        if len(history) == self.horizon + 1:
+            prev_src, prev_dst = history[0]
+        self._record_keyed_pair({
+            "kind": kind,
+            "src_key": src_key, "dst_key": dst_key,
+            "src_pose": src, "dst_pose": dst,
+            "prev_src_pose": prev_src, "prev_dst_pose": prev_dst,
+        })
+
     def new_episode(self) -> None:
         self._history.clear()
         self._pose_history.clear()
+        self._keyed_history.clear()
 
     def observe(self, poses: Dict[str, Any], frame: int,
                 dynamic: Optional[Iterable[str]] = None) -> None:
@@ -653,6 +709,12 @@ class BinStats:
     def _observe_ee(self, a, b, pa, pb) -> None:
         import numpy as np
 
+        # Keyed first, and kept whatever the shared streams do with it: the
+        # per-family scales are derived from these and from nothing else.
+        ee_key, obj_key = (a, b) if a == EE_KEY else (b, a)
+        self.observe_keyed_pair(KIND_EE_OBJECT, ee_key, obj_key,
+                                pa if a == EE_KEY else pb,
+                                pb if a == EE_KEY else pa)
         scope = EE_OBJECT_SCOPE
         planar = float(np.linalg.norm(pa[:2] - pb[:2]))
         height = float(pa[2] - pb[2])

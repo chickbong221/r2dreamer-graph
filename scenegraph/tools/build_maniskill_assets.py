@@ -77,10 +77,17 @@ def _robust_scale(values, is_change: bool) -> Optional[float]:
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
-AFFORDANCE_SCHEMA_VERSION = 4
+AFFORDANCE_SCHEMA_VERSION = 5
 # Shards below this carry no interaction traces, no env predicate traces
 # and no raw presence counts.
 SHARD_SCHEMA_MIN = 4
+# Below this a shard has no keyed calibration reservoir and no collision
+# extents. Both are unrecoverable after the fact: the end-effector streams
+# record a height and discard which object produced it, and nothing else in the
+# shard measures how big an actor is. A v4 shard still mines the assets it
+# always could; it just cannot produce per-family scales, site or region
+# scales, or a structural-surface classification.
+SHARD_SCHEMA_KEYED = 5
 TASK_SUBTASK = "task"
 TASK_TARGET = "all"
 
@@ -116,6 +123,10 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         "symmetry": {}, "bin_stats": defaultdict(float), "capability": None,
         "bin_samples": defaultdict(list),
         "bin_pose_pairs": [],
+        "bin_keyed_pairs": [],
+        "extents": {},
+        # The oldest shard in the set decides what this merge can calibrate.
+        "schema_version": None,
         "episode_presence": defaultdict(int),
         # One entry per successful episode, never flattened: the "present in
         # every successful rollout" rule counts episodes, so concatenating
@@ -147,6 +158,12 @@ def load_shards(env_id: str, root: Path) -> Dict[str, Any]:
         for key, arr in (shard.get("bin_samples") or {}).items():
             merged["bin_samples"][key].append(np.asarray(arr))
         merged["bin_pose_pairs"].extend(shard.get("bin_pose_pairs") or [])
+        merged["bin_keyed_pairs"].extend(shard.get("bin_keyed_pairs") or [])
+        merged["extents"].update(shard.get("extents") or {})
+        merged["schema_version"] = (
+            version if merged["schema_version"] is None
+            else min(merged["schema_version"], version)
+        )
         for key, value in (shard.get("bin_stats") or {}).items():
             merged["bin_stats"][key] = max(merged["bin_stats"][key],
                                            float(value))
