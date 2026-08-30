@@ -72,6 +72,8 @@ from .entity_identity import (
 from .schema import Node
 from .sites import SiteDeclaration, parse_site_declarations
 from .spatial_metrics import (
+    EE_HEIGHT_FAMILIES,
+    ee_family_bin_key,
     OBJECT_REGION_PLANAR_KEY,
     OBJECT_SITE_HEIGHT_KEY,
     OBJECT_SITE_PLANAR_KEY,
@@ -156,6 +158,10 @@ class Whitelist:
     # than in this loader: MS-HAB assets predate the property and must keep
     # loading.
     structural_surfaces: Set[str] = field(default_factory=set)
+    # Per-member end-effector height family. Absent for a legacy asset, which
+    # keeps the single shared scale; the fail-closed check lives at the task
+    # path that needs families, not in this loader.
+    families: Dict[str, str] = field(default_factory=dict)
     sites: Dict[str, "SiteDeclaration"] = field(default_factory=dict)
     schema_version: int = 0
     source_path: Optional[str] = None
@@ -210,6 +216,7 @@ def load_whitelist(path: str) -> Whitelist:
     by_key: Dict[str, Set[str]] = {}
     interaction_types: Dict[str, Set[str]] = {}
     structural: Set[str] = set()
+    families: Dict[str, str] = {}
     members = raw.get("members", {})
     if not isinstance(members, dict):
         raise ValueError(f"whitelist {path!r}: 'members' must be an object")
@@ -237,6 +244,9 @@ def load_whitelist(path: str) -> Whitelist:
             interaction_types[normalized] = itypes_set
             if isinstance(entry, dict) and entry.get("structural_surface"):
                 structural.add(normalized)
+            family = (entry or {}).get("family") if isinstance(entry, dict) else None
+            if isinstance(family, str) and family:
+                families[normalized] = family
 
     if not by_key:
         raise ValueError(f"whitelist {path!r}: 'members' is empty")
@@ -271,6 +281,7 @@ def load_whitelist(path: str) -> Whitelist:
         interaction_types=interaction_types,
         bin_edges=bin_edges,
         structural_surfaces=structural,
+        families=families,
         sites=parse_site_declarations(raw.get("sites"), where=path),
         schema_version=int(raw.get("_schema_version", 0) or 0),
         source_path=path,
@@ -337,6 +348,15 @@ _REGION_STAT = OBJECT_REGION_PLANAR_KEY.replace("-", "_")
 _BIN_DERIVATION[OBJECT_REGION_PLANAR_KEY] = ("unsigned5", _REGION_STAT)
 _BIN_DERIVATION[change_bin_key(OBJECT_REGION_PLANAR_KEY)] = (
     "signed5-sensitive", f"{_REGION_STAT}_change")
+
+# One signed height scale per end-effector family.
+for _family in EE_HEIGHT_FAMILIES:
+    _fkey = ee_family_bin_key(_family)
+    _fstat = _fkey.replace("-", "_")
+    _BIN_DERIVATION[_fkey] = ("signed5", _fstat)
+    _BIN_DERIVATION[change_bin_key(_fkey)] = (
+        "signed5-sensitive", f"{_fstat}_change")
+del _family, _fkey, _fstat
 
 # Object-to-site takes both, on its own scale.
 for _site_key, _site_kind in ((OBJECT_SITE_PLANAR_KEY, "unsigned5"),

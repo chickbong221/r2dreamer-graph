@@ -121,6 +121,8 @@ EE_OBJECT_SCOPE = spatial_metrics.EE_OBJECT_SCOPE
 OBJECT_OBJECT_SCOPE = spatial_metrics.OBJECT_OBJECT_SCOPE
 SPATIAL_SCOPES: Tuple[str, ...] = spatial_metrics.SPATIAL_SCOPES
 OBJECT_REGION_PLANAR_KEY = spatial_metrics.OBJECT_REGION_PLANAR_KEY
+EE_HEIGHT_FAMILIES = spatial_metrics.EE_HEIGHT_FAMILIES
+ee_family_bin_key = spatial_metrics.ee_family_bin_key
 OBJECT_SITE_PLANAR_KEY = spatial_metrics.OBJECT_SITE_PLANAR_KEY
 OBJECT_SITE_HEIGHT_KEY = spatial_metrics.OBJECT_SITE_HEIGHT_KEY
 spatial_bin_key = spatial_metrics.spatial_bin_key
@@ -169,6 +171,10 @@ _BIN_LABELS: Dict[str, List[str]] = {
     change_bin_key(OBJECT_SITE_PLANAR_KEY): CHANGE_LABELS,
     OBJECT_SITE_HEIGHT_KEY: SPATIAL_LABELS["height-offset"],
     change_bin_key(OBJECT_SITE_HEIGHT_KEY): CHANGE_LABELS,
+    **{ee_family_bin_key(f): SPATIAL_LABELS["height-offset"]
+       for f in EE_HEIGHT_FAMILIES},
+    **{change_bin_key(ee_family_bin_key(f)): CHANGE_LABELS
+       for f in EE_HEIGHT_FAMILIES},
 }
 
 
@@ -181,7 +187,13 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
     compatibility near gate reads it. Change relations stay out -- an asset
     legitimately omits one the demos never moved.
     """
-    keys = [spatial_bin_key(EE_OBJECT_SCOPE, r) for r in SPATIAL_RELATIONS]
+    keys = [spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")]
+    families = sorted(set((cfg.get("families") or {}).values()))
+    if families:
+        keys.extend(ee_family_bin_key(f) for f in families)
+    else:
+        # Legacy asset: one shared end-effector height scale.
+        keys.append(spatial_bin_key(EE_OBJECT_SCOPE, "height-offset"))
     keys.extend(AFFORDANCE_RELATIONS)
     # Required only where a region site exists to measure against. A task
     # without one must not be made to carry a scale nothing in it produces.
@@ -349,6 +361,40 @@ def height_offset(a: Node, b: Node) -> Optional[float]:
 def structural_surface_keys(cfg: dict) -> Set[str]:
     """Whitelist keys the asset marked as extended support planes."""
     return set(cfg.get("structural_surfaces") or ())
+
+
+def node_family(node: Node, cfg: dict) -> Optional[str]:
+    """The mined end-effector height family for one node, or None.
+
+    None means the asset never classified it. Callers that need a scale raise
+    rather than picking one: an unclassified member silently borrowing another
+    family's deadband is how a token comes to mean two different heights.
+    """
+    families = cfg.get("families") or {}
+    key = _whitelist_key(node)
+    return families.get(key) if key else None
+
+
+def ee_height_bin_key(node: Node, cfg: dict) -> str:
+    """Which height scale labels this end-effector pair.
+
+    Falls back to the single shared scale only when the asset declares no
+    families at all -- a legacy MS-HAB whitelist, which was mined before the
+    split and whose members were never classified. A families-aware asset that
+    omits one member is an error, not a reason to reach for the old scale.
+    """
+    families = cfg.get("families") or {}
+    if not families:
+        return spatial_bin_key(EE_OBJECT_SCOPE, "height-offset")
+    family = node_family(node, cfg)
+    if not family:
+        raise ValueError(
+            f"{_whitelist_key(node)!r} has no mined end-effector height "
+            "family, but this asset classifies its other members. Labelling "
+            "it on another family's scale would make 'level' mean two "
+            "different heights in one graph. Re-mine the task."
+        )
+    return ee_family_bin_key(family)
 
 
 def region_site_keys(cfg: dict) -> Set[str]:
@@ -670,15 +716,17 @@ def ee_object_spatial_edges(
         return []
     ee_xyz = np.asarray(ee.pose_world[:3], dtype=float)
     pd_key = spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")
-    ho_key = spatial_bin_key(EE_OBJECT_SCOPE, "height-offset")
     pd_spec = _get_bin_spec(cfg, pd_key)
-    ho_spec = _get_bin_spec(cfg, ho_key)
 
     aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
     for node in _ee_object_nodes(graph):
         obj_xyz = _xyz(node)
         structural = is_structural_surface(node, cfg)
+        # Per family, so a metre of table clearance cannot set the deadband
+        # that a two-centimetre lift has to register against.
+        ho_key = ee_height_bin_key(node, cfg)
+        ho_spec = _get_bin_spec(cfg, ho_key)
         # A structural surface's origin names no place to approach: it is the
         # centre of a metre-wide plane, so the planar distance to it says
         # nothing the policy can act on. The height above it says a great deal.

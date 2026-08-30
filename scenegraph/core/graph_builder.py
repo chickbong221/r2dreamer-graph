@@ -231,6 +231,7 @@ class GraphBuilder:
         # bins come from, so a run cannot end up measuring against one asset's
         # surfaces while labelling with another's scale.
         self.cfg["structural_surfaces"] = set(union.structural_surfaces)
+        self.cfg["families"] = dict(union.families)
         self.cfg["site_declarations"] = dict(union.sites)
         self._bin_edges_subtask = subtask
 

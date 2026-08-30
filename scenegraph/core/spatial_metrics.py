@@ -40,6 +40,28 @@ OBJECT_REGION_PLANAR_KEY = f"{OBJECT_REGION_SCOPE}-planar-distance"
 # Deliberately separate from object-object. The peg head-to-mouth distance and
 # the peg-to-box origin distance are both emitted, and they are not the same
 # quantity: sharing a scale would let one pair's range set the other's bins.
+# End-effector height families. The relation stays ``height-offset``; only the
+# scale splits. One shared scale let the table -- a metre below the gripper
+# because its origin is under its own top -- set a +/-0.21m deadband that swallowed
+# every end-effector-to-manipuland height in every shipped task.
+#
+# Planar is deliberately not split: it is already a distance between two
+# points the policy can act on, and a structural surface emits none at all.
+FAMILY_STRUCTURAL = "structural-surface"
+FAMILY_MANIPULAND = "manipuland"
+FAMILY_RECEPTACLE = "receptacle"
+FAMILY_GOAL_MARKER = "goal-marker"
+EE_HEIGHT_FAMILIES: Tuple[str, ...] = (
+    FAMILY_STRUCTURAL, FAMILY_MANIPULAND, FAMILY_RECEPTACLE,
+    FAMILY_GOAL_MARKER,
+)
+
+
+def ee_family_bin_key(family: str) -> str:
+    """``ee-manipuland-height-offset`` and friends."""
+    return f"ee-{family}-height-offset"
+
+
 OBJECT_SITE_SCOPE = "object-site"
 OBJECT_SITE_PLANAR_KEY = f"{OBJECT_SITE_SCOPE}-planar-distance"
 OBJECT_SITE_HEIGHT_KEY = f"{OBJECT_SITE_SCOPE}-height-offset"

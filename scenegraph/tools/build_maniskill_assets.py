@@ -27,7 +27,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from scenegraph.adapters.contact_geometry import directions_to_local, to_local
-from scenegraph.adapters.interaction_events import EE_KEY
+from scenegraph.core.affordance import transform_dir
+from scenegraph.adapters.interaction_events import (
+    EE_KEY, KIND_EE_OBJECT, KIND_OBJECT_REGION, KIND_OBJECT_SITE,
+)
 from scenegraph.core import spatial_metrics
 from scenegraph.core.spatial_metrics import (
     OBJECT_OBJECT_SCOPE,
@@ -534,6 +537,59 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         if key not in members:
             members[key]["roles"].add("spatial")
 
+    plain_members = {
+        k: {"roles": sorted(v["roles"]) or ["interacted"],
+            "interaction_types": sorted(v["interaction_types"]),
+            "kind": "link" if k.startswith("link:") else "actor"}
+        for k, v in sorted(members.items())
+    }
+
+    # A v4 shard has no extents, no keyed reservoir and no site samples, so
+    # it can still mine everything it always could -- it just cannot classify
+    # surfaces or families, and the runtime falls back to the single shared
+    # end-effector height scale. What it must not do is claim a classification
+    # it has no evidence for.
+    keyed = int(merged.get("schema_version") or 0) >= SHARD_SCHEMA_KEYED
+    if not keyed:
+        return _legacy_assets(merged, objects, plain_members, env_id)
+
+    surfaces = structural_surfaces(merged, plain_members)
+    unreadable = unclassified_supporters(merged, plain_members)
+    if unreadable:
+        raise SystemExit(
+            f"no collision extents were recorded for supporters {unreadable}, "
+            "so a tabletop among them cannot be told from a bin and would be "
+            "measured from its actor origin -- roughly 0.9m below its own top. "
+            "Re-collect with the current collector (shard schema "
+            f"v{SHARD_SCHEMA_KEYED}) before mining."
+        )
+
+    families = object_families(plain_members, buckets, set(surfaces))
+    ambiguous = ambiguous_families(families)
+    if ambiguous:
+        raise SystemExit(
+            f"no end-effector height family fits {ambiguous}: each took part "
+            "in interactions but is neither grasped, nor a supporter or "
+            "container, nor an extended surface. Assigning one anyway would "
+            "give it another family's deadband. Extend the classification "
+            "rather than letting the asset guess."
+        )
+
+    for key, reason in surfaces.items():
+        surface = _reference_surface(merged, key, objects)
+        if surface is None:
+            raise SystemExit(
+                f"{key} classified as a structural surface ({reason}) but no "
+                "support-surface anchors were mined against it, so its top "
+                "face is unknown and every height would fall back to the "
+                "actor origin."
+            )
+        objects[key]["reference_surface"] = surface
+        plain_members[key]["structural_surface"] = True
+        plain_members[key]["structural_surface_reason"] = reason
+    for key, family in families.items():
+        plain_members[key]["family"] = family
+
     affordances = {
         "_schema_version": AFFORDANCE_SCHEMA_VERSION,
         "env_id": env_id,
@@ -545,16 +601,33 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         "subtask": TASK_SUBTASK,
         "task_group": env_id,
         "target": TASK_TARGET,
-        "members": {
-            k: {"roles": sorted(v["roles"]) or ["interacted"],
-                "interaction_types": sorted(v["interaction_types"]),
-                "kind": "link" if k.startswith("link:") else "actor"}
-            for k, v in sorted(members.items())
-        },
-        "bin_edges": _bin_edges(merged, objects),
+        "members": plain_members,
+        "sites": site_declarations(merged, plain_members),
+        "bin_edges": _bin_edges(merged, objects, families),
         "episodes": merged["episodes"],
     }
     return affordances, whitelist
+
+
+def _legacy_assets(merged, objects, plain_members, env_id):
+    """Assets from a pre-keyed shard: no families, no surfaces, no sites."""
+    return (
+        {
+            "_schema_version": AFFORDANCE_SCHEMA_VERSION,
+            "env_id": env_id,
+            "objects": {k: {kk: vv for kk, vv in v.items()}
+                        for k, v in sorted(objects.items())},
+        },
+        {
+            "_schema_version": WHITELIST_SCHEMA_VERSION,
+            "subtask": TASK_SUBTASK,
+            "task_group": env_id,
+            "target": TASK_TARGET,
+            "members": plain_members,
+            "bin_edges": _bin_edges(merged, objects),
+            "episodes": merged["episodes"],
+        },
+    )
 
 
 def _anchor_index(objects):
@@ -687,7 +760,281 @@ def unclassified_supporters(merged, members) -> List[str]:
     )
 
 
-def _bin_edges(merged, objects):
+def site_declarations(merged, members) -> Dict[str, Any]:
+    """Goal sites this task exposes, from what the shard actually recorded.
+
+    Driven by evidence, not by env id: a site is declared only when the
+    calibration reservoir holds pairs against it, which happens only when the
+    live geometry reader found the attributes it needs. PickCube's marker is a
+    real actor and is declared when it is a member and nothing ever interacted
+    with it.
+    """
+    kinds = defaultdict(set)
+    for record in merged.get("bin_keyed_pairs") or []:
+        kinds[record.get("kind")].add(
+            (record.get("src_key"), record.get("dst_key")))
+
+    out: Dict[str, Any] = {}
+    for src, dst in sorted(kinds.get(KIND_OBJECT_SITE, ())):
+        if src not in members:
+            continue
+        out[dst] = {
+            "site_type": "surface", "subject": src, "metric": "euclidean",
+            "source": "provider", "provider": "peg_hole_mouth",
+            "provenance": "PegInsertionSide-v1: box_hole_pose walked back "
+                          "along the entry axis by the box half-depth read "
+                          "from collision geometry; the subject point is the "
+                          "live peg_head_pose and the tolerance is "
+                          "box_hole_radii",
+        }
+    # A region is declared for the movable the task's own schedule names, and
+    # the miner does not know which that is. Every candidate is reported;
+    # exactly one survives review into the shipped asset.
+    for src, dst in sorted(kinds.get(KIND_OBJECT_REGION, ())):
+        if src not in members:
+            continue
+        out.setdefault(f"{dst}::candidate::{src}", {
+            "site_type": "region", "subject": src, "metric": "planar",
+            "source": "origin", "provider": "robot_base_region",
+            "provenance": "PullCubeTool-v1.evaluate: "
+                          "XY_distance(cube, robot_base) < 0.6",
+        })
+    # Actor-backed point goals: a member nothing ever interacted with.
+    for key, entry in sorted(members.items()):
+        if entry.get("interaction_types"):
+            continue
+        subjects = [k for k, v in members.items()
+                    if "grasp" in (v.get("interaction_types") or ())]
+        if len(subjects) != 1:
+            continue
+        out[key] = {
+            "site_type": "point", "subject": subjects[0],
+            "metric": "euclidean", "source": "origin",
+            "provider": "pick_cube_goal",
+            "provenance": "PickCube-v1.evaluate: is_obj_placed = "
+                          "norm(cube - goal_site) <= goal_thresh, read live",
+        }
+    return out
+
+
+def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
+    """The end-effector height family for every member, in strict precedence.
+
+    1. A structural surface is one, whatever else it does. A tabletop is also
+       grasped by nothing and supports everything, so the later rules would
+       reach it too -- and give it the wrong answer.
+    2. Anything the demos grasped is a manipuland. This is what the gripper
+       approaches and lifts, and its heights are the ones the deadband has to
+       resolve.
+    3. Anything that held something else -- the supporter of a support bucket
+       or the container of a contain bucket -- is a receptacle. Read from the
+       directed buckets, not from ``interaction_types``, which is a flat set
+       per member and says only that the object took part.
+    4. A member with no interactions at all is a goal marker: PickCube's
+       ``goal_site`` has no collision geometry, so it appears in no bucket and
+       exists purely to be measured against.
+
+    Anything else is left ``None``. That is not a family and must not be
+    treated as one -- see ``ambiguous_families``.
+    """
+    holders: set = set()
+    for bucket in buckets:
+        parts = [p.strip() for p in str(bucket).split("/")]
+        if len(parts) == 3 and parts[0] in ("support", "contain"):
+            holders.add(parts[1])
+
+    out: Dict[str, Optional[str]] = {}
+    for key, entry in members.items():
+        types = set((entry or {}).get("interaction_types") or ())
+        if key in structural:
+            out[key] = spatial_metrics.FAMILY_STRUCTURAL
+        elif "grasp" in types:
+            out[key] = spatial_metrics.FAMILY_MANIPULAND
+        elif key in holders:
+            out[key] = spatial_metrics.FAMILY_RECEPTACLE
+        elif not types:
+            out[key] = spatial_metrics.FAMILY_GOAL_MARKER
+        else:
+            out[key] = None
+    return out
+
+
+def ambiguous_families(families) -> List[str]:
+    """Members no rule classified.
+
+    A member that took part in interactions but is neither grasped, nor a
+    holder, nor structural. Falling back to a family would give it another
+    family's deadband, which is how one token comes to mean two heights; the
+    miner refuses to write the asset instead.
+    """
+    return sorted(key for key, family in families.items() if not family)
+
+
+def _reference_surface(merged, key, objects) -> Optional[Dict[str, Any]]:
+    """The top face of a structural surface, in its own object frame.
+
+    Derived from the support anchors already mined against it -- those points
+    lie on the face things rest on, which is the plane by definition. The
+    normal is forced upward here rather than at read time as well, so the
+    stored asset means what it says.
+    """
+    supports = (objects.get(key) or {}).get("support_components") or []
+    anchors = [np.asarray(c["surface_anchor"], dtype=float)
+               for c in supports if c.get("surface_anchor") is not None]
+    if not anchors:
+        return None
+    normals = [np.asarray(c["surface_normal"], dtype=float)
+               for c in supports if c.get("surface_normal") is not None]
+    normal = np.array([0.0, 0.0, 1.0])
+    if normals:
+        mean = np.mean(np.vstack(normals), axis=0)
+        oriented = spatial_metrics.oriented_normal(mean)
+        if oriented is not None:
+            normal = oriented
+    return {
+        "anchor": _round(np.mean(np.vstack(anchors), axis=0)),
+        "outward_normal": _round(normal),
+        "n_samples": len(anchors),
+        "provenance": "mean of mined support-surface anchors, normal forced "
+                      "outward (support normals are mined from contact "
+                      "forces and point into the supporter)",
+    }
+
+
+def _ee_structural_height(src, dst_pose, surface) -> Optional[float]:
+    """End-effector height above a structural surface's plane, not its origin.
+
+    The reservoir travels raw because nothing knows which members are surfaces
+    until the extents have been read and the anchors mined, so the correction
+    happens here -- the same reprojection the object-pair scales already get.
+    Without it the table's scale is calibrated on the ~1m to its own origin
+    while the runtime labels the ~0.15m to its top, and the deadband comes out
+    an order of magnitude too wide.
+    """
+    anchor = spatial_metrics.anchor_world(dst_pose, surface.get("anchor"))
+    normal = transform_dir(dst_pose, surface.get("outward_normal"))
+    if anchor is None or normal is None:
+        return None
+    return spatial_metrics.surface_height(src[:3], anchor, normal)
+
+
+def _keyed_stats(merged, families, objects=None) -> Dict[str, float]:
+    """Scales that only the keyed reservoir can produce.
+
+    Per-family end-effector heights, the object-to-site ladder and the
+    object-to-region ladder. All three are unavailable from a v4 shard: its
+    end-effector streams record a height and discard which object produced it,
+    and it has no site or region samples at all.
+    """
+    signed: Dict[str, List[float]] = defaultdict(list)
+    unsigned: Dict[str, List[float]] = defaultdict(list)
+
+    def _pair(record, key):
+        src = np.asarray(record.get("src_pose"), dtype=float)
+        dst = np.asarray(record.get("dst_pose"), dtype=float)
+        if src.size < 3 or dst.size < 3:
+            return None, None
+        return src, dst
+
+    for record in merged.get("bin_keyed_pairs") or []:
+        kind = record.get("kind")
+        src, dst = _pair(record, kind)
+        if src is None:
+            continue
+        planar = float(np.linalg.norm(src[:2] - dst[:2]))
+        height = float(src[2] - dst[2])
+
+        if kind == KIND_EE_OBJECT:
+            dst_key = record.get("dst_key")
+            family = families.get(dst_key)
+            if not family:
+                continue
+            if family == spatial_metrics.FAMILY_STRUCTURAL:
+                surface = ((objects or {}).get(dst_key) or {}).get(
+                    "reference_surface")
+                if surface is None:
+                    continue
+                surface_h = _ee_structural_height(src, dst, surface)
+                if surface_h is None:
+                    continue
+                height = surface_h
+            signed[spatial_metrics.ee_family_bin_key(family)].append(height)
+        elif kind == KIND_OBJECT_SITE:
+            unsigned[spatial_metrics.OBJECT_SITE_PLANAR_KEY].append(planar)
+            signed[spatial_metrics.OBJECT_SITE_HEIGHT_KEY].append(height)
+        elif kind == KIND_OBJECT_REGION:
+            unsigned[spatial_metrics.OBJECT_REGION_PLANAR_KEY].append(planar)
+        else:
+            continue
+
+        prev_src, prev_dst = record.get("prev_src_pose"), record.get("prev_dst_pose")
+        if prev_src is None or prev_dst is None:
+            continue
+        ps = np.asarray(prev_src, dtype=float)
+        pd = np.asarray(prev_dst, dtype=float)
+        old_planar = float(np.linalg.norm(ps[:2] - pd[:2]))
+        old_height = float(ps[2] - pd[2])
+        if kind == KIND_EE_OBJECT:
+            dst_key = record.get("dst_key")
+            family = families.get(dst_key)
+            if not family:
+                continue
+            if family == spatial_metrics.FAMILY_STRUCTURAL:
+                surface = ((objects or {}).get(dst_key) or {}).get(
+                    "reference_surface")
+                if surface is None:
+                    continue
+                old_surface = _ee_structural_height(ps, pd, surface)
+                if old_surface is None:
+                    continue
+                old_height = old_surface
+            signed[spatial_metrics.change_bin_key(
+                spatial_metrics.ee_family_bin_key(family))].append(
+                    height - old_height)
+        elif kind == KIND_OBJECT_SITE:
+            signed[spatial_metrics.change_bin_key(
+                spatial_metrics.OBJECT_SITE_PLANAR_KEY)].append(
+                    planar - old_planar)
+            signed[spatial_metrics.change_bin_key(
+                spatial_metrics.OBJECT_SITE_HEIGHT_KEY)].append(
+                    height - old_height)
+        elif kind == KIND_OBJECT_REGION:
+            signed[spatial_metrics.change_bin_key(
+                spatial_metrics.OBJECT_REGION_PLANAR_KEY)].append(
+                    planar - old_planar)
+
+    stats: Dict[str, float] = {}
+    for key, values in signed.items():
+        robust = _robust_scale(values, key.endswith("-change"))
+        if robust is None:
+            robust = float(np.max(np.abs(values))) if values else 0.0
+        if robust > 0.0:
+            stats[key.replace("-", "_")] = robust
+    for key, values in unsigned.items():
+        if values:
+            stats[key.replace("-", "_")] = float(np.max(values))
+    return stats
+
+
+def _keyed_planar_samples(merged) -> Dict[str, np.ndarray]:
+    """Raw planar samples per unsigned keyed scale, for equal-population edges."""
+    out: Dict[str, List[float]] = defaultdict(list)
+    for record in merged.get("bin_keyed_pairs") or []:
+        kind = record.get("kind")
+        if kind == KIND_OBJECT_SITE:
+            key = spatial_metrics.OBJECT_SITE_PLANAR_KEY
+        elif kind == KIND_OBJECT_REGION:
+            key = spatial_metrics.OBJECT_REGION_PLANAR_KEY
+        else:
+            continue
+        src = np.asarray(record.get("src_pose"), dtype=float)
+        dst = np.asarray(record.get("dst_pose"), dtype=float)
+        if src.size >= 3 and dst.size >= 3:
+            out[key].append(float(np.linalg.norm(src[:2] - dst[:2])))
+    return {k: np.asarray(v, dtype=np.float32) for k, v in out.items() if v}
+
+
+def _bin_edges(merged, objects, families=None):
     """Scoped edges: EE from recorded stats, object-object from reprojection.
 
     Quantiles apply only to non-negative planar distance, where they stop an
@@ -709,11 +1056,17 @@ def _bin_edges(merged, objects):
         if robust is not None:
             stats[key] = robust
     stats.update(object_stats)
+    stats.update(_keyed_stats(merged, families or {}, objects))
     edges = derive_bin_edges(stats)
     if object_planar.size:
         samples[stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")] = object_planar
 
-    for stat, key in _QUANTILE_KEYS.items():
+    quantile_keys = dict(_QUANTILE_KEYS)
+    for key, values in _keyed_planar_samples(merged).items():
+        samples[key.replace("-", "_")] = values
+        quantile_keys[key.replace("-", "_")] = key
+
+    for stat, key in quantile_keys.items():
         values = samples.get(stat)
         if values is None or values.size < 100:
             continue

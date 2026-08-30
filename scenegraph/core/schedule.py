@@ -41,6 +41,7 @@ from .spatial_metrics import (
     OBJECT_REGION_PLANAR_KEY,
     OBJECT_SITE_HEIGHT_KEY,
     OBJECT_SITE_PLANAR_KEY,
+    ee_family_bin_key,
     spatial_bin_key,
 )
 
@@ -190,8 +191,23 @@ def scorable_relations(
     }
     # Scope-aware: the ee-object and object-object scales are mined
     # separately, so a pair can be scorable in one and not the other.
-    ee_spatial = {r: bool(bin_edges.get(spatial_bin_key(EE_OBJECT_SCOPE, r)))
-                  for r in SPATIAL_RELATIONS}
+    # Height is calibrated per family, so what makes an ee pair scorable is
+    # that member's own scale -- resolved below, per key.
+    families = {
+        key: (entry or {}).get("family")
+        for key, entry in members.items() if isinstance(entry, dict)
+    }
+    any_family = any(families.values())
+
+    def _ee_height(key: str) -> bool:
+        if not any_family:
+            return bool(bin_edges.get(
+                spatial_bin_key(EE_OBJECT_SCOPE, "height-offset")))
+        family = families.get(key)
+        return bool(family) and bool(bin_edges.get(ee_family_bin_key(family)))
+
+    ee_planar = bool(bin_edges.get(
+        spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")))
     obj_spatial = {r: bool(bin_edges.get(
         spatial_bin_key(OBJECT_OBJECT_SCOPE, r))) for r in SPATIAL_RELATIONS}
     out: Dict[str, Dict[str, bool]] = {}
@@ -202,8 +218,8 @@ def scorable_relations(
             "grasp-compatibility": _has(objects, key, "grasp_components"),
             "contact-compatibility": _has(objects, key, "contact_components"),
             "reached": reached_on(EE_KEY, key),
-            **ee_spatial,
-            **({"planar-distance": False} if key in surfaces else {}),
+            "planar-distance": ee_planar and key not in surfaces,
+            "height-offset": _ee_height(key),
         }
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):

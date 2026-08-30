@@ -664,12 +664,17 @@ class StructuralSurfaceClassificationTest(unittest.TestCase):
     than against a guess.
     """
 
+    # Reported by the collector for the shipped tasks. The tabletop is
+    # identical in every one of them -- they share a TableSceneBuilder -- and
+    # six independent actors sit on the other side of the threshold.
     EXTENTS = {
         "actor:table-workspace": [1.209, 0.6045, 0.4598],
         "actor:bin": [0.025, 0.025, 0.0075],
         "actor:box_with_hole": [0.1234, 0.1234, 0.1234],
         "actor:peg": [0.1234, 0.022, 0.022],
         "actor:sphere": [0.02, 0.02, 0.02],
+        "actor:charger": [0.028, 0.015, 0.012],
+        "actor:receptacle": [0.01, 0.05, 0.05],
     }
     MEMBERS = {
         "actor:table-workspace": {"interaction_types": ["contact", "support"]},
@@ -678,6 +683,9 @@ class StructuralSurfaceClassificationTest(unittest.TestCase):
                                                       "contain"]},
         "actor:peg": {"interaction_types": ["contact", "grasp", "support"]},
         "actor:sphere": {"interaction_types": ["contact", "grasp", "support"]},
+        "actor:charger": {"interaction_types": ["contact", "grasp", "support"]},
+        "actor:receptacle": {"interaction_types": ["contact", "support",
+                                                   "contain"]},
     }
 
     def _classify(self, extents=None, members=None):
@@ -747,3 +755,127 @@ class StructuralSurfaceClassificationTest(unittest.TestCase):
         reason = self._classify()["actor:table-workspace"]
         self.assertIn("0.605", reason)
         self.assertIn("0.3", reason)
+
+
+from scenegraph.adapters.interaction_events import (
+    KIND_EE_OBJECT as _EE,
+    KIND_OBJECT_REGION as _REGION,
+    KIND_OBJECT_SITE as _SITE,
+)
+from scenegraph.core.spatial_metrics import (
+    FAMILY_MANIPULAND as _MANIPULAND,
+    FAMILY_RECEPTACLE as _RECEPTACLE,
+    FAMILY_STRUCTURAL as _STRUCTURAL,
+    OBJECT_REGION_PLANAR_KEY as _REGION_PD,
+    OBJECT_SITE_HEIGHT_KEY as _SITE_HO,
+    OBJECT_SITE_PLANAR_KEY as _SITE_PD,
+    ee_family_bin_key as _fkey,
+)
+
+
+class KeyedCalibrationTest(unittest.TestCase):
+    """Scales that only the keyed reservoir can produce.
+
+    The ranges below are the ones actually recorded in the PlaceSphere
+    rollout, so what is under test is that the miner separates them rather
+    than that the numbers are plausible.
+    """
+
+    TABLE = "actor:table-workspace"
+    # The shipped PlaceSphere asset: the tabletop is 0.92m above its own
+    # origin, and its mined normal points down.
+    SURFACE = {"anchor": [0.0, 0.0, 0.92], "outward_normal": [0.0, 0.0, -1.0]}
+    FAMILIES = {"actor:sphere": _MANIPULAND, "actor:bin": _RECEPTACLE,
+                TABLE: _STRUCTURAL}
+
+    def _pose(self, x=0.0, y=0.0, z=0.0):
+        return [x, y, z, 1.0, 0.0, 0.0, 0.0]
+
+    def _keyed(self, kind, src_key, dst_key, src, dst):
+        return {"kind": kind, "src_key": src_key, "dst_key": dst_key,
+                "src_pose": src, "dst_pose": dst,
+                "prev_src_pose": None, "prev_dst_pose": None}
+
+    def _merged(self):
+        rng = np.random.default_rng(0)
+        pairs = []
+        for _ in range(300):
+            pairs.append(self._keyed(
+                _EE, "ee", "actor:sphere",
+                self._pose(z=rng.uniform(0.001, 0.135)), self._pose()))
+            pairs.append(self._keyed(
+                _EE, "ee", "actor:bin",
+                self._pose(z=rng.uniform(0.019, 0.153)), self._pose()))
+            # Recorded against the table ORIGIN, which is what the collector
+            # ships: 0.94-1.07m, because the origin sits under its own top.
+            pairs.append(self._keyed(
+                _EE, "ee", self.TABLE,
+                self._pose(z=rng.uniform(0.941, 1.075)), self._pose()))
+            pairs.append(self._keyed(
+                _SITE, "actor:peg", "spatial:hole_site",
+                self._pose(x=-rng.uniform(0.0, 0.30),
+                           z=rng.uniform(-0.05, 0.05)), self._pose()))
+            pairs.append(self._keyed(
+                _REGION, "actor:cube", "spatial:pull_goal_region",
+                self._pose(x=rng.uniform(0.55, 0.95)), self._pose()))
+        return {"bin_keyed_pairs": pairs, "bin_pose_pairs": [],
+                "bin_stats": {}, "bin_samples": {}}
+
+    def _edges(self, objects=None):
+        if objects is None:
+            objects = {self.TABLE: {"reference_surface": dict(self.SURFACE)}}
+        return miner._bin_edges(self._merged(), objects, self.FAMILIES)
+
+    def test_the_table_does_not_set_the_manipuland_scale(self):
+        """The whole failure: one shared scale gave every end-effector height
+        in every task a +/-0.206m deadband, so nothing the gripper did to the
+        sphere ever left 'level'."""
+        edges = self._edges()
+        self.assertLess(edges[_fkey(_MANIPULAND)][2], 0.05)
+
+    def test_each_family_gets_its_own_scale(self):
+        edges = self._edges()
+        for family in (_MANIPULAND, _RECEPTACLE, _STRUCTURAL):
+            self.assertIn(_fkey(family), edges)
+
+    def test_the_structural_scale_is_reprojected_onto_the_surface(self):
+        """The reservoir ships end-effector-to-table-ORIGIN heights, because
+        nothing knows the table is a surface until its extents are read and
+        its anchors mined. Calibrating on those while the runtime labels
+        surface-relative heights is the drift spatial_metrics exists to stop:
+        it would put a 0.15m clearance inside a 0.21m deadband."""
+        edges = self._edges()
+        self.assertLess(edges[_fkey(_STRUCTURAL)][2], 0.10)
+
+    def test_without_a_reference_surface_the_structural_scale_is_dropped(self):
+        """Not silently calibrated on origins instead."""
+        edges = self._edges(objects={})
+        self.assertNotIn(_fkey(_STRUCTURAL), edges)
+
+    def test_the_site_ladder_gets_both_relations(self):
+        edges = self._edges()
+        self.assertIn(_SITE_PD, edges)
+        self.assertIn(_SITE_HO, edges)
+
+    def test_the_region_gets_planar_and_no_height(self):
+        """A disc around the robot base has a horizontal extent and no height
+        target at all."""
+        edges = self._edges()
+        self.assertIn(_REGION_PD, edges)
+        self.assertNotIn("object-region-height-offset", edges)
+
+    def test_the_region_scale_spans_the_pull(self):
+        """The cube starts ~0.9m out and succeeds inside 0.6m. On the
+        object-object scale, which tops out near 0.31m for this task, every
+        frame of the pull would read 'very-far'."""
+        edges = self._edges()
+        self.assertGreater(max(edges[_REGION_PD]), 0.6)
+
+    def test_an_unclassified_member_contributes_to_no_family(self):
+        edges = miner._bin_edges(
+            self._merged(),
+            {self.TABLE: {"reference_surface": dict(self.SURFACE)}},
+            {"actor:sphere": _MANIPULAND},
+        )
+        self.assertIn(_fkey(_MANIPULAND), edges)
+        self.assertNotIn(_fkey(_RECEPTACLE), edges)
