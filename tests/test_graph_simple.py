@@ -3,6 +3,7 @@
 Synthetic tensors only -- no simulator.
 """
 
+import types
 import unittest
 from types import SimpleNamespace
 
@@ -210,10 +211,24 @@ class AdapterConstructionTest(unittest.TestCase):
             temp_valid=np.zeros(len(relation), bool),
         )
 
+    class _PlaceholderEnv:
+        """Enough of an environment to construct the adapter, and no more.
+
+        The obs contract is declared, not measured, so this test needs no
+        simulator -- but the constructor does opt the scene into merged-view
+        aliasing, and that is stored on the scene object itself. A bare
+        ``object()`` cannot carry it, which used to surface as an
+        ``AttributeError`` three frames inside an attribute write.
+        """
+
+        def __init__(self):
+            self.scene = types.SimpleNamespace()
+
     def _build(self):
         return GraphObsBuilder(
-            object(), num_envs=2, teemo_cfg=dict(self.CFG), vocab=self._vocab(),
-            n_max=N_MAX, e_max=168, cameras=["cam_a", "cam_b"],
+            self._PlaceholderEnv(), num_envs=2, teemo_cfg=dict(self.CFG),
+            vocab=self._vocab(), n_max=N_MAX, e_max=168,
+            cameras=["cam_a", "cam_b"],
         )
 
     def test_it_emits_the_packed_contract(self):

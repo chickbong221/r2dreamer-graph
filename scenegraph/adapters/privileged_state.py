@@ -625,9 +625,37 @@ _ALIAS_MAP = "_teemo_merged_view_alias"
 
 
 def _scene_of(env_or_scene):
+    """The SAPIEN scene behind an env, a wrapper, or a scene itself.
+
+    The last case is a fallback, not an assumption: anything without a
+    ``.scene`` is returned unchanged on the chance that it *is* one. That is
+    only safe because the callers below check what they got -- a bare object
+    reaching this and being treated as a scene is how a malformed env used to
+    surface as ``AttributeError: 'object' object has no attribute '__dict__'``
+    three frames inside an attribute write.
+    """
     if hasattr(env_or_scene, "unwrapped"):
         return env_or_scene.unwrapped.scene
     return getattr(env_or_scene, "scene", env_or_scene)
+
+
+def _scene_dict(env_or_scene, where: str):
+    """The scene's attribute dict, or a clear error naming what arrived.
+
+    Aliasing is stored on the scene object itself rather than in a side table,
+    so the scene has to be able to carry an attribute. Checking here means the
+    caller's mistake is reported where it was made.
+    """
+    scene = _scene_of(env_or_scene)
+    namespace = getattr(scene, "__dict__", None)
+    if namespace is None:
+        raise TypeError(
+            f"{where}: resolved {type(scene).__name__} as the simulator "
+            f"scene of {type(env_or_scene).__name__}, and it cannot carry "
+            "attributes. Pass a ManiSkill env, a wrapper around one, or a "
+            "SAPIEN scene."
+        )
+    return namespace
 
 
 def set_merged_view_aliasing(env_or_scene, enabled: bool = True) -> None:
@@ -637,15 +665,16 @@ def set_merged_view_aliasing(env_or_scene, enabled: bool = True) -> None:
     (merged handle -> per-env actual, see ``_resolve_actual_entity``), so a
     global default would rewrite MS-HAB identities.
     """
-    scene = _scene_of(env_or_scene)
-    scene.__dict__[_ALIAS_FLAG] = bool(enabled)
+    namespace = _scene_dict(env_or_scene, "set_merged_view_aliasing")
+    namespace[_ALIAS_FLAG] = bool(enabled)
     # Both derived caches are keyed on the old answer.
-    scene.__dict__.pop(_ALIAS_MAP, None)
-    scene.__dict__.pop("_teemo_per_env_seg_maps", None)
+    namespace.pop(_ALIAS_MAP, None)
+    namespace.pop("_teemo_per_env_seg_maps", None)
 
 
 def merged_view_aliasing_enabled(env_or_scene) -> bool:
-    return bool(_scene_of(env_or_scene).__dict__.get(_ALIAS_FLAG, False))
+    return bool(_scene_dict(
+        env_or_scene, "merged_view_aliasing_enabled").get(_ALIAS_FLAG, False))
 
 
 # Everything derived from the actor set. All of it is invalid once a scene
