@@ -326,5 +326,75 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(site_specs(_peg_env(), 0, {}), [])
 
 
+class CollisionShapeLookupTest(unittest.TestCase):
+    """``Actor._objs`` holds SAPIEN entities, and an entity owns no shapes
+    directly -- they hang off its physx rigid-body component. Getting this
+    wrong is silent: the depth falls back to the peg half-length, which is
+    currently the same number, so the mouth still lands correctly and nothing
+    reports that the geometry was never read."""
+
+    def setUp(self):
+        sp.reset_depth_cache()
+
+    @staticmethod
+    def _entity(shapes, style):
+        """One entity exposing its shapes the way ``style`` says."""
+        class Component:
+            collision_shapes = shapes
+
+        class Entity:
+            pass
+
+        entity = Entity()
+        if style == "attribute":
+            entity.collision_shapes = shapes
+        elif style == "getter":
+            entity.get_collision_shapes = lambda: shapes
+        elif style == "component":
+            entity.components = [object(), Component()]
+        elif style == "component_getter":
+            class G:
+                def get_collision_shapes(self):
+                    return shapes
+            entity.components = [G()]
+        return entity
+
+    def _env_with(self, style, depth=0.11):
+        shapes = [_Shape([depth, 0.02, 0.05]) for _ in range(4)]
+
+        class Box:
+            _objs = [CollisionShapeLookupTest._entity(shapes, style)]
+
+        env = _peg_env(depth=depth)
+        env.box = Box()
+        return env
+
+    def test_every_exposure_style_resolves(self):
+        for style in ("attribute", "getter", "component", "component_getter"):
+            with self.subTest(style=style):
+                sp.reset_depth_cache()
+                sp.peg_hole_mouth(self._env_with(style), 0, _decl())
+                self.assertIn(
+                    "collision", sp.depth_provenance(0),
+                    f"{style}: the geometry was not read and the fallback "
+                    "silently carried it",
+                )
+
+    def test_a_component_without_shapes_is_skipped(self):
+        """The physx component is not the only one an entity carries."""
+        sp.peg_hole_mouth(self._env_with("component"), 0, _decl())
+        self.assertIn("collision", sp.depth_provenance(0))
+
+    def test_an_entity_exposing_nothing_still_falls_back(self):
+        class Box:
+            _objs = [object()]
+
+        env = _peg_env(depth=0.11)
+        env.box = Box()
+        spec = sp.peg_hole_mouth(env, 0, _decl())
+        np.testing.assert_allclose(spec.pose_world[:3], [-0.11, 0.3, 0.10])
+        self.assertIn("peg_half_sizes", sp.depth_provenance(0))
+
+
 if __name__ == "__main__":
     unittest.main()

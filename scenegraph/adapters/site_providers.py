@@ -197,6 +197,40 @@ class _BoxDepthCache:
         return depth
 
 
+def _shapes_of(obj):
+    """Collision shapes for one SAPIEN entity, across the shapes of API it has.
+
+    ``Actor._objs`` holds ``sapien.Entity`` objects, and an Entity owns no
+    shapes directly -- they hang off its physx rigid-body component. Earlier
+    SAPIEN versions and ManiSkill's own wrappers expose the list or a getter
+    instead, so all three are tried before giving up.
+    """
+    shapes = getattr(obj, "collision_shapes", None)
+    if shapes:
+        return shapes
+    getter = getattr(obj, "get_collision_shapes", None)
+    if callable(getter):
+        try:
+            shapes = getter()
+        except Exception:
+            shapes = None
+        if shapes:
+            return shapes
+    for component in getattr(obj, "components", None) or []:
+        shapes = getattr(component, "collision_shapes", None)
+        if shapes:
+            return shapes
+        getter = getattr(component, "get_collision_shapes", None)
+        if callable(getter):
+            try:
+                shapes = getter()
+            except Exception:
+                shapes = None
+            if shapes:
+                return shapes
+    return None
+
+
 def _collision_x_half_extent(actor, env_idx: int) -> Optional[float]:
     """Half-extent along x shared by the box's four blocks, or None.
 
@@ -207,9 +241,7 @@ def _collision_x_half_extent(actor, env_idx: int) -> Optional[float]:
     objs = getattr(actor, "_objs", None) or []
     if not objs:
         return None
-    obj = objs[min(env_idx, len(objs) - 1)]
-    getter = getattr(obj, "get_collision_shapes", None)
-    shapes = getter() if callable(getter) else getattr(obj, "collision_shapes", None)
+    shapes = _shapes_of(objs[min(env_idx, len(objs) - 1)])
     if not shapes:
         return None
     extents: List[float] = []
