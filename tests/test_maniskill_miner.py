@@ -713,6 +713,43 @@ class StructuralSurfaceClassificationTest(unittest.TestCase):
         self.assertGreater(
             miner.STRUCTURAL_SURFACE_MIN_HALF_EXTENT / largest_other, 2)
 
+    def test_an_object_moved_by_a_tool_is_still_a_manipuland(self):
+        """PullCubeTool grasps the tool, never the cube. The cube is dragged
+        by it, so a grasp-only rule misses the one object the task is about
+        and the miner refused to write the asset at all."""
+        members = {
+            "actor:cube": {"interaction_types": ["contact", "support"]},
+            "actor:l_shape_tool": {"interaction_types": ["contact", "grasp"]},
+            "actor:table-workspace": {"interaction_types": ["contact",
+                                                            "support"]},
+        }
+        buckets = ["support / actor:table-workspace / actor:cube",
+                   "grasp / ee / actor:l_shape_tool"]
+        families = miner.object_families(
+            members, buckets, {"actor:table-workspace"})
+        self.assertEqual(families["actor:cube"], _MANIPULAND)
+        self.assertEqual(miner.ambiguous_families(families), [])
+
+    def test_being_supported_does_not_outrank_being_a_holder(self):
+        """A bin resting on a table is still a receptacle. Rule order is what
+        decides, and the holder rule comes first."""
+        members = {
+            "actor:bin": {"interaction_types": ["contact", "support"]},
+            "actor:sphere": {"interaction_types": ["contact", "support"]},
+        }
+        buckets = ["support / actor:bin / actor:sphere",
+                   "support / actor:table-workspace / actor:bin"]
+        families = miner.object_families(members, buckets, set())
+        self.assertEqual(families["actor:bin"], _RECEPTACLE)
+
+    def test_an_object_that_neither_rests_nor_holds_is_still_ambiguous(self):
+        """The guard has to keep biting, or the new rule has just made
+        everything a manipuland."""
+        members = {"actor:mystery": {"interaction_types": ["contact"]}}
+        families = miner.object_families(members, [], set())
+        self.assertEqual(miner.ambiguous_families(families),
+                         ["actor:mystery"])
+
     def test_a_long_thin_object_is_not_a_surface(self):
         """The smaller horizontal extent decides, so a rail as long as a table
         is still not something you can place things anywhere on."""

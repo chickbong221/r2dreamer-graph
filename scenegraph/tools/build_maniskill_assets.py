@@ -864,7 +864,12 @@ def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
        or the container of a contain bucket -- is a receptacle. Read from the
        directed buckets, not from ``interaction_types``, which is a flat set
        per member and says only that the object took part.
-    4. A member with no interactions at all is a goal marker: PickCube's
+    4. Anything that rests on something else and holds nothing is also a
+       manipuland. PullCubeTool grasps the *tool*, never the cube -- the cube
+       is dragged by it -- so rule 2 misses the one object the task is about.
+       Being supported while supporting nothing is what a scene's movable
+       objects have in common, however they are moved.
+    5. A member with no interactions at all is a goal marker: PickCube's
        ``goal_site`` has no collision geometry, so it appears in no bucket and
        exists purely to be measured against.
 
@@ -872,10 +877,12 @@ def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
     treated as one -- see ``ambiguous_families``.
     """
     holders: set = set()
+    supported: set = set()
     for bucket in buckets:
         parts = [p.strip() for p in str(bucket).split("/")]
         if len(parts) == 3 and parts[0] in ("support", "contain"):
             holders.add(parts[1])
+            supported.add(parts[2])
 
     out: Dict[str, Optional[str]] = {}
     for key, entry in members.items():
@@ -886,6 +893,8 @@ def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
             out[key] = spatial_metrics.FAMILY_MANIPULAND
         elif key in holders:
             out[key] = spatial_metrics.FAMILY_RECEPTACLE
+        elif key in supported:
+            out[key] = spatial_metrics.FAMILY_MANIPULAND
         elif not types:
             out[key] = spatial_metrics.FAMILY_GOAL_MARKER
         else:
