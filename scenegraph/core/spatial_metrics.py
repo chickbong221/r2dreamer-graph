@@ -22,6 +22,28 @@ EE_OBJECT_SCOPE = "ee-object"
 OBJECT_OBJECT_SCOPE = "object-object"
 SPATIAL_SCOPES: Tuple[str, ...] = (EE_OBJECT_SCOPE, OBJECT_OBJECT_SCOPE)
 
+# Object-to-region is deliberately NOT in SPATIAL_SCOPES. That tuple is a
+# cross-product generator -- every consumer loops it against
+# {planar-distance, height-offset} -- so appending here would silently create
+# and then require an ``object-region-height-offset`` nothing measures.
+# PullCubeTool's goal region is a disc around the robot base: it has a
+# horizontal extent and no height target at all.
+OBJECT_REGION_SCOPE = "object-region"
+OBJECT_REGION_PLANAR_KEY = f"{OBJECT_REGION_SCOPE}-planar-distance"
+
+# Object-to-site, for a virtual site that carries a distance ladder. Also
+# registered by hand rather than added to SPATIAL_SCOPES, for the same reason.
+# It gets both relations: PegInsertionSide's hole is offset up to 5cm in y and
+# z against an aperture of under 3cm, so vertical alignment is real work and a
+# planar-only scale would leave it unrewarded until ``reached`` fires.
+#
+# Deliberately separate from object-object. The peg head-to-mouth distance and
+# the peg-to-box origin distance are both emitted, and they are not the same
+# quantity: sharing a scale would let one pair's range set the other's bins.
+OBJECT_SITE_SCOPE = "object-site"
+OBJECT_SITE_PLANAR_KEY = f"{OBJECT_SITE_SCOPE}-planar-distance"
+OBJECT_SITE_HEIGHT_KEY = f"{OBJECT_SITE_SCOPE}-height-offset"
+
 
 def spatial_bin_key(scope: str, relation: str) -> str:
     """Asset key for a scoped absolute scale, e.g. ``ee-object-height-offset``."""

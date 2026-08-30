@@ -53,6 +53,18 @@ SOURCE_ORIGIN = "origin"
 SOURCE_PROVIDER = "provider"
 SOURCES: Tuple[str, ...] = (SOURCE_ORIGIN, SOURCE_PROVIDER)
 
+# Which live-geometry reader serves a site. Named in the asset rather than
+# inferred from the key, so the per-task knowledge sits in the mined file and
+# the runtime keeps its "no task registry in code" property. The adapters
+# register implementations under these names.
+PROVIDER_PICK_CUBE_GOAL = "pick_cube_goal"
+PROVIDER_PEG_HOLE_MOUTH = "peg_hole_mouth"
+PROVIDER_ROBOT_BASE_REGION = "robot_base_region"
+PROVIDERS: Tuple[str, ...] = (
+    PROVIDER_PICK_CUBE_GOAL, PROVIDER_PEG_HOLE_MOUTH,
+    PROVIDER_ROBOT_BASE_REGION,
+)
+
 
 class SiteError(ValueError):
     """A site declaration or observation that cannot be scored."""
@@ -75,6 +87,7 @@ class SiteDeclaration:
     subject_key: str
     metric: str
     source: str
+    provider: str
     provenance: str
 
     def validate(self, where: str = "site") -> None:
@@ -94,6 +107,12 @@ class SiteDeclaration:
             raise SiteError(
                 f"{where}: site {self.key!r} has unknown source "
                 f"{self.source!r}; expected one of {list(SOURCES)}"
+            )
+        if self.provider not in PROVIDERS:
+            raise SiteError(
+                f"{where}: site {self.key!r} names provider "
+                f"{self.provider!r}, which nothing implements; expected one "
+                f"of {list(PROVIDERS)}"
             )
         if not self.subject_key:
             raise SiteError(
@@ -133,6 +152,7 @@ def parse_site_declarations(
             subject_key=str(entry.get("subject", "") or ""),
             metric=str(entry.get("metric", "") or ""),
             source=str(entry.get("source", SOURCE_ORIGIN) or SOURCE_ORIGIN),
+            provider=str(entry.get("provider", "") or ""),
             provenance=str(entry.get("provenance", "") or ""),
         )
         decl.validate(where)
@@ -146,6 +166,7 @@ def declaration_to_dict(decl: SiteDeclaration) -> Dict[str, Any]:
         "subject": decl.subject_key,
         "metric": decl.metric,
         "source": decl.source,
+        "provider": decl.provider,
         "provenance": decl.provenance,
     }
 

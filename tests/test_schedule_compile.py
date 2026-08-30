@@ -412,7 +412,8 @@ SITE_VOCAB = EntityVocab(token_to_id={
 })
 SITES = parse_site_declarations({"actor:goal": {
     "site_type": "point", "subject": "actor:cubeA", "metric": "euclidean",
-    "source": "origin", "provenance": "T-v1.evaluate: is_obj_placed",
+    "source": "origin", "provider": "pick_cube_goal",
+    "provenance": "T-v1.evaluate: is_obj_placed",
 }})
 SITE_ROLES = {"movable": "actor:cubeA", "destination": "actor:goal"}
 
@@ -559,3 +560,82 @@ class RequiresGateTest(unittest.TestCase):
         ]})
         with self.assertRaises(ScheduleError):
             _compile_contain(raw)
+
+
+class ReachedImpliesFinestRungTest(unittest.TestCase):
+    """``reached`` sits in the last phase of PickCube and PullCubeTool, so
+    there is no later phase to backfill their credit. The phase pays in full
+    only if *every* one of its clauses is satisfied at success -- which means
+    the environment's own tolerance has to imply the finest rung of each
+    ladder beside it. If it does not, a successful episode tops out below 1.0
+    and the shaping term never closes.
+
+    The tolerance is read live at runtime; the documented default is used here
+    so the arithmetic is checked against the mined bins on every run, and the
+    live value is covered by the server integration pass.
+    """
+
+    import json as _json
+    import os as _os
+
+    CONFIGS = _os.path.join("scenegraph", "configs")
+    # PickCubeEnv.goal_thresh
+    PICK_CUBE_GOAL_THRESH = 0.025
+
+    def _assets(self, env_id):
+        from scenegraph.core.schedule import load_assets
+        return load_assets(env_id, self.CONFIGS)
+
+    def _schedule(self, env_id):
+        path = self._os.path.join(self.CONFIGS, "schedules", f"{env_id}.json")
+        with open(path) as handle:
+            return self._json.load(handle)
+
+    def test_pick_cube_reached_implies_very_near(self):
+        _, _, bins, _, _ = self._assets("PickCube-v1")
+        edges = bins[spatial_bin_key(SPATIAL_SCOPES[1], "planar-distance")]
+        very_near_below = edges[0]
+        # reached bounds the 3-D distance, so it bounds the planar one too.
+        self.assertLess(
+            self.PICK_CUBE_GOAL_THRESH, very_near_below,
+            "reached can fire while planar-distance is still 'near', so a "
+            "successful placement would leave the finest planar rung unpaid "
+            "and the potential would terminate below 1.0",
+        )
+
+    def test_pick_cube_reached_implies_level(self):
+        _, _, bins, _, _ = self._assets("PickCube-v1")
+        edges = bins[spatial_bin_key(SPATIAL_SCOPES[1], "height-offset")]
+        level_upper = edges[2]
+        self.assertLess(self.PICK_CUBE_GOAL_THRESH, level_upper)
+
+    def test_the_reached_phase_is_the_last_one(self):
+        """If it were not, cumulative credit would paper over a mismatch and
+        this whole check would be moot -- and silently so."""
+        raw = self._schedule("PickCube-v1")
+        with_reached = [
+            i for i, phase in enumerate(raw["phases"])
+            if any(c["relation"] == "reached" for c in phase["clauses"])
+        ]
+        self.assertEqual(with_reached, [len(raw["phases"]) - 1])
+
+    def test_every_shipped_reached_clause_sits_beside_its_completion(self):
+        """A weighted ``reached`` that is not also the phase's completion would
+        pay for the goal without ending the phase on it."""
+        import glob
+        for path in sorted(glob.glob(
+                self._os.path.join(self.CONFIGS, "schedules", "*.json"))):
+            with open(path) as handle:
+                raw = self._json.load(handle)
+            for phase in raw["phases"]:
+                weighted = [c for c in phase["clauses"]
+                            if c["relation"] == "reached" and c["weight"] > 0]
+                if not weighted:
+                    continue
+                completion = phase.get("completion") or {}
+                items = completion.get("all_of", [completion])
+                self.assertIn(
+                    "reached", [i.get("relation") for i in items],
+                    f"{path}: phase {phase['name']!r} pays for 'reached' but "
+                    "does not complete on it",
+                )

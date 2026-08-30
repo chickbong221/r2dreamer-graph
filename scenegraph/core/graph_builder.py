@@ -36,6 +36,7 @@ from ..adapters.privileged_state import (
     entity_pose_world_array,
     get_privileged_state,
 )
+from ..adapters.site_providers import site_specs
 
 # Packed-UID reservations. Zero is padding so an unfilled slot decodes as
 # "no node"; one is the end effector, whose identity never varies.
@@ -357,6 +358,53 @@ class GraphBuilder:
             return None
         return self._entity_admitted
 
+    def _site_specs(self, state):
+        """Live geometry for every site the bound asset declares.
+
+        Read every frame, never cached: PickCube's goal moves per episode and
+        PegInsertionSide rebuilds its hole on every reset, so a site pose held
+        across a boundary would be scored against the previous episode's task.
+        """
+        declarations = self.cfg.get("site_declarations") or {}
+        if not declarations:
+            return []
+        return site_specs(self.env, self.env_idx, declarations)
+
+    def _site_node(self, spec) -> Node:
+        """One vertex for a site.
+
+        No pixels and no box: nothing segments a goal marker's mouth or a
+        region around the robot base. The centroid is real and is what the
+        model reads, and the zero box is masked out of the bbox loss by the
+        same ``camera_visible`` derivation that covers a retained object no
+        camera saw. ``in_frame`` is set by the environment's visibility policy,
+        never by segmentation, and a site is derivable wherever the robot is.
+        """
+        return Node(
+            node_id=spec.key,
+            node_type="object",
+            name=spec.key,
+            visible=False,
+            in_frame=True,
+            segmentation_ids=[],
+            pixel_area=0,
+            pose_world=[float(v) for v in spec.pose_world[:7]],
+            source="site",
+            attributes={
+                "whitelist_key": spec.key,
+                "entity_key": spec.key,
+                # No physics body backs a site, so nothing may resolve it to a
+                # simulator entity or query a contact force against it.
+                "body_type": "kinematic",
+                "is_site": True,
+                "site_type": spec.declaration.site_type,
+                # Empty: contact, grasp, support and contain are all
+                # inadmissible for a vertex with no collision geometry, and the
+                # interaction gate reads this to decide.
+                "interaction_types": [],
+            },
+        )
+
     def _check_capacity(self, nodes: Dict[str, Node], frame: int, state) -> None:
         """Retention makes capacity a configuration fact, not a runtime choice.
 
@@ -524,6 +572,14 @@ class GraphBuilder:
         for nid, n in nodes.items():
             if n.node_type != "ee" and n.visible:
                 self._last_seen[nid] = frame
+
+        # Sites join before capacity and registry assignment: they are
+        # ordinary vertices from here on, and a scene that cannot fit them has
+        # to say so rather than dropping the goal it is scored against.
+        specs = self._site_specs(state)
+        for spec in specs:
+            nodes[spec.key] = self._site_node(spec)
+        self.cfg["site_specs"] = specs
 
         self._check_capacity(nodes, frame, state)
         nodes = self.registry.assign(nodes)

@@ -22,6 +22,7 @@ from scenegraph.core.sites import (
     SITE_POINT,
     SITE_REGION,
     SITE_SURFACE,
+    PROVIDER_PICK_CUBE_GOAL,
     SOURCE_ORIGIN,
     SOURCE_PROVIDER,
     SiteDeclaration,
@@ -43,7 +44,8 @@ def _decl(key="actor:goal_site", subject="actor:cube", site_type=SITE_POINT,
           metric=METRIC_EUCLIDEAN, source=SOURCE_ORIGIN):
     return SiteDeclaration(
         key=key, site_type=site_type, subject_key=subject, metric=metric,
-        source=source, provenance="PickCube-v1.evaluate: is_obj_placed",
+        source=source, provider=PROVIDER_PICK_CUBE_GOAL,
+        provenance="PickCube-v1.evaluate: is_obj_placed",
     )
 
 
@@ -179,7 +181,8 @@ class SpecValidationTest(unittest.TestCase):
         decl = SiteDeclaration(
             key="actor:goal_site", site_type=SITE_POINT,
             subject_key="actor:cube", metric=METRIC_EUCLIDEAN,
-            source=SOURCE_ORIGIN, provenance="",
+            source=SOURCE_ORIGIN, provider=PROVIDER_PICK_CUBE_GOAL,
+            provenance="",
         )
         with self.assertRaises(SiteError):
             decl.validate()
@@ -197,6 +200,7 @@ class DeclarationParsingTest(unittest.TestCase):
         raw = {"spatial:hole_site": {
             "site_type": "surface", "subject": "actor:peg",
             "metric": "euclidean", "source": "provider",
+            "provider": "peg_hole_mouth",
             "provenance": "PegInsertionSide-v1.box_hole_pose mouth",
         }}
         parsed = parse_site_declarations(raw)
@@ -207,14 +211,16 @@ class DeclarationParsingTest(unittest.TestCase):
     def test_an_invalid_declaration_fails_at_parse_time(self):
         """Not at the first frame that needs it."""
         raw = {"spatial:x": {"site_type": "surface", "subject": "actor:peg",
-                             "metric": "nonsense", "provenance": "p"}}
+                             "metric": "nonsense", "provider": "peg_hole_mouth",
+                             "provenance": "p"}}
         with self.assertRaises(SiteError):
             parse_site_declarations(raw)
 
     def test_goal_pairs_are_unordered(self):
         raw = {"actor:goal_site": {
             "site_type": "point", "subject": "actor:cube",
-            "metric": "euclidean", "provenance": "p"}}
+            "metric": "euclidean", "provider": "pick_cube_goal",
+            "provenance": "p"}}
         self.assertEqual(
             goal_pairs(parse_site_declarations(raw)),
             {("actor:cube", "actor:goal_site")},
@@ -335,6 +341,167 @@ class GoalEdgeEmissionTest(unittest.TestCase):
         edges = goal_edges(self._scene(cube_x=0.9), None, self._cfg(spec))
         self.assertAlmostEqual(edges[0].raw_value, 0.01)
         self.assertEqual(edges[0].label, "holds")
+
+
+# --------------------------------------------------------------------------- #
+# object-site ladder
+# --------------------------------------------------------------------------- #
+from scenegraph.core.relation_rules import (
+    OBJECT_SITE_HEIGHT_KEY,
+    OBJECT_SITE_PLANAR_KEY,
+    object_object_spatial_edges,
+    required_bin_keys,
+)
+from scenegraph.core.spatial_metrics import (
+    OBJECT_REGION_PLANAR_KEY,
+    OBJECT_OBJECT_SCOPE,
+    spatial_bin_key,
+)
+
+PEG = "actor:peg"
+HOLE = "spatial:hole_site"
+REGION = "spatial:pull_goal_region"
+
+LADDER_BINS = {
+    OBJECT_SITE_PLANAR_KEY: [0.05, 0.10, 0.20, 0.30],
+    OBJECT_SITE_HEIGHT_KEY: [-0.06, -0.02, 0.02, 0.06],
+    OBJECT_REGION_PLANAR_KEY: [0.2, 0.4, 0.6, 0.8],
+    spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"): [.03, .07, .11, .15],
+    spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"): [-.09, -.03, .03, .09],
+}
+
+
+def _obj(key, pos, dynamic=True):
+    return Node(node_id=key, node_type="object", name=key,
+                pose_world=[*pos, 1.0, 0.0, 0.0, 0.0],
+                attributes={"whitelist_key": key, "entity_key": key,
+                            "body_type": "dynamic" if dynamic else "kinematic",
+                            "interaction_types": []})
+
+
+def _ladder_cfg(spec, decl):
+    return {
+        "bin_edges": dict(LADDER_BINS),
+        "site_declarations": {decl.key: decl},
+        "site_specs": [spec],
+        "object_object_spatial": True,
+        "structural_surfaces": set(),
+        "affordance_set": None,
+    }
+
+
+def _hole_spec(mouth=(0.0, 0.3, 0.10), head=(-0.25, 0.3, 0.10)):
+    decl = SiteDeclaration(
+        key=HOLE, site_type=SITE_SURFACE, subject_key=PEG,
+        metric=METRIC_EUCLIDEAN, source=SOURCE_PROVIDER,
+        provider="peg_hole_mouth", provenance="test",
+    )
+    spec = SiteSpec(
+        declaration=decl,
+        pose_world=np.asarray([*mouth, 1.0, 0.0, 0.0, 0.0], float),
+        tolerance=0.018,
+        subject_point_world=np.asarray(head, float),
+    )
+    return spec, decl
+
+
+class ObjectSiteLadderTest(unittest.TestCase):
+    """The peg-head-to-mouth rungs. Their whole reason for existing is that
+    they measure a different point from the peg's origin, on a different scale
+    from the peg-to-box pair that is still emitted beside them."""
+
+    def _edges(self, peg_at=(-0.30, 0.3, 0.10), head=(-0.25, 0.3, 0.10),
+               mouth=(0.0, 0.3, 0.10)):
+        spec, decl = _hole_spec(mouth=mouth, head=head)
+        graph = _graph(_obj(PEG, peg_at), _obj(HOLE, mouth, dynamic=False))
+        edges = object_object_spatial_edges(
+            graph, None, _ladder_cfg(spec, decl))
+        return {e.relation: e for e in edges}
+
+    def test_both_rungs_are_emitted(self):
+        edges = self._edges()
+        self.assertEqual(set(edges), {"planar-distance", "height-offset"})
+
+    def test_they_carry_the_object_site_scale(self):
+        """Not object-object: the peg-to-box origin pair is still emitted and
+        must not share a scale with this one."""
+        edges = self._edges()
+        self.assertEqual(edges["planar-distance"].bin_key,
+                         OBJECT_SITE_PLANAR_KEY)
+        self.assertEqual(edges["height-offset"].bin_key,
+                         OBJECT_SITE_HEIGHT_KEY)
+
+    def test_the_distance_is_measured_from_the_peg_head(self):
+        """The peg node sits at -0.30 and its head at -0.25. Measuring the
+        origin would report 0.30; the head reports 0.25."""
+        edges = self._edges(peg_at=(-0.30, 0.3, 0.10), head=(-0.25, 0.3, 0.10))
+        self.assertAlmostEqual(edges["planar-distance"].raw_value, 0.25)
+
+    def test_the_height_is_measured_from_the_peg_head(self):
+        edges = self._edges(head=(-0.25, 0.3, 0.16), mouth=(0.0, 0.3, 0.10))
+        self.assertAlmostEqual(edges["height-offset"].raw_value, 0.06)
+
+    def test_approaching_the_mouth_improves_the_label(self):
+        far = self._edges(head=(-0.30, 0.3, 0.10))["planar-distance"].label
+        near = self._edges(head=(-0.02, 0.3, 0.10))["planar-distance"].label
+        self.assertEqual(far, "very-far")
+        self.assertEqual(near, "very-near")
+
+    def test_the_sign_follows_pair_order(self):
+        """``actor:peg`` sorts before ``spatial:hole_site``, so a head above
+        the mouth reads positive."""
+        edges = self._edges(head=(-0.25, 0.3, 0.16))
+        edge = edges["height-offset"]
+        self.assertEqual((edge.src, edge.dst), (PEG, HOLE))
+        self.assertGreater(edge.raw_value, 0.0)
+
+    def test_a_declared_site_with_no_live_spec_raises(self):
+        """The provider has to have run. Emitting from the peg origin instead
+        would silently measure the wrong point."""
+        spec, decl = _hole_spec()
+        cfg = _ladder_cfg(spec, decl)
+        cfg["site_specs"] = []
+        graph = _graph(_obj(PEG, (-0.3, 0.3, 0.1)),
+                       _obj(HOLE, (0.0, 0.3, 0.1), dynamic=False))
+        with self.assertRaises(ValueError):
+            object_object_spatial_edges(graph, None, cfg)
+
+
+class RequiredBinKeyTest(unittest.TestCase):
+    """A task must not be made to carry a scale nothing in it produces."""
+
+    def _decl(self, key, site_type):
+        return SiteDeclaration(
+            key=key, site_type=site_type, subject_key=PEG,
+            metric=METRIC_EUCLIDEAN, source=SOURCE_ORIGIN,
+            provider="peg_hole_mouth", provenance="test",
+        )
+
+    def test_no_sites_requires_neither_new_scale(self):
+        keys = required_bin_keys({})
+        self.assertNotIn(OBJECT_SITE_PLANAR_KEY, keys)
+        self.assertNotIn(OBJECT_REGION_PLANAR_KEY, keys)
+
+    def test_a_ladder_site_requires_both_object_site_keys(self):
+        keys = required_bin_keys(
+            {"site_declarations": {HOLE: self._decl(HOLE, SITE_SURFACE)}})
+        self.assertIn(OBJECT_SITE_PLANAR_KEY, keys)
+        self.assertIn(OBJECT_SITE_HEIGHT_KEY, keys)
+
+    def test_a_region_requires_planar_only(self):
+        keys = required_bin_keys(
+            {"site_declarations": {REGION: self._decl(REGION, SITE_REGION)}})
+        self.assertIn(OBJECT_REGION_PLANAR_KEY, keys)
+        self.assertNotIn("object-region-height-offset", keys)
+        self.assertNotIn(OBJECT_SITE_PLANAR_KEY, keys)
+
+    def test_an_actor_backed_site_needs_no_new_scale(self):
+        """PickCube's goal marker is a real actor whose object-object ladder
+        already works; re-scoping it would mean re-mining a working task."""
+        keys = required_bin_keys({"site_declarations": {
+            "actor:goal_site": self._decl("actor:goal_site", SITE_POINT)}})
+        self.assertNotIn(OBJECT_SITE_PLANAR_KEY, keys)
+        self.assertNotIn(OBJECT_REGION_PLANAR_KEY, keys)
 
 
 if __name__ == "__main__":

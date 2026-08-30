@@ -6,7 +6,8 @@
     "destination": "actor:goal_site"
   },
   "notes": [
-    "destination is a non-colliding goal marker: spatial clauses only, since no contact, support or contain can ever hold against it"
+    "destination is a non-colliding goal marker: spatial clauses only, since no contact, support or contain can ever hold against it",
+    "carry_to_goal ends on 'reached', which is PickCube's own norm(cube - goal_site) <= goal_thresh read live from the environment. The planar ladder's finest rung ('very-near', < 0.036m in the mined object-object scale) is implied by it at 0.025m, so a successful placement satisfies every clause in the phase and the potential terminates at 1.0."
   ],
   "phases": [
     {
@@ -134,7 +135,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.1
+          "weight": 0.075
         },
         {
           "relation": "planar-distance",
@@ -145,7 +146,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.1
+          "weight": 0.075
         },
         {
           "relation": "planar-distance",
@@ -155,7 +156,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.1
+          "weight": 0.075
         },
         {
           "relation": "planar-distance",
@@ -164,7 +165,7 @@
           "labels": [
             "very-near"
           ],
-          "weight": 0.1
+          "weight": 0.075
         },
         {
           "relation": "height-offset",
@@ -195,12 +196,23 @@
             "level"
           ],
           "weight": 0.066666
+        },
+        {
+          "relation": "reached",
+          "src": "movable",
+          "dst": "destination",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.1
         }
       ],
       "completion": {
-        "relation": "planar-distance",
+        "relation": "reached",
+        "src": "movable",
+        "dst": "destination",
         "labels": [
-          "very-near"
+          "holds"
         ]
       }
     }

@@ -72,6 +72,9 @@ from .entity_identity import (
 from .schema import Node
 from .sites import SiteDeclaration, parse_site_declarations
 from .spatial_metrics import (
+    OBJECT_REGION_PLANAR_KEY,
+    OBJECT_SITE_HEIGHT_KEY,
+    OBJECT_SITE_PLANAR_KEY,
     SPATIAL_SCOPES,
     change_bin_key,
     spatial_bin_key,
@@ -327,6 +330,22 @@ for _scope in SPATIAL_SCOPES:
         _BIN_DERIVATION[change_bin_key(_key)] = (
             "signed5-sensitive", f"{_stat}_change")
 del _scope, _rel, _kind, _key, _stat
+
+# Registered by hand, not by the loop above: a region has a horizontal extent
+# and no height target, so it gets a planar scale and nothing else.
+_REGION_STAT = OBJECT_REGION_PLANAR_KEY.replace("-", "_")
+_BIN_DERIVATION[OBJECT_REGION_PLANAR_KEY] = ("unsigned5", _REGION_STAT)
+_BIN_DERIVATION[change_bin_key(OBJECT_REGION_PLANAR_KEY)] = (
+    "signed5-sensitive", f"{_REGION_STAT}_change")
+
+# Object-to-site takes both, on its own scale.
+for _site_key, _site_kind in ((OBJECT_SITE_PLANAR_KEY, "unsigned5"),
+                              (OBJECT_SITE_HEIGHT_KEY, "signed5")):
+    _site_stat = _site_key.replace("-", "_")
+    _BIN_DERIVATION[_site_key] = (_site_kind, _site_stat)
+    _BIN_DERIVATION[change_bin_key(_site_key)] = (
+        "signed5-sensitive", f"{_site_stat}_change")
+del _site_key, _site_kind, _site_stat
 
 
 def derive_bin_edges(max_values: Dict[str, float]) -> Dict[str, List[float]]:

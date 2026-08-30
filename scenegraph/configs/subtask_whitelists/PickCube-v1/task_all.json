@@ -34,6 +34,16 @@
       "kind": "actor"
     }
   },
+  "sites": {
+    "actor:goal_site": {
+      "site_type": "point",
+      "subject": "actor:cube",
+      "metric": "euclidean",
+      "source": "origin",
+      "provider": "pick_cube_goal",
+      "provenance": "PickCube-v1.evaluate: is_obj_placed = norm(cube.pose.p - goal_site.pose.p) <= goal_thresh. The threshold is read live from env.goal_thresh (0.025 by default). The is_robot_static half of the task's success predicate is a separate condition and is deliberately not part of this relation."
+    }
+  },
   "bin_edges": {
     "grasp-compatibility": [
       0.3333333333333333,

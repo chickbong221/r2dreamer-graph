@@ -28,10 +28,19 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..adapters.graph_vocab import build_absolute_vocab, build_relation_vocab
 from .relation_rules import SPATIAL_RELATIONS
-from .sites import SiteDeclaration, goal_pairs, parse_site_declarations
+from .sites import (
+    SITE_PREFIX,
+    SITE_REGION,
+    SiteDeclaration,
+    goal_pairs,
+    parse_site_declarations,
+)
 from .spatial_metrics import (
     EE_OBJECT_SCOPE,
     OBJECT_OBJECT_SCOPE,
+    OBJECT_REGION_PLANAR_KEY,
+    OBJECT_SITE_HEIGHT_KEY,
+    OBJECT_SITE_PLANAR_KEY,
     spatial_bin_key,
 )
 
@@ -165,6 +174,20 @@ def scorable_relations(
     # rather than at the first frame: a schedule that reaches for the table's
     # horizontal position is describing a goal the scene does not contain.
     surfaces = set(structural or ())
+    # A region pair is scored on its own planar scale and has no height at all.
+    regions = {key for key, decl in (sites or {}).items()
+               if decl.site_type == SITE_REGION}
+    region_spatial = {
+        "planar-distance": bool(bin_edges.get(OBJECT_REGION_PLANAR_KEY)),
+        "height-offset": False,
+    }
+    # Virtual, non-region sites carry a ladder on the object-site scale.
+    ladders = {key for key, decl in (sites or {}).items()
+               if key.startswith(SITE_PREFIX) and decl.site_type != SITE_REGION}
+    ladder_spatial = {
+        "planar-distance": bool(bin_edges.get(OBJECT_SITE_PLANAR_KEY)),
+        "height-offset": bool(bin_edges.get(OBJECT_SITE_HEIGHT_KEY)),
+    }
     # Scope-aware: the ee-object and object-object scales are mined
     # separately, so a pair can be scorable in one and not the other.
     ee_spatial = {r: bool(bin_edges.get(spatial_bin_key(EE_OBJECT_SCOPE, r)))
@@ -200,6 +223,8 @@ def scorable_relations(
                                                   "key_components"),
                 "reached": reached_on(a, b),
                 **obj_spatial,
+                **(region_spatial if (a in regions or b in regions) else {}),
+                **(ladder_spatial if (a in ladders or b in ladders) else {}),
                 **({"planar-distance": False}
                    if (a in surfaces or b in surfaces) else {}),
             }

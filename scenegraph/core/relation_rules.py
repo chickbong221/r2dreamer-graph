@@ -120,6 +120,9 @@ CHANGE_LABELS: List[str] = [
 EE_OBJECT_SCOPE = spatial_metrics.EE_OBJECT_SCOPE
 OBJECT_OBJECT_SCOPE = spatial_metrics.OBJECT_OBJECT_SCOPE
 SPATIAL_SCOPES: Tuple[str, ...] = spatial_metrics.SPATIAL_SCOPES
+OBJECT_REGION_PLANAR_KEY = spatial_metrics.OBJECT_REGION_PLANAR_KEY
+OBJECT_SITE_PLANAR_KEY = spatial_metrics.OBJECT_SITE_PLANAR_KEY
+OBJECT_SITE_HEIGHT_KEY = spatial_metrics.OBJECT_SITE_HEIGHT_KEY
 spatial_bin_key = spatial_metrics.spatial_bin_key
 change_bin_key = spatial_metrics.change_bin_key
 
@@ -158,6 +161,14 @@ _BIN_LABELS: Dict[str, List[str]] = {
     **{change_bin_key(k): CHANGE_LABELS for k in SCOPED_SPATIAL_KEYS},
     **{r: COMPAT_BIN_LABELS for r in AFFORDANCE_RELATIONS},
     **{f"{r}-change": CHANGE_LABELS for r in AFFORDANCE_RELATIONS},
+    # Planar only, registered by hand. See spatial_metrics: the scope tuple is
+    # a cross-product generator and a region has no height target.
+    OBJECT_REGION_PLANAR_KEY: SPATIAL_LABELS["planar-distance"],
+    change_bin_key(OBJECT_REGION_PLANAR_KEY): CHANGE_LABELS,
+    OBJECT_SITE_PLANAR_KEY: SPATIAL_LABELS["planar-distance"],
+    change_bin_key(OBJECT_SITE_PLANAR_KEY): CHANGE_LABELS,
+    OBJECT_SITE_HEIGHT_KEY: SPATIAL_LABELS["height-offset"],
+    change_bin_key(OBJECT_SITE_HEIGHT_KEY): CHANGE_LABELS,
 }
 
 
@@ -172,6 +183,12 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
     """
     keys = [spatial_bin_key(EE_OBJECT_SCOPE, r) for r in SPATIAL_RELATIONS]
     keys.extend(AFFORDANCE_RELATIONS)
+    # Required only where a region site exists to measure against. A task
+    # without one must not be made to carry a scale nothing in it produces.
+    if region_site_keys(cfg):
+        keys.append(OBJECT_REGION_PLANAR_KEY)
+    if ladder_site_keys(cfg):
+        keys.extend((OBJECT_SITE_PLANAR_KEY, OBJECT_SITE_HEIGHT_KEY))
     oo_spatial = bool(cfg.get("object_object_spatial", False))
     oo_compat = bool(
         (cfg.get("affordances") or {}).get("object_object_compatibility", True)
@@ -332,6 +349,48 @@ def height_offset(a: Node, b: Node) -> Optional[float]:
 def structural_surface_keys(cfg: dict) -> Set[str]:
     """Whitelist keys the asset marked as extended support planes."""
     return set(cfg.get("structural_surfaces") or ())
+
+
+def region_site_keys(cfg: dict) -> Set[str]:
+    """Declared sites whose geometry is a region rather than a point."""
+    from .sites import SITE_REGION
+    return {
+        key for key, decl in (cfg.get("site_declarations") or {}).items()
+        if getattr(decl, "site_type", None) == SITE_REGION
+    }
+
+
+def is_region_site(node: Node, cfg: dict) -> bool:
+    key = _whitelist_key(node)
+    return bool(key) and key in region_site_keys(cfg)
+
+
+def ladder_site_keys(cfg: dict) -> Set[str]:
+    """Virtual sites that carry a distance ladder.
+
+    Virtual only: PickCube's goal marker is a real actor with real pixels and
+    an object-object ladder that already works, and re-scoping it would mean
+    re-mining a task nothing is wrong with. Regions are excluded because they
+    have their own planar-only scale and no height target.
+    """
+    from .sites import SITE_PREFIX, SITE_REGION
+    return {
+        key for key, decl in (cfg.get("site_declarations") or {}).items()
+        if str(key).startswith(SITE_PREFIX)
+        and getattr(decl, "site_type", None) != SITE_REGION
+    }
+
+
+def is_ladder_site(node: Node, cfg: dict) -> bool:
+    key = _whitelist_key(node)
+    return bool(key) and key in ladder_site_keys(cfg)
+
+
+def _spec_for(cfg: dict, key: str):
+    for spec in cfg.get("site_specs") or ():
+        if spec.key == key:
+            return spec
+    return None
 
 
 def is_structural_surface(node: Node, cfg: dict) -> bool:
@@ -1098,6 +1157,48 @@ def object_object_affordance_edges(
     return edges
 
 
+def _site_ladder_edges(a: Node, b: Node, site: Node, cfg: dict,
+                       pd_spec, ho_spec) -> List[Edge]:
+    """Planar and height rungs for one object-to-site pair.
+
+    Emitted in ``a - b`` order like every other pair, so a site sorting first
+    inverts the height the same way a structural surface does.
+    """
+    from .sites import site_pair_points
+
+    spec = _spec_for(cfg, _whitelist_key(site))
+    other = b if site is a else a
+    if spec is None:
+        raise ValueError(
+            f"{_whitelist_key(site)!r} is a declared ladder site but no live "
+            f"spec was resolved for frame; the provider must run before edges "
+            "are emitted."
+        )
+    points = site_pair_points(spec, other.pose_world)
+    if points is None:
+        return []
+    source, target = points
+    d = float(np.linalg.norm(source[:2] - target[:2]))
+    dz = float(source[2] - target[2])
+    if site is a:
+        dz = -dz
+
+    out: List[Edge] = []
+    if pd_spec is not None:
+        out.append(Edge(
+            a.node_id, b.node_id, "planar-distance",
+            bin_label(d, pd_spec[0], pd_spec[1]), raw_value=d,
+            bin_key=OBJECT_SITE_PLANAR_KEY,
+        ))
+    if ho_spec is not None:
+        out.append(Edge(
+            a.node_id, b.node_id, "height-offset",
+            bin_label(dz, ho_spec[0], ho_spec[1]), raw_value=dz,
+            bin_key=OBJECT_SITE_HEIGHT_KEY,
+        ))
+    return out
+
+
 def object_object_spatial_edges(
     graph: Graph, state: PrivilegedState, cfg: dict
 ) -> List[Edge]:
@@ -1119,10 +1220,35 @@ def object_object_spatial_edges(
     if pd_spec is None and ho_spec is None:
         return []
 
+    region_spec = _get_bin_spec(cfg, OBJECT_REGION_PLANAR_KEY)
+    site_pd_spec = _get_bin_spec(cfg, OBJECT_SITE_PLANAR_KEY)
+    site_ho_spec = _get_bin_spec(cfg, OBJECT_SITE_HEIGHT_KEY)
     aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
     for a, b in _object_pairs(graph):
+        # A ladder site is measured through the site's own source point -- for
+        # PegInsertionSide the peg *head*, not the peg origin -- by the one
+        # function the miner also calls. Calibrating on the origin and reading
+        # the head is the drift this module exists to prevent.
+        site = (a if is_ladder_site(a, cfg)
+                else b if is_ladder_site(b, cfg) else None)
+        if site is not None:
+            edges.extend(_site_ladder_edges(
+                a, b, site, cfg, site_pd_spec, site_ho_spec))
+            continue
         d, dz = object_pair_measures(a, b, aff_set)
+        # A region is a disc, not a body: planar distance to its centre is the
+        # whole of its geometry, on its own scale, and there is no height to
+        # report. Handled before the structural branch because the two are
+        # mutually exclusive and this one owns both of the pair's outputs.
+        if is_region_site(a, cfg) or is_region_site(b, cfg):
+            if region_spec is not None:
+                edges.append(Edge(
+                    a.node_id, b.node_id, "planar-distance",
+                    bin_label(d, region_spec[0], region_spec[1]), raw_value=d,
+                    bin_key=OBJECT_REGION_PLANAR_KEY,
+                ))
+            continue
         surface = (a if is_structural_surface(a, cfg)
                    else b if is_structural_surface(b, cfg) else None)
         if surface is not None:
