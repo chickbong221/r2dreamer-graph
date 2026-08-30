@@ -654,3 +654,96 @@ class SpatialOnlyMemberTest(MinerTestBase):
     def test_a_task_with_no_extra_entities_is_unchanged(self):
         _, wl = self._mine_with_goal({"actor:cube": {"symmetry": "none"}})
         self.assertEqual(sorted(wl["members"]), ["actor:cube", "actor:table"])
+
+
+class StructuralSurfaceClassificationTest(unittest.TestCase):
+    """Telling a tabletop from a bin.
+
+    The extents below are the ones the collector actually reported for the
+    shipped tasks, so this is a regression against measured geometry rather
+    than against a guess.
+    """
+
+    EXTENTS = {
+        "actor:table-workspace": [1.209, 0.6045, 0.4598],
+        "actor:bin": [0.025, 0.025, 0.0075],
+        "actor:box_with_hole": [0.1234, 0.1234, 0.1234],
+        "actor:peg": [0.1234, 0.022, 0.022],
+        "actor:sphere": [0.02, 0.02, 0.02],
+    }
+    MEMBERS = {
+        "actor:table-workspace": {"interaction_types": ["contact", "support"]},
+        "actor:bin": {"interaction_types": ["contact", "support"]},
+        "actor:box_with_hole": {"interaction_types": ["contact", "support",
+                                                      "contain"]},
+        "actor:peg": {"interaction_types": ["contact", "grasp", "support"]},
+        "actor:sphere": {"interaction_types": ["contact", "grasp", "support"]},
+    }
+
+    def _classify(self, extents=None, members=None):
+        return miner.structural_surfaces(
+            {"extents": dict(extents if extents is not None else self.EXTENTS)},
+            dict(members if members is not None else self.MEMBERS),
+        )
+
+    def test_only_the_table_is_structural(self):
+        self.assertEqual(sorted(self._classify()), ["actor:table-workspace"])
+
+    def test_the_bin_is_not(self):
+        """It supports the sphere and is kinematic, exactly like the table.
+        Only its size says otherwise."""
+        self.assertNotIn("actor:bin", self._classify())
+
+    def test_the_decision_has_room_either_side(self):
+        """A threshold that only just separates them would be a coincidence.
+        The table clears it 2x and the next largest object misses it 2.4x."""
+        table = min(self.EXTENTS["actor:table-workspace"][:2])
+        largest_other = max(
+            min(v[:2]) for k, v in self.EXTENTS.items()
+            if k != "actor:table-workspace")
+        self.assertGreater(table / miner.STRUCTURAL_SURFACE_MIN_HALF_EXTENT, 2)
+        self.assertGreater(
+            miner.STRUCTURAL_SURFACE_MIN_HALF_EXTENT / largest_other, 2)
+
+    def test_a_long_thin_object_is_not_a_surface(self):
+        """The smaller horizontal extent decides, so a rail as long as a table
+        is still not something you can place things anywhere on."""
+        rail = {"actor:rail": [1.5, 0.02, 0.02]}
+        members = {"actor:rail": {"interaction_types": ["support"]}}
+        self.assertEqual(self._classify(rail, members), {})
+
+    def test_a_large_object_that_supports_nothing_is_scenery(self):
+        members = {"actor:table-workspace": {"interaction_types": ["contact"]}}
+        self.assertEqual(self._classify(members=members), {})
+
+    def test_flatness_is_not_the_test(self):
+        """The tabletop actor includes its legs -- 0.46m vertically against
+        0.60m horizontally -- so an aspect-ratio rule would reject the one
+        object this exists to find."""
+        table = self.EXTENTS["actor:table-workspace"]
+        self.assertLess(min(table[:2]) / table[2], 1.5)
+        self.assertIn("actor:table-workspace", self._classify())
+
+    def test_unreadable_geometry_is_not_treated_as_small(self):
+        """A missing measurement is not evidence of absence. Defaulting it to
+        'not a surface' reinstates the ~0.9m origin error silently."""
+        extents = dict(self.EXTENTS)
+        del extents["actor:table-workspace"]
+        self.assertEqual(self._classify(extents), {})
+        self.assertIn(
+            "actor:table-workspace",
+            miner.unclassified_supporters(
+                {"extents": extents}, dict(self.MEMBERS)),
+        )
+
+    def test_a_classified_member_is_not_reported_unclassified(self):
+        self.assertEqual(
+            miner.unclassified_supporters(
+                {"extents": dict(self.EXTENTS)}, dict(self.MEMBERS)),
+            [],
+        )
+
+    def test_the_reason_is_recorded_for_review(self):
+        reason = self._classify()["actor:table-workspace"]
+        self.assertIn("0.605", reason)
+        self.assertIn("0.3", reason)

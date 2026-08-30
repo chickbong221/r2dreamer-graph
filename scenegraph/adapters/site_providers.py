@@ -246,6 +246,52 @@ def _shapes_of(obj):
     return None
 
 
+def _shape_half_size(shape) -> Optional[np.ndarray]:
+    """Half-extents of one collision shape's own bounding box, in its frame.
+
+    Only a box carries ``half_size``. A sphere reports a radius, a capsule a
+    radius plus a half-length along x, and a convex mesh its vertices -- so a
+    reader that only understood boxes silently returned nothing for
+    PlaceSphere's sphere and for anything mesh-backed.
+    """
+    geometry = getattr(shape, "geometry", None)
+
+    for holder in (shape, geometry):
+        if holder is None:
+            continue
+        half = getattr(holder, "half_size", None)
+        if half is not None:
+            return _np(half).reshape(-1)[:3]
+
+    for holder in (shape, geometry):
+        if holder is None:
+            continue
+        radius = getattr(holder, "radius", None)
+        if radius is None:
+            continue
+        radius = float(_np(radius).reshape(-1)[0])
+        # A capsule's axis is x in SAPIEN; a sphere has no half-length.
+        half_length = getattr(holder, "half_length", None)
+        along = radius if half_length is None else (
+            radius + float(_np(half_length).reshape(-1)[0]))
+        return np.array([along, radius, radius], dtype=float)
+
+    for holder in (shape, geometry):
+        if holder is None:
+            continue
+        vertices = getattr(holder, "vertices", None)
+        if vertices is None:
+            continue
+        verts = _np(vertices).reshape(-1, 3)
+        if not verts.size:
+            continue
+        scale = getattr(holder, "scale", None)
+        if scale is not None:
+            verts = verts * _np(scale).reshape(-1)[:3]
+        return (verts.max(axis=0) - verts.min(axis=0)) / 2.0
+    return None
+
+
 def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
     """Half-extents of the actor's collision shapes, unioned in its own frame.
 
@@ -269,13 +315,9 @@ def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
     lo = np.full(3, np.inf)
     hi = np.full(3, -np.inf)
     for shape in shapes:
-        half = getattr(shape, "half_size", None)
-        if half is None:
-            geometry = getattr(shape, "geometry", None)
-            half = getattr(geometry, "half_size", None) if geometry else None
+        half = _shape_half_size(shape)
         if half is None:
             return None
-        half = _np(half).reshape(-1)[:3]
         centre = np.zeros(3)
         pose = getattr(shape, "local_pose", None)
         if pose is not None:

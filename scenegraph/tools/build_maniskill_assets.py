@@ -91,6 +91,19 @@ SHARD_SCHEMA_KEYED = 5
 TASK_SUBTASK = "task"
 TASK_TARGET = "all"
 
+# A supporter whose smaller horizontal half-extent reaches this is an extended
+# plane rather than a localized destination. Measured, not guessed: across the
+# shipped tasks the tabletop reports 0.605 m against 0.025 m for PlaceSphere's
+# bin, 0.123 m for the peg box and 0.022 m for the peg, so 0.30 m sits five
+# times clear of both sides. The *smaller* horizontal extent is used because a
+# long thin object -- a peg, a rail -- is not a surface you can place things
+# anywhere on.
+#
+# Flatness deliberately plays no part: the tabletop's vertical half-extent is
+# 0.46 m because the actor includes its legs, so an aspect-ratio test would
+# reject the one object this exists to find.
+STRUCTURAL_SURFACE_MIN_HALF_EXTENT = 0.30
+
 # A pair whose two support/contain orientations differ by less than this factor
 # is genuinely ambiguous; anything above it is one real orientation plus force
 # -sign noise, which is what the collected data actually looks like.
@@ -624,6 +637,54 @@ def _object_pair_stats(merged, objects):
         if robust is not None:
             stats[key] = robust
     return dict(stats), np.asarray(planar_samples, dtype=np.float32)
+
+
+def structural_surfaces(merged, members) -> Dict[str, str]:
+    """Which members are extended support planes, and why.
+
+    Two conditions, both necessary. It has to actually support something --
+    a large object nothing ever rests on is scenery, not a surface -- and its
+    smaller horizontal half-extent has to reach
+    ``STRUCTURAL_SURFACE_MIN_HALF_EXTENT``.
+
+    Size is the only available discriminator. Roles cannot do it: in
+    PlaceSphere the bin and the table carry byte-identical ``roles`` and
+    ``interaction_types``, because both are kinematic and both support the
+    sphere. An actor whose collision geometry could not be read is left
+    unclassified rather than assumed small -- a missing measurement is not
+    evidence of absence, and a table quietly demoted to an ordinary object
+    reinstates the ~0.9m origin error this is here to remove.
+    """
+    extents = merged.get("extents") or {}
+    out: Dict[str, str] = {}
+    for key, entry in sorted(members.items()):
+        if "support" not in (entry.get("interaction_types") or ()):
+            continue
+        half = extents.get(key)
+        if not half or len(half) < 3:
+            continue
+        horizontal = min(float(half[0]), float(half[1]))
+        if horizontal >= STRUCTURAL_SURFACE_MIN_HALF_EXTENT:
+            out[key] = (
+                f"collision half-extent {horizontal:.3f}m horizontal >= "
+                f"{STRUCTURAL_SURFACE_MIN_HALF_EXTENT}m"
+            )
+    return out
+
+
+def unclassified_supporters(merged, members) -> List[str]:
+    """Supporters whose collision geometry the shard never recorded.
+
+    Reported rather than defaulted. Every one of them is a member the runtime
+    will measure from its actor origin, and if one of them is a tabletop that
+    is exactly the failure this change exists to remove.
+    """
+    extents = merged.get("extents") or {}
+    return sorted(
+        key for key, entry in members.items()
+        if "support" in (entry.get("interaction_types") or ())
+        and not extents.get(key)
+    )
 
 
 def _bin_edges(merged, objects):
