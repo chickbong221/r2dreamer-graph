@@ -1,5 +1,5 @@
 {
-  "_schema_version": 4,
+  "_schema_version": 5,
   "env_id": "PullCubeTool-v1",
   "objects": {
     "actor:cube": {
@@ -27378,7 +27378,21 @@
           "partner": "actor:l_shape_tool",
           "n_samples": 300
         }
-      ]
+      ],
+      "reference_surface": {
+        "anchor": [
+          -0.13121,
+          -0.092663,
+          0.919643
+        ],
+        "outward_normal": [
+          -0.0,
+          -0.0,
+          1.0
+        ],
+        "n_samples": 2,
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
+      }
     }
   }
 }

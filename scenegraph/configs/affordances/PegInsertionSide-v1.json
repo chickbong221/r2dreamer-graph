@@ -1,5 +1,5 @@
 {
-  "_schema_version": 4,
+  "_schema_version": 5,
   "env_id": "PegInsertionSide-v1",
   "objects": {
     "actor:box_with_hole": {
@@ -19610,7 +19610,21 @@
           "partner": "actor:peg",
           "n_samples": 300
         }
-      ]
+      ],
+      "reference_surface": {
+        "anchor": [
+          -0.138623,
+          -0.131344,
+          0.919643
+        ],
+        "outward_normal": [
+          -0.0,
+          -0.0,
+          1.0
+        ],
+        "n_samples": 1,
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
+      }
     }
   }
 }

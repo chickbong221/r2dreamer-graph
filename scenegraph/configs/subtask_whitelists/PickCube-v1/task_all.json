@@ -1,5 +1,5 @@
 {
-  "_schema_version": 4,
+  "_schema_version": 5,
   "subtask": "task",
   "task_group": "PickCube-v1",
   "target": "all",
@@ -13,14 +13,16 @@
         "grasp",
         "support"
       ],
-      "kind": "actor"
+      "kind": "actor",
+      "family": "manipuland"
     },
     "actor:goal_site": {
       "roles": [
         "spatial"
       ],
       "interaction_types": [],
-      "kind": "actor"
+      "kind": "actor",
+      "family": "goal-marker"
     },
     "actor:table-workspace": {
       "roles": [
@@ -31,7 +33,10 @@
         "contact",
         "support"
       ],
-      "kind": "actor"
+      "kind": "actor",
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.604m horizontal >= 0.3m",
+      "family": "structural-surface"
     }
   },
   "sites": {
@@ -41,7 +46,7 @@
       "metric": "euclidean",
       "source": "origin",
       "provider": "pick_cube_goal",
-      "provenance": "PickCube-v1.evaluate: is_obj_placed = norm(cube.pose.p - goal_site.pose.p) <= goal_thresh. The threshold is read live from env.goal_thresh (0.025 by default). The is_robot_static half of the task's success predicate is a separate condition and is deliberately not part of this relation."
+      "provenance": "PickCube-v1.evaluate: is_obj_placed = norm(cube.pose.p - goal_site.pose.p) <= goal_thresh, read live from env.goal_thresh. The is_robot_static half of success is a separate condition."
     }
   },
   "bin_edges": {
@@ -62,52 +67,76 @@
       0.6666666666666666
     ],
     "ee-object-planar-distance": [
-      0.0033099786844104535,
-      0.04631024524569512,
-      0.09404674023389814,
-      0.13093009889125826
+      0.003377061989158392,
+      0.04722896441817285,
+      0.09514867365360259,
+      0.13214476108551027
     ],
     "ee-object-planar-distance-change": [
-      -0.026335832118988024,
-      -0.003657754460970559,
-      0.003657754460970559,
-      0.026335832118988024
-    ],
-    "ee-object-height-offset": [
-      -0.6261117911338807,
-      -0.20870393037796023,
-      0.20870393037796023,
-      0.6261117911338807
-    ],
-    "ee-object-height-offset-change": [
-      -0.04074869339168065,
-      -0.0056595407488445335,
-      0.0056595407488445335,
-      0.04074869339168065
+      -0.025740494124591284,
+      -0.0035750686284154558,
+      0.0035750686284154558,
+      0.025740494124591284
     ],
     "object-object-planar-distance": [
-      0.03615676239132881,
-      0.06444474011659622,
-      0.08798554539680481,
-      0.11361771076917648
+      0.03652757406234741,
+      0.0652160331606865,
+      0.08807144463062286,
+      0.11386335343122482
     ],
     "object-object-planar-distance-change": [
-      -0.02755148545978433,
-      -0.003826595202747824,
-      0.003826595202747824,
-      0.02755148545978433
+      -0.02699780797886775,
+      -0.003749695552620521,
+      0.003749695552620521,
+      0.02699780797886775
     ],
     "object-object-height-offset": [
-      -0.13578699812293055,
-      -0.04526233270764351,
-      0.04526233270764351,
-      0.13578699812293055
+      -0.13581206649541855,
+      -0.04527068883180618,
+      0.04527068883180618,
+      0.13581206649541855
     ],
     "object-object-height-offset-change": [
-      -0.04214361155033115,
-      -0.005853279381990438,
-      0.005853279381990438,
-      0.04214361155033115
+      -0.04190915858139141,
+      -0.005820716469637696,
+      0.005820716469637696,
+      0.04190915858139141
+    ],
+    "ee-structural-surface-height-offset": [
+      -0.10630832419795995,
+      -0.03543610806598665,
+      0.03543610806598665,
+      0.10630832419795995
+    ],
+    "ee-structural-surface-height-offset-change": [
+      -0.0419118994474411,
+      -0.00582109714547793,
+      0.00582109714547793,
+      0.0419118994474411
+    ],
+    "ee-manipuland-height-offset": [
+      -0.07962490741163492,
+      -0.026541635803878305,
+      0.026541635803878305,
+      0.07962490741163492
+    ],
+    "ee-manipuland-height-offset-change": [
+      -0.02608287727832794,
+      -0.003622621844212214,
+      0.003622621844212214,
+      0.02608287727832794
+    ],
+    "ee-goal-marker-height-offset": [
+      -0.13107269257307053,
+      -0.04369089752435684,
+      0.04369089752435684,
+      0.13107269257307053
+    ],
+    "ee-goal-marker-height-offset-change": [
+      -0.04192177212238309,
+      -0.005822468350330985,
+      0.005822468350330985,
+      0.04192177212238309
     ]
   },
   "episodes": 300
