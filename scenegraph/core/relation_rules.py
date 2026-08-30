@@ -97,8 +97,22 @@ DIRECTED_COMPAT_RELATIONS: Tuple[str, ...] = (
     "support-compatibility", "contain-compatibility",
 )
 
-PHYSICAL_LABELS: List[str] = [NOT_HOLDS, HOLDS]
-DIRECTIONAL_PHYSICAL_LABELS: List[str] = [NOT_HOLDS, SRC_HOLDS, DST_HOLDS]
+# ``unobserved`` is admissible for the force-derived predicates because there
+# is a frame on which they genuinely are not observed: before the first
+# post-reset physics step the pairwise force buffer still holds the *previous*
+# episode's impulses. Saying ``not-holds`` there would be a confident claim
+# about a quantity nothing has computed yet, and saying ``holds`` -- which is
+# what actually happened -- reported a 0.33N touch between bodies 17cm apart.
+PHYSICAL_LABELS: List[str] = [NOT_HOLDS, HOLDS, UNOBSERVED]
+DIRECTIONAL_PHYSICAL_LABELS: List[str] = [
+    NOT_HOLDS, SRC_HOLDS, DST_HOLDS, UNOBSERVED,
+]
+# Which physical predicates read the force buffer. ``contain`` does not: it is
+# the PegInsertionSide key-in-entry-volume test, computed from poses, so it is
+# observable on the reset frame like every spatial relation and must not carry
+# ``unobserved`` in its vocabulary at all.
+FORCE_DERIVED_RELATIONS: Tuple[str, ...] = ("contact", "grasp", "support")
+POSE_DIRECTIONAL_LABELS: List[str] = [NOT_HOLDS, SRC_HOLDS, DST_HOLDS]
 COMPAT_BIN_LABELS: List[str] = ["match", "partial-match", "poor-match"]
 COMPAT_LABELS: List[str] = COMPAT_BIN_LABELS + [UNOBSERVED]
 SPATIAL_LABELS: Dict[str, List[str]] = {
@@ -142,11 +156,15 @@ def abs_labels_for() -> Dict[str, List[str]]:
         **{r: PHYSICAL_LABELS for r in PHYSICAL_RELATIONS},
         **SPATIAL_LABELS,
         **{r: COMPAT_LABELS for r in AFFORDANCE_RELATIONS},
-        # Reuses the physical pair, so sigma does not grow.
-        **{r: PHYSICAL_LABELS for r in GOAL_RELATIONS},
+        # Pose-derived, so it is always observable: no ``unobserved``.
+        **{r: [NOT_HOLDS, HOLDS] for r in GOAL_RELATIONS},
     }
     for relation in DIRECTED_RELATIONS:
-        labels[relation] = DIRECTIONAL_PHYSICAL_LABELS
+        labels[relation] = (
+            DIRECTIONAL_PHYSICAL_LABELS if relation in FORCE_DERIVED_RELATIONS
+            else POSE_DIRECTIONAL_LABELS
+        )
+    labels["contain"] = POSE_DIRECTIONAL_LABELS
     return labels
 
 
@@ -788,7 +806,8 @@ def ee_object_spatial_edges(
 
 
 def ee_object_physical_edges(
-    graph: Graph, state: PrivilegedState, cfg: dict
+    graph: Graph, state: PrivilegedState, cfg: dict,
+    force_valid: bool = True,
 ) -> List[Edge]:
     """Binary ``contact`` and ``grasp`` facts, gated on the mined tokens.
 
@@ -798,6 +817,9 @@ def ee_object_physical_edges(
     Both are live simulator queries, so the retained target answers them while
     invisible -- which is the case that matters, since an object in the gripper
     is usually an object the cameras have lost.
+
+    ``force_valid`` is False on the reset frame, where both are ``unobserved``:
+    see :func:`object_object_physical_edges`.
     """
     ee = graph.get_node("ee")
     if ee is None or ee.pose_world is None:
@@ -811,6 +833,17 @@ def ee_object_physical_edges(
         emit_contact = "contact" in types
         emit_grasp = "grasp" in types
         if not emit_contact and not emit_grasp:
+            continue
+        if not force_valid:
+            # No query at all: the buffer holds the previous episode's
+            # impulses, so reading it is what produced the phantom touch.
+            for relation, wanted in (("contact", emit_contact),
+                                     ("grasp", emit_grasp)):
+                if wanted:
+                    edges.append(Edge(
+                        "ee", node.node_id, relation, UNOBSERVED,
+                        raw_value=None,
+                    ))
             continue
         ent = _resolve_entity(node, state, graph, cfg)
         if emit_contact:
@@ -976,7 +1009,8 @@ def _both(types_a: Set[str], types_b: Set[str], token: str) -> bool:
 
 
 def object_object_physical_edges(
-    graph: Graph, state: PrivilegedState, cfg: dict
+    graph: Graph, state: PrivilegedState, cfg: dict,
+    force_valid: bool = True,
 ) -> List[Edge]:
     """Binary ``contact`` / ``support`` / ``contain`` facts for visible pairs.
 
@@ -988,6 +1022,16 @@ def object_object_physical_edges(
     Pairs whose centers exceed the maximum plausible contact distance skip the
     SAPIEN force query and report ``not-holds`` directly: two rigid bodies
     cannot exert a contact force at that separation.
+
+    On the reset frame ``force_valid`` is False and the three force-derived
+    predicates are ``unobserved`` instead. Before the first post-reset physics
+    step the pairwise buffer still holds the *previous* episode's impulses --
+    PlaceSphere reported a 0.33N touch between a bin and a sphere 17cm apart,
+    which completed the terminal phase and handed the whole episode a
+    potential of 1.0 on its first frame. The distance guard below cannot catch
+    that: it is a real force value, just from the wrong episode, and two
+    objects that genuinely start close would slip past any threshold.
+    ``contain`` is unaffected -- it is computed from poses.
     """
     eps_contact = cfg["contact"]["eps_force"]
     min_vertical_ratio = cfg["support"].get("min_vertical_force_ratio", 0.5)
@@ -1035,6 +1079,18 @@ def object_object_physical_edges(
                 ))
 
         if not (want_contact or want_support):
+            continue
+
+        if not force_valid:
+            for relation, wanted in (("contact", want_contact),
+                                     ("support", want_support)):
+                if wanted:
+                    edges.append(Edge(
+                        a.node_id, b.node_id, relation, UNOBSERVED,
+                        raw_value=None,
+                        attributes=({"support_role": "supporter"}
+                                    if relation == "support" else {}),
+                    ))
             continue
 
         far = (
@@ -1439,11 +1495,17 @@ def build_absolute_edges(
     graph: Graph, state: PrivilegedState, cfg: dict,
     initial_physical_pairs: Optional[Set[Tuple[str, str]]] = None,
     capture_initial: bool = False,
+    force_valid: bool = True,
 ) -> None:
-    """Append every admissible fact to ``graph.edges`` in place."""
+    """Append every admissible fact to ``graph.edges`` in place.
+
+    ``force_valid`` is False on the frame that follows a simulator reset,
+    where the pairwise force buffer has not been recomputed yet.
+    """
     graph.edges.extend(goal_edges(graph, state, cfg))
     graph.edges.extend(ee_object_spatial_edges(graph, state, cfg))
-    graph.edges.extend(ee_object_physical_edges(graph, state, cfg))
+    graph.edges.extend(
+        ee_object_physical_edges(graph, state, cfg, force_valid))
     graph.edges.extend(ee_object_affordance_edges(graph, state, cfg))
     # Off for MS-HAB: its progress ladder is end-effector-to-target and these
     # would be new facts in an environment nothing asked to change. Named
@@ -1451,7 +1513,8 @@ def build_absolute_edges(
     # separate axis.
     if bool(cfg.get("object_object_spatial", False)):
         graph.edges.extend(object_object_spatial_edges(graph, state, cfg))
-    physical_edges = object_object_physical_edges(graph, state, cfg)
+    physical_edges = object_object_physical_edges(
+        graph, state, cfg, force_valid)
     graph.edges.extend(physical_edges)
 
     aff_cfg = cfg.get("affordances", {})

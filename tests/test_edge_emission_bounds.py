@@ -305,15 +305,41 @@ class AbsoluteVocabTest(unittest.TestCase):
         self.assertIn(rr.DST_HOLDS, tokens)
 
     def test_support_labels_are_non_contiguous(self):
-        """Why the hardcoded slice mask in graph.py could not be kept."""
+        """Why the hardcoded slice mask in graph.py could not be kept.
+
+        The ids moved when the force-derived predicates gained ``unobserved``:
+        sigma is built in first-seen order over the relation table, ``contact``
+        is the first relation, so ``unobserved`` now sits at 3 and everything
+        that used to follow it shifted up by one. The vocabulary is the same
+        size and every consumer derives its mask, so nothing breaks -- but a
+        packed graph written before that change encodes different labels under
+        the same ids and cannot be replayed against this vocabulary.
+        """
         from scenegraph.adapters.graph_vocab import build_absolute_vocab
         vocab = build_absolute_vocab()
-        contact = {vocab.encode(l)
-                   for l in rr.abs_labels_for()["contact"]}
-        support = {vocab.encode(l)
-                   for l in rr.abs_labels_for()["support"]}
-        self.assertEqual(contact, {1, 2})
-        self.assertEqual(support, {1, 3, 4})
+        labels = rr.abs_labels_for()
+        contact = {vocab.encode(l) for l in labels["contact"]}
+        support = {vocab.encode(l) for l in labels["support"]}
+        self.assertEqual(contact, {1, 2, 3})
+        self.assertEqual(support, {1, 3, 4, 5})
+        # The property the mask has to express. Only the directional
+        # predicates are non-contiguous: they skip ``holds``, which the
+        # symmetric ones use and they do not.
+        contain = {vocab.encode(l) for l in labels["contain"]}
+        for ids in (support, contain):
+            self.assertNotEqual(len(ids), max(ids) - min(ids) + 1)
+
+    def test_pose_derived_predicates_stay_off_the_unobserved_label(self):
+        """``contain`` and ``reached`` are computed from poses, so they are
+        observable whenever the graph is. Admitting a label they can never
+        take would widen the decoder's mask for nothing."""
+        from scenegraph.adapters.graph_vocab import build_absolute_vocab
+        vocab = build_absolute_vocab()
+        unobserved = vocab.encode("unobserved")
+        labels = rr.abs_labels_for()
+        for relation in ("contain", "reached"):
+            ids = {vocab.encode(l) for l in labels[relation]}
+            self.assertNotIn(unobserved, ids)
 
 
 if __name__ == "__main__":

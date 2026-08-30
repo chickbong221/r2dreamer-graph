@@ -849,5 +849,167 @@ class DeclaredSitePairTest(unittest.TestCase):
         self.assertEqual([e.relation for e in edges], ["planar-distance"])
 
 
+# --------------------------------------------------------------------------- #
+# the reset frame
+# --------------------------------------------------------------------------- #
+from scenegraph.core.relation_rules import (
+    ee_object_physical_edges,
+    object_object_physical_edges,
+)
+
+# The exact force PlaceSphere carried across its reset: the sphere's own
+# weight, bit-identical between the previous episode's last frame and the new
+# episode's first.
+STALE_FORCE = 0.32873624563217163
+
+
+class _StaleForceState:
+    """A simulator that answers every force query from the last step.
+
+    Which is what SAPIEN does before the first post-reset step: the pairwise
+    buffer has not been recomputed, so it still holds the previous episode's
+    impulses. ``queried`` records whether anything asked.
+    """
+
+    active_obj = None
+    seg_id_map: dict = {}
+    tcp_pose_world = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+    gripper_width = 0.04
+
+    def __init__(self):
+        self.queried = []
+
+    def pairwise_force_vector(self, a, b):
+        self.queried.append(("pairwise", a, b))
+        return [0.0, 0.0, -STALE_FORCE]
+
+    def ee_object_contact_force(self, ent):
+        self.queried.append(("ee_contact", ent))
+        return STALE_FORCE
+
+    def is_grasping(self, ent, max_angle=None):
+        self.queried.append(("is_grasping", ent))
+        return True
+
+
+def _phys_node(key, pos, types=("contact", "support")):
+    return Node(node_id=key, node_type="object", name=key,
+                pose_world=[*pos, 1.0, 0.0, 0.0, 0.0], segmentation_ids=[],
+                attributes={"whitelist_key": key, "entity_key": key,
+                            "body_type": "dynamic",
+                            "interaction_types": list(types)})
+
+
+class ResetFrameForcePolicyTest(unittest.TestCase):
+    """Before the first post-reset physics step the force buffer is invalid.
+
+    PlaceSphere reported ``contact=holds`` at 0.329N between a bin and a
+    sphere 17cm apart -- the previous episode's impulse, bit-identical. That
+    completed the terminal phase, cumulative credit filled in every earlier
+    phase, and the episode opened at potential 1.0 before collapsing to 0.075
+    on the next frame: a -0.925 spike on the first transition of the episode.
+
+    A distance guard cannot fix this. The value is a real force, just from the
+    wrong episode, and two objects that genuinely start in contact would slip
+    past any threshold. The only sound answer is not to ask.
+    """
+
+    CFG = {"contact": {"eps_force": 0.05}, "support": {},
+           "grasp": {"max_angle": 30}, "affordance_set": None}
+
+    def _scene(self):
+        # The recorded PlaceSphere frame-0 poses: 17cm apart.
+        return Graph(frame=0, env_id="PlaceSphere-v1", camera="base", edges=[],
+                     nodes=[_phys_node("actor:bin", (0.0987, 0.0216, 0.0025)),
+                            _phys_node("actor:sphere", (-0.0714, 0.0108, 0.02))])
+
+    def _obj_edges(self, force_valid):
+        state = _StaleForceState()
+        edges = object_object_physical_edges(
+            self._scene(), state, dict(self.CFG), force_valid=force_valid)
+        return {e.relation: e for e in edges}, state
+
+    def test_stale_forces_cannot_produce_holds(self):
+        edges, _ = self._obj_edges(force_valid=False)
+        self.assertEqual(edges["contact"].label, "unobserved")
+        self.assertEqual(edges["support"].label, "unobserved")
+
+    def test_no_force_query_happens_on_the_reset_frame(self):
+        """Not merely discarded afterwards -- never asked."""
+        _, state = self._obj_edges(force_valid=False)
+        self.assertEqual(state.queried, [])
+
+    def test_the_raw_value_is_none_not_zero(self):
+        """Zero is a measurement. This is the absence of one."""
+        edges, _ = self._obj_edges(force_valid=False)
+        self.assertIsNone(edges["contact"].raw_value)
+        self.assertIsNone(edges["support"].raw_value)
+
+    def test_frame_one_reports_genuine_contact(self):
+        edges, state = self._obj_edges(force_valid=True)
+        self.assertEqual(edges["contact"].label, "holds")
+        self.assertEqual(edges["support"].label, "src-holds")
+        self.assertAlmostEqual(edges["contact"].raw_value, STALE_FORCE)
+        self.assertTrue(state.queried)
+
+    def test_the_edge_is_still_present_so_the_frame_stays_readable(self):
+        """Omitting it would mark the frame invalid, which is a different and
+        worse answer than 'this fact was not observed'."""
+        edges, _ = self._obj_edges(force_valid=False)
+        self.assertEqual(sorted(edges), ["contact", "support"])
+
+    def test_ee_contact_and_grasp_are_unobserved_too(self):
+        graph = Graph(frame=0, env_id="T-v1", camera="base", edges=[],
+                      nodes=[Node(node_id="ee", node_type="ee", name="ee",
+                                  pose_world=[0, 0, 1.0, 1, 0, 0, 0]),
+                             _phys_node("actor:sphere", (0.0, 0.0, 0.9),
+                                        types=("contact", "grasp"))])
+        state = _StaleForceState()
+        edges = ee_object_physical_edges(
+            graph, state, dict(self.CFG), force_valid=False)
+        self.assertEqual({e.relation: e.label for e in edges},
+                         {"contact": "unobserved", "grasp": "unobserved"})
+        self.assertEqual(state.queried, [])
+
+    def test_unobserved_is_admissible_for_the_force_derived_predicates(self):
+        from scenegraph.core.relation_rules import abs_labels_for
+        labels = abs_labels_for()
+        for relation in ("contact", "grasp", "support"):
+            self.assertIn("unobserved", labels[relation])
+
+    def test_pose_derived_predicates_never_carry_unobserved(self):
+        """``contain`` is the key-in-entry-volume test and ``reached`` is a
+        distance: both are computable the moment poses exist, so admitting
+        'unobserved' for them would widen the decoder mask for a label they
+        can never take."""
+        from scenegraph.core.relation_rules import abs_labels_for
+        labels = abs_labels_for()
+        self.assertNotIn("unobserved", labels["contain"])
+        self.assertNotIn("unobserved", labels["reached"])
+
+    def test_the_absolute_vocabulary_did_not_grow(self):
+        from scenegraph.adapters.graph_vocab import build_absolute_vocab
+        self.assertEqual(len(build_absolute_vocab()), 19)
+
+    def test_pose_derived_relations_still_emit_at_reset(self):
+        """Spatial facts are unaffected: nothing about them reads the force
+        buffer, and a reset frame is a perfectly good frame to measure in."""
+        from scenegraph.core.relation_rules import object_object_spatial_edges
+        cfg = dict(self.CFG)
+        cfg.update({
+            "bin_edges": {
+                spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"):
+                    [.03, .07, .11, .15],
+                spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"):
+                    [-.09, -.03, .03, .09]},
+            "object_object_spatial": True, "structural_surfaces": set(),
+            "families": {}, "site_declarations": {},
+        })
+        edges = object_object_spatial_edges(self._scene(), _StaleForceState(),
+                                            cfg)
+        self.assertEqual(sorted(e.relation for e in edges),
+                         ["height-offset", "planar-distance"])
+
+
 if __name__ == "__main__":
     unittest.main()

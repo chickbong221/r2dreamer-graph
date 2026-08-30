@@ -633,6 +633,10 @@ class GraphBuilder:
             graph, state, self.cfg,
             initial_physical_pairs=self._initial_physical_pairs,
             capture_initial=capture_initial,
+            # Keyed on the reset event itself, not on a frame number: the
+            # boundary is what invalidates the force buffer, and a caller that
+            # numbers frames differently must not change what is observable.
+            force_valid=not episode_boundary,
         )
         if capture_initial:
             self._report_initial_pairs(graph)
