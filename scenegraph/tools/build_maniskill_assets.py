@@ -599,6 +599,7 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         plain_members[key]["family"] = family
 
     sites = site_declarations(merged, plain_members, env_id, sites_dir)
+    plain_members = admit_site_members(plain_members, sites)
 
     affordances = {
         "_schema_version": AFFORDANCE_SCHEMA_VERSION,
@@ -849,6 +850,28 @@ def site_declarations(merged, members, env_id, sites_dir) -> Dict[str, Any]:
                 f"object-region samples for ({subject}, {key})."
             )
     return declared
+
+
+def admit_site_members(members, sites) -> Dict[str, Any]:
+    """Give every virtual site the vocabulary row its runtime node needs.
+
+    A declaration licenses goal geometry, but the graph encoder resolves node
+    identity only through whitelist ``members``.  Real goal markers such as
+    PickCube's ``actor:goal_site`` are already members and keep their mined
+    family.  Provider-backed sites have no simulator actor, so the miner must
+    add a spatial-only row explicitly; otherwise schedule compilation fails
+    before training (or, without that guard, the site would encode as pad).
+    """
+    out = dict(members)
+    for key in sorted(sites):
+        if key in out:
+            continue
+        out[key] = {
+            "roles": ["spatial"],
+            "interaction_types": [],
+            "kind": "spatial",
+        }
+    return out
 
 
 def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:

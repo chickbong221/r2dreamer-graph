@@ -43,6 +43,13 @@
       "structural_surface": true,
       "structural_surface_reason": "collision half-extent 0.604m horizontal >= 0.3m",
       "family": "structural-surface"
+    },
+    "spatial:hole_site": {
+      "roles": [
+        "spatial"
+      ],
+      "interaction_types": [],
+      "kind": "spatial"
     }
   },
   "sites": {

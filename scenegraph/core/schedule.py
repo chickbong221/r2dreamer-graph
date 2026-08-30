@@ -218,8 +218,13 @@ def scorable_relations(
             "grasp-compatibility": _has(objects, key, "grasp_components"),
             "contact-compatibility": _has(objects, key, "contact_components"),
             "reached": reached_on(EE_KEY, key),
-            "planar-distance": ee_planar and key not in surfaces,
-            "height-offset": _ee_height(key),
+            # A virtual site has no body: the end effector is never near it or
+            # above it in any sense the runtime emits, so a clause naming one
+            # would score a fact that is never produced.
+            "planar-distance": (ee_planar and key not in surfaces
+                                and not key.startswith(SITE_PREFIX)),
+            "height-offset": (_ee_height(key)
+                              and not key.startswith(SITE_PREFIX)),
         }
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):

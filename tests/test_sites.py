@@ -504,5 +504,211 @@ class RequiredBinKeyTest(unittest.TestCase):
         self.assertNotIn(OBJECT_REGION_PLANAR_KEY, keys)
 
 
+# --------------------------------------------------------------------------- #
+# virtual sites in the graph
+# --------------------------------------------------------------------------- #
+from scenegraph.core.relation_rules import (
+    ee_object_spatial_edges,
+    is_virtual_site,
+)
+from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    ee_family_bin_key,
+)
+from scenegraph.core.schedule import scorable_relations
+
+VS_BINS = {
+    spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance"): [.03, .07, .11, .15],
+    ee_family_bin_key("manipuland"): [-.07, -.02, .02, .07],
+    ee_family_bin_key("goal-marker"): [-.13, -.04, .04, .13],
+}
+
+
+def _vs_node(key, pos, ntype="object"):
+    return Node(node_id=key, node_type=ntype, name=key,
+                pose_world=[*pos, 1.0, 0.0, 0.0, 0.0],
+                attributes={"whitelist_key": key, "entity_key": key,
+                            "body_type": "kinematic",
+                            "interaction_types": []})
+
+
+def _vs_cfg(families):
+    return {"bin_edges": dict(VS_BINS), "families": dict(families),
+            "structural_surfaces": set(), "site_declarations": {},
+            "affordance_set": None}
+
+
+class VirtualSiteEmissionTest(unittest.TestCase):
+    """A virtual site has no body, so the end effector is never near it or
+    above it in any sense the runtime can label.
+
+    It is also given no height family by the miner -- deliberately, since
+    inventing one would measure a distance to nothing on a real object's
+    scale. Before the exclusion the two facts collided: the site was included
+    like any object, the height scale was demanded, and the whole task raised
+    on its first frame.
+    """
+
+    EE = Node(node_id="ee", node_type="ee", name="ee",
+              pose_world=[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+
+    def _edges(self, node, families):
+        graph = Graph(frame=0, env_id="T-v1", camera="base",
+                      nodes=[self.EE, node], edges=[])
+        return ee_object_spatial_edges(graph, None, _vs_cfg(families))
+
+    def test_a_virtual_site_is_recognised_by_its_namespace(self):
+        self.assertTrue(is_virtual_site(_vs_node("spatial:hole_site", (0, 0, 0))))
+        self.assertFalse(is_virtual_site(_vs_node("actor:goal_site", (0, 0, 0))))
+        self.assertFalse(is_virtual_site(_vs_node("actor:cube", (0, 0, 0))))
+
+    def test_no_ee_spatial_edges_for_a_virtual_site(self):
+        edges = self._edges(_vs_node("spatial:hole_site", (0.1, 0.2, 0.9)),
+                            {"actor:peg": "manipuland"})
+        self.assertEqual(edges, [])
+
+    def test_it_does_not_raise_for_a_family_it_was_never_given(self):
+        """The exact first-frame failure: a classified asset plus an
+        unclassified site meant the fail-closed height check fired on every
+        Peg and Pull episode."""
+        try:
+            self._edges(_vs_node("spatial:pull_goal_region", (0.5, 0, 0)),
+                        {"actor:cube": "manipuland"})
+        except ValueError as exc:  # pragma: no cover - the regression itself
+            self.fail(f"virtual site still demands a height family: {exc}")
+
+    def test_an_actor_backed_site_keeps_its_ee_edges(self):
+        """PickCube's goal marker is a real sphere with a mined family. The
+        exclusion must not reach it."""
+        edges = self._edges(_vs_node("actor:goal_site", (0.1, 0.0, 0.9)),
+                            {"actor:goal_site": "goal-marker"})
+        self.assertEqual(
+            sorted(e.relation for e in edges),
+            ["height-offset", "planar-distance"])
+
+    def test_ordinary_objects_are_unaffected(self):
+        edges = self._edges(_vs_node("actor:cube", (0.1, 0.0, 0.9)),
+                            {"actor:cube": "manipuland"})
+        self.assertEqual(len(edges), 2)
+
+
+class VirtualSiteScorabilityTest(unittest.TestCase):
+    """The compiler has to refuse what the runtime will not emit, or a clause
+    scores zero for a whole episode with nothing to show for it."""
+
+    MEMBERS = {
+        "actor:peg": {"interaction_types": ["contact", "grasp"],
+                      "family": "manipuland"},
+        "spatial:hole_site": {"interaction_types": [], "kind": "spatial"},
+    }
+    BINS = {
+        spatial_bin_key(scope, rel): (
+            [.03, .07, .11, .15] if rel == "planar-distance"
+            else [-.09, -.03, .03, .09])
+        for scope in (EE_OBJECT_SCOPE, OBJECT_OBJECT_SCOPE)
+        for rel in ("planar-distance", "height-offset")
+    }
+
+    def _table(self):
+        sites = parse_site_declarations({"spatial:hole_site": {
+            "site_type": "surface", "subject": "actor:peg",
+            "metric": "euclidean", "source": "provider",
+            "provider": "peg_hole_mouth", "provenance": "p"}})
+        bins = dict(self.BINS)
+        bins[ee_family_bin_key("manipuland")] = [-.07, -.02, .02, .07]
+        return scorable_relations({}, self.MEMBERS, bins, sites)
+
+    def test_ee_to_virtual_site_spatial_is_unscorable(self):
+        pair = self._table()["ee / spatial:hole_site"]
+        self.assertFalse(pair["planar-distance"])
+        self.assertFalse(pair["height-offset"])
+
+    def test_ee_to_a_real_object_stays_scorable(self):
+        pair = self._table()["ee / actor:peg"]
+        self.assertTrue(pair["planar-distance"])
+        self.assertTrue(pair["height-offset"])
+
+    def test_object_to_site_stays_scorable(self):
+        """Only the end-effector pair is excluded. The peg-head-to-mouth
+        ladder is the whole point of the site."""
+        pair = self._table()["actor:peg / spatial:hole_site"]
+        self.assertTrue(pair["reached"])
+
+
+class SiteNodeMergeTest(unittest.TestCase):
+    """A site key may name an actor already in the graph.
+
+    PickCube's ``goal_site`` is a real kinematic sphere the cameras see.
+    Overwriting it with a synthetic vertex discarded its segmentation ids, its
+    per-camera boxes and its appearance, and left the decoder reconstructing a
+    blank where a visible object stands -- silently, because poses and
+    ``reached`` went on working.
+    """
+
+    class _Builder:
+        """Just the merge, without a simulator behind it."""
+        from scenegraph.core.graph_builder import GraphBuilder as _G
+        _merge_site_nodes = _G._merge_site_nodes
+        _site_node = _G._site_node
+
+    def _real_actor(self):
+        return Node(
+            node_id="actor:goal_site", node_type="object", name="goal_site",
+            visible=True, segmentation_ids=[7], pixel_area=140,
+            pose_world=[0.1, 0.2, 0.9, 1.0, 0.0, 0.0, 0.0],
+            bbox=[[0.1, 0.2, 0.3, 0.4]],
+            attributes={"whitelist_key": "actor:goal_site",
+                        "entity_key": "actor:goal_site"},
+        )
+
+    def _merge(self, nodes, spec):
+        self._Builder()._merge_site_nodes(nodes, [spec])
+        return nodes
+
+    def test_an_actor_backed_site_keeps_its_pixels(self):
+        nodes = {"actor:goal_site": self._real_actor()}
+        merged = self._merge(nodes, _spec(_decl(key="actor:goal_site")))
+        node = merged["actor:goal_site"]
+        self.assertEqual(node.segmentation_ids, [7])
+        self.assertEqual(node.pixel_area, 140)
+        self.assertIsNotNone(node.bbox)
+        self.assertTrue(node.visible)
+
+    def test_it_is_still_marked_as_a_site(self):
+        nodes = {"actor:goal_site": self._real_actor()}
+        merged = self._merge(nodes, _spec(_decl(key="actor:goal_site")))
+        self.assertTrue(merged["actor:goal_site"].attributes["is_site"])
+        self.assertEqual(
+            merged["actor:goal_site"].attributes["site_type"], SITE_POINT)
+
+    def test_the_actor_keeps_its_own_pose(self):
+        """The builder already refreshes actor poses from the simulator; the
+        spec's copy of the same pose must not become a second source."""
+        nodes = {"actor:goal_site": self._real_actor()}
+        merged = self._merge(nodes, _spec(_decl(key="actor:goal_site"),
+                                          pose=_pose(9.0, 9.0, 9.0)))
+        self.assertEqual(merged["actor:goal_site"].pose_world[:3],
+                         [0.1, 0.2, 0.9])
+
+    def test_a_virtual_site_still_gets_a_node(self):
+        nodes = {}
+        decl = _decl(key="spatial:hole_site", subject="actor:peg",
+                     site_type=SITE_SURFACE)
+        merged = self._merge(nodes, _spec(decl, pose=_pose(0.3, 0.1, 0.9)))
+        node = merged["spatial:hole_site"]
+        self.assertEqual(node.segmentation_ids, [])
+        self.assertFalse(node.visible)
+        self.assertTrue(node.in_frame)
+        self.assertEqual(node.pose_world[:3], [0.3, 0.1, 0.9])
+        self.assertEqual(node.attributes["interaction_types"], [])
+
+    def test_a_virtual_site_never_displaces_a_real_node(self):
+        nodes = {"actor:cube": self._real_actor()}
+        decl = _decl(key="spatial:hole_site", subject="actor:peg",
+                     site_type=SITE_SURFACE)
+        merged = self._merge(nodes, _spec(decl))
+        self.assertEqual(sorted(merged), ["actor:cube", "spatial:hole_site"])
+
+
 if __name__ == "__main__":
     unittest.main()

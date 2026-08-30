@@ -877,6 +877,30 @@ class SiteDeclarationSourceTest(unittest.TestCase):
             "PegInsertionSide-v1", self._sites_dir(declared))
         self.assertEqual(sorted(out), ["spatial:hole_site"])
 
+    def test_a_virtual_site_gets_a_spatial_vocabulary_member(self):
+        members = miner.admit_site_members(self.MEMBERS, {
+            "spatial:hole_site": {"site_type": "surface"},
+        })
+        self.assertEqual(members["spatial:hole_site"], {
+            "roles": ["spatial"],
+            "interaction_types": [],
+            "kind": "spatial",
+        })
+
+    def test_a_real_goal_marker_keeps_its_mined_member(self):
+        original = {
+            "actor:goal_site": {
+                "roles": ["spatial"],
+                "interaction_types": [],
+                "kind": "actor",
+                "family": "goal-marker",
+            }
+        }
+        members = miner.admit_site_members(original, {
+            "actor:goal_site": {"site_type": "point"},
+        })
+        self.assertEqual(members["actor:goal_site"], original["actor:goal_site"])
+
 
 class KeyedCalibrationTest(unittest.TestCase):
     """Scales that only the keyed reservoir can produce.

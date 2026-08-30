@@ -4,12 +4,11 @@
   "roles": {
     "movable": "actor:l_shape_tool",
     "destination": "actor:cube",
-    "reference": "actor:table-workspace"
+    "reference": "spatial:pull_goal_region"
   },
   "notes": [
-    "No goal entity exists; success is the cube's coordinate passing a threshold. planar-distance(cube, table-workspace) is a proxy: the table origin sits at XY ~(-0.12, 0), essentially the robot base, so the cube closing on it is the pull making progress. Dense signal only, never a success detector.",
-    "Measured over 5 successful demonstrations, the proxy moves monotonically inward every time but its absolute level does not track success: episodes start at 0.252-0.332 m (4/5 'far', 1/5 already 'medium') and succeed anywhere from 0.245 m ('medium') to 0.065 m ('very-near'). So the pull phase carries only 0.15 -- at the 0.45 it was first given, two equally successful episodes would have differed by 0.30 in terminal Phi*, teaching the head that some successes are worth a third of others. The weight moved to reach_cube, where contact at 99.9% presence makes the endpoint unambiguous.",
-    "The 'medium' rung is deliberately the smallest: one episode in five starts there, so it is partly a starting condition rather than an achievement.",
+    "The pull reference is the live robot-base goal region used by the environment's exact success test: planar cube-to-base distance < 0.6 m. The old table-origin proxy is deliberately absent.",
+    "The object-region ladder is planar only. Its finest mined edge is outside the 0.6 m success boundary, so reached implies every weighted distance rung and terminal potential is 1.0.",
     "support-compatibility(cube, l_shape_tool) is absent: the support bucket was excluded at 15.7% presence, so no components back it and it would score unobserved forever.",
     "height-offset is not used for the pull: the cube slides along the table, so its height never changes."
   ],
@@ -220,11 +219,23 @@
           "src": "destination",
           "dst": "reference",
           "labels": [
+            "far",
             "medium",
             "near",
             "very-near"
           ],
-          "weight": 0.03
+          "weight": 0.0225
+        },
+        {
+          "relation": "planar-distance",
+          "src": "destination",
+          "dst": "reference",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0225
         },
         {
           "relation": "planar-distance",
@@ -234,7 +245,7 @@
             "near",
             "very-near"
           ],
-          "weight": 0.06
+          "weight": 0.0225
         },
         {
           "relation": "planar-distance",
@@ -242,14 +253,25 @@
           "dst": "reference",
           "labels": [
             "very-near"
+          ],
+          "weight": 0.0225
+        },
+        {
+          "relation": "reached",
+          "src": "destination",
+          "dst": "reference",
+          "labels": [
+            "holds"
           ],
           "weight": 0.06
         }
       ],
       "completion": {
-        "relation": "planar-distance",
+        "relation": "reached",
+        "src": "destination",
+        "dst": "reference",
         "labels": [
-          "very-near"
+          "holds"
         ]
       }
     }

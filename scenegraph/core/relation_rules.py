@@ -411,6 +411,19 @@ def is_region_site(node: Node, cfg: dict) -> bool:
     return bool(key) and key in region_site_keys(cfg)
 
 
+def is_virtual_site(node: Node) -> bool:
+    """Whether this node stands for goal geometry with no simulator body.
+
+    Keyed on the ``spatial:`` namespace rather than on a runtime flag, because
+    the distinction that matters is whether an actor backs it. PickCube's
+    ``actor:goal_site`` is a real kinematic sphere with pixels and a mined
+    family; a hole mouth and a goal region are neither.
+    """
+    from .sites import SITE_PREFIX
+    key = _whitelist_key(node)
+    return bool(key) and key.startswith(SITE_PREFIX)
+
+
 def ladder_site_keys(cfg: dict) -> Set[str]:
     """Virtual sites that carry a distance ladder.
 
@@ -721,6 +734,12 @@ def ee_object_spatial_edges(
     aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
     for node in _ee_object_nodes(graph):
+        # A virtual site has no body for the gripper to be near or above. It
+        # is also, deliberately, given no height family by the miner, so
+        # asking for one raises -- correctly, since inventing a family would
+        # label a distance to nothing on a real object's scale.
+        if is_virtual_site(node):
+            continue
         obj_xyz = _xyz(node)
         structural = is_structural_surface(node, cfg)
         # Per family, so a metre of table clearance cannot set the deadband

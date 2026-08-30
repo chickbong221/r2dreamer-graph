@@ -371,11 +371,29 @@ class GraphBuilder:
             return []
         return site_specs(self.env, self.env_idx, declarations)
 
-    def _site_node(self, spec) -> Node:
-        """One vertex for a site.
+    def _merge_site_nodes(self, nodes: Dict[str, Node], specs) -> None:
+        """Give every declared site a vertex, without displacing a real one.
 
-        No pixels and no box: nothing segments a goal marker's mouth or a
-        region around the robot base. The centroid is real and is what the
+        A site key may name an actor that is already in the graph: PickCube's
+        ``goal_site`` is a real kinematic sphere the cameras see. Replacing it
+        with a synthetic vertex threw away its segmentation ids, its boxes and
+        its appearance, and left the decoder reconstructing a blank where a
+        visible object stands. The site half of such a node is only its live
+        pose, which the builder already refreshes, and the metadata below.
+        """
+        for spec in specs:
+            existing = nodes.get(spec.key)
+            if existing is None:
+                nodes[spec.key] = self._site_node(spec)
+                continue
+            existing.attributes["is_site"] = True
+            existing.attributes["site_type"] = spec.declaration.site_type
+
+    def _site_node(self, spec) -> Node:
+        """One vertex for a site with no actor behind it.
+
+        No pixels and no box: nothing segments a hole's mouth or a region
+        around the robot base. The centroid is real and is what the
         model reads, and the zero box is masked out of the bbox loss by the
         same ``camera_visible`` derivation that covers a retained object no
         camera saw. ``in_frame`` is set by the environment's visibility policy,
@@ -578,8 +596,7 @@ class GraphBuilder:
         # ordinary vertices from here on, and a scene that cannot fit them has
         # to say so rather than dropping the goal it is scored against.
         specs = self._site_specs(state)
-        for spec in specs:
-            nodes[spec.key] = self._site_node(spec)
+        self._merge_site_nodes(nodes, specs)
         self.cfg["site_specs"] = specs
 
         self._check_capacity(nodes, frame, state)

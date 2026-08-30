@@ -407,6 +407,48 @@ class ShippedScheduleTest(unittest.TestCase):
             self.assertEqual(clause.src_key, "actor:cube")
             self.assertEqual(clause.dst_key, "actor:l_shape_tool")
 
+    def test_the_four_reviewed_phase_sequences_are_pinned(self):
+        expected = {
+            "PickCube-v1": ["approach", "grasp", "carry_to_goal"],
+            "PlaceSphere-v1": ["approach", "grasp", "transport", "settle"],
+            "PegInsertionSide-v1": [
+                "approach", "grasp", "reach_hole_mouth",
+                "containment_alignment", "contain",
+            ],
+            "PullCubeTool-v1": [
+                "approach_tool", "grasp_tool", "reach_cube", "pull",
+            ],
+        }
+        for env_id, names in expected.items():
+            with self.subTest(task=env_id):
+                self.assertEqual(
+                    [p.name for p in self._compile(env_id).phases], names)
+
+    def test_peg_alignment_is_gated_by_live_mouth_and_contact(self):
+        compiled = self._compile("PegInsertionSide-v1")
+        self.assertEqual(compiled.roles["site"], "spatial:hole_site")
+        reach = next(p for p in compiled.phases
+                     if p.name == "reach_hole_mouth")
+        self.assertEqual(
+            {c.relation for c in reach.completions}, {"reached", "contact"})
+        alignment = next(p for p in compiled.phases
+                         if p.name == "containment_alignment")
+        self.assertEqual(
+            {c.relation for c in alignment.requires}, {"reached", "contact"})
+        self.assertTrue(all(c.weight == 0.0 for c in alignment.requires))
+
+    def test_pull_uses_the_live_region_and_exact_completion(self):
+        compiled = self._compile("PullCubeTool-v1")
+        self.assertEqual(
+            compiled.roles["reference"], "spatial:pull_goal_region")
+        self.assertNotIn("actor:table-workspace", compiled.roles.values())
+        pull = compiled.phases[-1]
+        self.assertEqual(pull.completion.relation, "reached")
+        self.assertEqual(
+            [c.relation for c in pull.clauses].count("planar-distance"), 4)
+        self.assertEqual(
+            [c.relation for c in pull.clauses].count("reached"), 1)
+
 
 # --------------------------------------------------------------------------- #
 # goal sites

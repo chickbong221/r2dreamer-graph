@@ -3,8 +3,14 @@
   "env_id": "PegInsertionSide-v1",
   "roles": {
     "movable": "actor:peg",
-    "destination": "actor:box_with_hole"
+    "destination": "actor:box_with_hole",
+    "site": "spatial:hole_site"
   },
+  "notes": [
+    "The hole site is the live mouth surface, derived from the randomized box_hole_pose and collision-shape half-depth every episode. Spatial ladders measure the live peg head, not the peg actor origin or a mined box-local average.",
+    "The reach completion and containment-alignment gate are current-frame conjunctions, not temporal latches. Contact remains a zero-weight requirement so noisy contact is never rewarded on its own.",
+    "Contain compatibility uses the live hole geometry. The schedule does not use the stale peg-to-box-origin planar proxy."
+  ],
   "phases": [
     {
       "name": "approach",
@@ -116,53 +122,110 @@
       }
     },
     {
-      "name": "transport",
+      "name": "reach_hole_mouth",
       "src": "movable",
-      "dst": "destination",
-      "weight": 0.3,
+      "dst": "site",
+      "weight": 0.15,
       "clauses": [
         {
           "relation": "planar-distance",
           "src": "movable",
-          "dst": "destination",
+          "dst": "site",
           "labels": [
             "far",
             "medium",
             "near",
             "very-near"
           ],
-          "weight": 0.05
+          "weight": 0.015
         },
         {
           "relation": "planar-distance",
           "src": "movable",
-          "dst": "destination",
+          "dst": "site",
           "labels": [
             "medium",
             "near",
             "very-near"
           ],
-          "weight": 0.05
+          "weight": 0.015
         },
         {
           "relation": "planar-distance",
           "src": "movable",
-          "dst": "destination",
+          "dst": "site",
           "labels": [
             "near",
             "very-near"
           ],
-          "weight": 0.05
+          "weight": 0.015
         },
         {
           "relation": "planar-distance",
           "src": "movable",
-          "dst": "destination",
+          "dst": "site",
           "labels": [
             "very-near"
           ],
-          "weight": 0.05
+          "weight": 0.015
         },
+        {
+          "relation": "height-offset",
+          "src": "movable",
+          "dst": "site",
+          "labels": [
+            "below",
+            "level",
+            "above"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "height-offset",
+          "src": "movable",
+          "dst": "site",
+          "labels": [
+            "level"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "reached",
+          "src": "movable",
+          "dst": "site",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.03
+        }
+      ],
+      "completion": {
+        "all_of": [
+          {
+            "relation": "reached",
+            "src": "movable",
+            "dst": "site",
+            "labels": [
+              "holds"
+            ]
+          },
+          {
+            "relation": "contact",
+            "src": "movable",
+            "dst": "destination",
+            "labels": [
+              "holds"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "containment_alignment",
+      "src": "movable",
+      "dst": "destination",
+      "weight": 0.15,
+      "clauses": [
         {
           "relation": "contain-compatibility",
           "src": "movable",
@@ -172,7 +235,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.033333
+          "weight": 0.05
         },
         {
           "relation": "contain-compatibility",
@@ -182,7 +245,7 @@
             "partial-match",
             "match"
           ],
-          "weight": 0.033333
+          "weight": 0.05
         },
         {
           "relation": "contain-compatibility",
@@ -191,18 +254,42 @@
           "labels": [
             "match"
           ],
-          "weight": 0.033334
+          "weight": 0.05
         }
       ],
+      "requires": {
+        "all_of": [
+          {
+            "relation": "reached",
+            "src": "movable",
+            "dst": "site",
+            "labels": [
+              "holds"
+            ],
+            "weight": 0.0
+          },
+          {
+            "relation": "contact",
+            "src": "movable",
+            "dst": "destination",
+            "labels": [
+              "holds"
+            ],
+            "weight": 0.0
+          }
+        ]
+      },
       "completion": {
-        "relation": "contact",
+        "relation": "contain-compatibility",
+        "src": "movable",
+        "dst": "destination",
         "labels": [
-          "holds"
+          "match"
         ]
       }
     },
     {
-      "name": "settle",
+      "name": "contain",
       "src": "movable",
       "dst": "destination",
       "weight": 0.35,
