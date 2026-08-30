@@ -1,9 +1,9 @@
 """Per-subtask whitelist used as the runtime's sole relevance gate.
 
-Asset shape (``_schema_version: 4``)::
+Asset shape (``_schema_version: 5``)::
 
     {
-      "_schema_version": 4,
+      "_schema_version": 5,
       "subtask": "pick",
       "task_group": "set_table",
       "target": "actor:024_bowl",
@@ -17,10 +17,26 @@ Asset shape (``_schema_version: 4``)::
             "roles": ["support"],
             "interaction_types": ["support"],
             "kind": "link"
+        },
+        "actor:table-workspace": {
+            "roles": ["support"],
+            "interaction_types": ["contact", "support"],
+            "kind": "actor",
+            "structural_surface": true
         }
       },
+      "sites": { "<site key>": { "site_type": ..., "subject": ..., ... } },
       "bin_edges": { "<relation>": [edges...], ... }
     }
+
+``structural_surface`` marks an extended support plane -- a tabletop, not a
+bin. Roles cannot make that distinction: in PlaceSphere the bin and the table
+carry byte-identical ``roles`` and ``interaction_types``, because both are
+kinematic and both support the sphere. The difference is size, it is mined
+from the actor's collision extents, and it decides two things at runtime: the
+pair's height is measured against the surface plane rather than the actor
+origin, and no public ``planar-distance`` edge is emitted for it, because the
+origin of a metre-wide plane names no place to approach.
 
 Per-member ``interaction_types`` controls which compatibility edges runtime
 emits for the object:
@@ -54,6 +70,7 @@ from .entity_identity import (
     stable_entity_key,
 )
 from .schema import Node
+from .sites import SiteDeclaration, parse_site_declarations
 from .spatial_metrics import (
     SPATIAL_SCOPES,
     change_bin_key,
@@ -62,7 +79,7 @@ from .spatial_metrics import (
 )
 
 
-WHITELIST_SCHEMA_VERSION = 4
+WHITELIST_SCHEMA_VERSION = 5
 
 
 # --------------------------------------------------------------------------- #
@@ -131,6 +148,13 @@ class Whitelist:
     by_key: Dict[str, Set[str]] = field(default_factory=dict)
     interaction_types: Dict[str, Set[str]] = field(default_factory=dict)
     bin_edges: Dict[str, List[float]] = field(default_factory=dict)
+    # Members that are extended support planes. Empty for a legacy asset, which
+    # is why the fail-closed check lives at the task path that needs it rather
+    # than in this loader: MS-HAB assets predate the property and must keep
+    # loading.
+    structural_surfaces: Set[str] = field(default_factory=set)
+    sites: Dict[str, "SiteDeclaration"] = field(default_factory=dict)
+    schema_version: int = 0
     source_path: Optional[str] = None
     # Set by the key-rename migration. The keys are scoped, the values are not
     # anchor-derived, so the asset compiles schedules but must not train.
@@ -182,6 +206,7 @@ def load_whitelist(path: str) -> Whitelist:
 
     by_key: Dict[str, Set[str]] = {}
     interaction_types: Dict[str, Set[str]] = {}
+    structural: Set[str] = set()
     members = raw.get("members", {})
     if not isinstance(members, dict):
         raise ValueError(f"whitelist {path!r}: 'members' must be an object")
@@ -207,6 +232,8 @@ def load_whitelist(path: str) -> Whitelist:
         if normalized:
             by_key[normalized] = roles_set
             interaction_types[normalized] = itypes_set
+            if isinstance(entry, dict) and entry.get("structural_surface"):
+                structural.add(normalized)
 
     if not by_key:
         raise ValueError(f"whitelist {path!r}: 'members' is empty")
@@ -240,6 +267,9 @@ def load_whitelist(path: str) -> Whitelist:
         by_key=by_key,
         interaction_types=interaction_types,
         bin_edges=bin_edges,
+        structural_surfaces=structural,
+        sites=parse_site_declarations(raw.get("sites"), where=path),
+        schema_version=int(raw.get("_schema_version", 0) or 0),
         source_path=path,
     )
     _WHITELIST_CACHE[abspath] = (sig, wl)

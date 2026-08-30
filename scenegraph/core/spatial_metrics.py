@@ -92,6 +92,58 @@ def pair_points(
     return pa, pb
 
 
+def oriented_normal(normal: Sequence[float]) -> Optional[np.ndarray]:
+    """A surface normal forced to point away from the surface, i.e. up.
+
+    Support normals are mined from contact forces, and the force on a
+    supporter from the thing it carries points *into* it -- every table in the
+    shipped assets records ``[0, 0, -1]``. Reading that literally makes an
+    object resting on the table report a negative height, and the sign error is
+    invisible because ``level`` is symmetric around zero. Normalising here is
+    what lets one formula serve both conventions.
+
+    Returns None for a degenerate or horizontal-only normal, where "away from
+    the surface" has no answer and a guess would be a silent half-metre error.
+    """
+    arr = np.asarray(normal, dtype=float).reshape(-1)
+    if arr.size < 3 or not np.all(np.isfinite(arr[:3])):
+        return None
+    arr = arr[:3]
+    length = float(np.linalg.norm(arr))
+    if length <= 0.0:
+        return None
+    unit = arr / length
+    vertical = float(np.dot(unit, WORLD_UP))
+    if abs(vertical) < 1e-6:
+        return None
+    return unit if vertical > 0.0 else -unit
+
+
+def surface_height(
+    point: Sequence[float],
+    surface_anchor: Sequence[float],
+    surface_normal: Sequence[float],
+) -> Optional[float]:
+    """Signed distance from ``point`` to the plane through the anchor.
+
+    ``dot(point - anchor, outward normal)``: positive above the surface,
+    exactly zero on it. This is the whole of the table fix -- a table's link
+    origin sits ~0.9m below its own top, so measuring against the origin
+    reported every end-effector as a metre in the air and set the height scale
+    for every other pair in the scene.
+    """
+    normal = oriented_normal(surface_normal)
+    if normal is None:
+        return None
+    p = np.asarray(point, dtype=float).reshape(-1)
+    a = np.asarray(surface_anchor, dtype=float).reshape(-1)
+    if p.size < 3 or a.size < 3:
+        return None
+    if not (np.all(np.isfinite(p[:3])) and np.all(np.isfinite(a[:3]))):
+        return None
+    return float(np.dot(p[:3] - a[:3], normal))
+
+
 def planar_distance(a: Sequence[float], b: Sequence[float]) -> float:
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)

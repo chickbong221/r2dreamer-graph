@@ -274,6 +274,91 @@ No checkpoint is written or resumed. Corrected relation labels keep their ids
 and change geometric meaning, so mixing old and new transitions would train
 one label to mean two things.
 
+### Goal sites and `reached`
+
+The vocabulary gained an eleventh relation, `reached`, appended after the ten
+so every existing relation id is unchanged -- a trained head reads the relation
+embedding by position, and inserting it beside the other spatial relations
+would have silently rescored every affordance fact. `n_rel` is therefore 12
+including padding; sigma does not grow, because `reached` reuses
+`not-holds`/`holds`. Checkpoints trained against the old vocabulary fail the
+`_relation_masks` size check rather than partially loading.
+
+`reached` is the one relation whose threshold is not mined. It mirrors an
+environment's own success geometry -- PickCube's `goal_thresh`, PullCubeTool's
+0.6m -- read live each frame, so a task that re-randomizes its goal cannot
+drift away from a number frozen at mining time. It carries no `bin_key` and no
+temporal change.
+
+A **site** is goal geometry no segmentation id names. `SiteDeclaration` is what
+the asset stores (the pair, the metric, where the tolerance comes from) and is
+what the compiler validates a `reached` clause against; `SiteSpec` is what a
+provider returns each frame (the live pose, the live tolerance, and the source
+point). `reached` is scorable only for a declared pair, so it cannot decay into
+a generic proximity alias.
+
+Emission is unconditional. The replay potential requires exactly one edge per
+scored relation and masks the whole frame when one is missing, so a site whose
+subject the cameras lost still emits -- both poses are known -- and a provider
+that failed raises rather than letting a stale pose read as a confident
+`not-holds`.
+
+Both the runtime and the calibration collector resolve the pair's source point
+through `sites.site_pair_points`. PegInsertionSide's milestone is the peg
+*head* reaching the hole mouth, not the peg origin reaching it, and calibrating
+bins on one point while reading the other is the same drift `spatial_metrics`
+exists to prevent.
+
+### Current-frame phase gates
+
+A phase may name `requires.all_of` facts that must hold *this frame* before its
+own clauses pay. Nothing else in the scorer consults phase order, so without a
+gate PegInsertionSide's containment ladder pays from across the table.
+
+The gate is deliberately not a latch. It reads the current frame only, so the
+potential stays a function of the observed state and `gamma * Phi' - Phi` still
+telescopes exactly; the price is a transient dip when a gate flickers. It
+multiplies the clause quality alone, never the cumulative-credit branch, so a
+completed later phase still grants full weight and a gate can never cost a
+successful episode its terminal 1.0. Gate facts join the phase's validity set:
+a gate the frame cannot read is not a gate that is closed, it is a frame that
+cannot be scored. Gates are weightless, and a gate carrying weight is rejected
+at compile time -- paying for it would double-count the milestone and break the
+phase's weight sum.
+
+### Structural surfaces
+
+A whitelist member may be marked `structural_surface`: an extended support
+plane, a tabletop rather than a bin. Roles cannot make that distinction -- in
+PlaceSphere the bin and the table carry byte-identical `roles` and
+`interaction_types`, because both are kinematic and both support the sphere --
+so the property is mined from the actor's collision extents and stored, never
+guessed from a name at runtime.
+
+It changes two things. Height is measured against the surface plane,
+`dot(point - anchor, outward normal)`, using a partner-independent
+`reference_surface` on the affordance object; the per-partner
+`SupportComponent` stays for support compatibility, but the end effector needs
+the plane without ever having been supported by anything. And no public
+`planar-distance` edge is emitted for a pair with a structural endpoint,
+because the origin of a metre-wide plane names no place to approach. Internal
+planar geometry is untouched: the near gates that decide whether compatibility
+is scored still read it. The compiler refuses a `planar-distance` clause on
+such a pair, so a schedule reaching for the table's horizontal position fails
+before it runs rather than scoring a fact the runtime never emits.
+
+Support normals are mined from contact forces, so they point *into* the
+supporter -- every table in the shipped assets records `[0, 0, -1]`. Reading
+that literally inverts every height, and `level` being symmetric around zero
+hides it. `spatial_metrics.oriented_normal` re-derives the outward direction at
+read time, so both conventions measure the same sign.
+
+Fail-closed is scoped to the task path being revised. A member marked
+structural with no `reference_surface` raises, because the only fallback is the
+actor origin -- the ~0.9m error the change exists to remove. Legacy MS-HAB
+assets declare no structural surfaces, so the check never fires for them and
+`tidy_house` / `set_table` keep loading unchanged.
+
 ### Scoped spatial calibration
 
 `planar-distance` and `height-offset` stay two relations in the vocabulary and

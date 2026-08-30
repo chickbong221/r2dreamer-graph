@@ -96,7 +96,7 @@ graph:
   e_max: 168
   n_cams: 2
   entity_vocab: 14
-  n_rel: 11
+  n_rel: 12
   n_abs: 19
   n_temp: 6
   layers: 2

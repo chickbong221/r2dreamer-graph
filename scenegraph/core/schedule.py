@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..adapters.graph_vocab import build_absolute_vocab, build_relation_vocab
 from .relation_rules import SPATIAL_RELATIONS
+from .sites import SiteDeclaration, goal_pairs, parse_site_declarations
 from .spatial_metrics import (
     EE_OBJECT_SCOPE,
     OBJECT_OBJECT_SCOPE,
@@ -79,6 +80,12 @@ class Phase:
     weight: float
     clauses: Tuple[Clause, ...]
     completions: Tuple[Clause, ...]
+    # Current-frame gate. The phase earns its clause quality only on frames
+    # where every one of these holds; a completed later phase still grants the
+    # full weight through cumulative credit, so a gate can never cost terminal
+    # potential. Weightless by construction -- a gate that paid would be a
+    # rung, and the ordering it expresses would become a reward of its own.
+    requires: Tuple[Clause, ...] = ()
 
     @property
     def completion(self) -> Clause:
@@ -104,7 +111,8 @@ class CompiledSchedule:
         reads, in stable order. Several rungs usually share one."""
         seen: List[Tuple[int, int, int]] = []
         for phase in self.phases:
-            for clause in (*phase.clauses, *phase.completions):
+            for clause in (*phase.clauses, *phase.completions,
+                           *phase.requires):
                 if clause.slot not in seen:
                     seen.append(clause.slot)
         return tuple(seen)
@@ -131,8 +139,12 @@ def _has(objects: Dict[str, Any], key: str, field: str) -> bool:
     return bool((objects.get(key) or {}).get(field))
 
 
-def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
-                       bin_edges: Dict[str, Any]) -> Dict[str, Dict[str, bool]]:
+def scorable_relations(
+    objects: Dict[str, Any], members: Dict[str, Any],
+    bin_edges: Dict[str, Any],
+    sites: Optional[Dict[str, SiteDeclaration]] = None,
+    structural: Optional[set] = None,
+) -> Dict[str, Dict[str, bool]]:
     """Per pair, which relations the runtime can emit with meaning.
 
     ``contact`` needs both endpoints to carry the token; the compatibility
@@ -142,6 +154,17 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
     clause naming it would score zero forever with nothing to show for it.
     """
     keys = sorted(members)
+    # ``reached`` is scorable only where a validated site declaration names
+    # that exact pair. Without this it would degrade into a generic proximity
+    # alias: any two objects have a distance, but only a declared pair has an
+    # environment tolerance that makes crossing it mean success.
+    declared = goal_pairs(sites or {})
+    reached_on = lambda a, b: tuple(sorted((a, b))) in declared
+    # An extended support plane emits no public planar-distance, so a clause
+    # naming one would score a fact the runtime never produces. Caught here
+    # rather than at the first frame: a schedule that reaches for the table's
+    # horizontal position is describing a goal the scene does not contain.
+    surfaces = set(structural or ())
     # Scope-aware: the ee-object and object-object scales are mined
     # separately, so a pair can be scorable in one and not the other.
     ee_spatial = {r: bool(bin_edges.get(spatial_bin_key(EE_OBJECT_SCOPE, r)))
@@ -155,7 +178,9 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
             "grasp": "grasp" in _types(members, key),
             "grasp-compatibility": _has(objects, key, "grasp_components"),
             "contact-compatibility": _has(objects, key, "contact_components"),
+            "reached": reached_on(EE_KEY, key),
             **ee_spatial,
+            **({"planar-distance": False} if key in surfaces else {}),
         }
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):
@@ -173,7 +198,10 @@ def scorable_relations(objects: Dict[str, Any], members: Dict[str, Any],
                 "contain-compatibility": _pairing(objects, a, b,
                                                   "contain_components",
                                                   "key_components"),
+                "reached": reached_on(a, b),
                 **obj_spatial,
+                **({"planar-distance": False}
+                   if (a in surfaces or b in surfaces) else {}),
             }
     return out
 
@@ -186,8 +214,10 @@ def _pairing(objects, a: str, b: str, host: str, guest: str) -> bool:
 # --------------------------------------------------------------------------- #
 # compilation
 # --------------------------------------------------------------------------- #
-def load_assets(env_id: str, configs: str) -> Tuple[Dict, Dict, Dict]:
-    """``(objects, members, bin_edges)`` for one task."""
+def load_assets(
+    env_id: str, configs: str,
+) -> Tuple[Dict, Dict, Dict, Dict[str, SiteDeclaration], set]:
+    """``(objects, members, bin_edges, sites, structural_surfaces)``."""
     aff = os.path.join(configs, "affordances", f"{env_id}.json")
     wl = os.path.join(configs, "subtask_whitelists", env_id, "task_all.json")
     for path in (aff, wl):
@@ -199,7 +229,22 @@ def load_assets(env_id: str, configs: str) -> Tuple[Dict, Dict, Dict]:
         objects = json.load(handle).get("objects", {})
     with open(wl) as handle:
         whitelist = json.load(handle)
-    return objects, whitelist.get("members", {}), whitelist.get("bin_edges", {})
+    sites = parse_site_declarations(whitelist.get("sites"), where=env_id)
+    members = whitelist.get("members", {})
+    structural = {
+        key for key, entry in members.items()
+        if isinstance(entry, dict) and entry.get("structural_surface")
+    }
+    for key, decl in sites.items():
+        for named in (key, decl.subject_key):
+            if named != EE_KEY and named not in members:
+                raise ScheduleError(
+                    f"{env_id}: site {key!r} names {named!r}, which is not a "
+                    "whitelist member. A site and its subject both need "
+                    "vocabulary rows before a frame can resolve them."
+                )
+    return (objects, members, whitelist.get("bin_edges", {}), sites,
+            structural)
 
 
 def _order(a_key: str, b_key: str) -> Tuple[str, str, bool]:
@@ -231,7 +276,10 @@ def _resolve_labels(relation: str, labels: Sequence[str], swapped: bool,
 
 def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                      members: Dict[str, Any], bin_edges: Dict[str, Any],
-                     entity_vocab) -> CompiledSchedule:
+                     entity_vocab,
+                     sites: Optional[Dict[str, SiteDeclaration]] = None,
+                     structural: Optional[set] = None,
+                     ) -> CompiledSchedule:
     """Validate and translate one schedule. Raises on anything unscorable."""
     env_id = str(raw.get("env_id") or "?")
     version = int(raw.get("_schema_version", 0))
@@ -267,7 +315,8 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                 "entity vocabulary. Re-mine the task."
             ) from None
 
-    scorable = scorable_relations(objects, members, bin_edges)
+    scorable = scorable_relations(
+        objects, members, bin_edges, sites, structural)
     relations, absolute = build_relation_vocab(), build_absolute_vocab()
 
     def entity_id(key: str) -> int:
@@ -298,6 +347,8 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                 f"{weight:.6f}. A phase that cannot reach its own weight can "
                 "never be completed."
             )
+        requires = _phase_requires(
+            rawphase, key_of, scorable, relations, absolute, entity_id, where)
         completion = dict(rawphase.get("completion") or {})
         if "all_of" in completion:
             if set(completion) != {"all_of"}:
@@ -328,7 +379,7 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
             ))
         phases.append(Phase(
             name=name, weight=weight, clauses=clauses,
-            completions=tuple(completions),
+            completions=tuple(completions), requires=requires,
         ))
 
     if not phases:
@@ -341,6 +392,56 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
         )
     return CompiledSchedule(env_id=env_id, roles=roles,
                             role_entity_ids=role_ids, phases=tuple(phases))
+
+
+def _phase_requires(rawphase: Dict[str, Any], key_of, scorable, relations,
+                    absolute, entity_id, where: str) -> Tuple[Clause, ...]:
+    """Compile a phase's current-frame gate.
+
+    ``requires`` says *when* a phase's rungs pay, not *what* they pay for. Peg
+    needs its containment ladder inert until the peg head has reached the hole
+    mouth and touched the box, because otherwise the alignment reward is
+    available from across the table and the schedule stops describing an order
+    at all.
+
+    Deliberately not a latch. The gate reads only this frame, so the potential
+    stays a function of the observed state and ``gamma * Phi' - Phi`` still
+    telescopes exactly. The price is a transient dip when a gate flickers,
+    which is the trade the schedule owner accepted.
+    """
+    raw = rawphase.get("requires")
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict) or set(raw) != {"all_of"}:
+        raise ScheduleError(
+            f"{where}/requires: expected an object with exactly one key "
+            "'all_of'"
+        )
+    items = raw["all_of"]
+    if not isinstance(items, list) or not items:
+        raise ScheduleError(
+            f"{where}/requires: 'all_of' must be a non-empty list"
+        )
+    out: List[Clause] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ScheduleError(
+                f"{where}/requires: every 'all_of' item must be a clause"
+            )
+        if float(item.get("weight", 0.0)) != 0.0:
+            raise ScheduleError(
+                f"{where}/requires: a gate cannot carry weight. It decides "
+                "whether the phase's own clauses pay; paying for it as well "
+                "would double-count the milestone and break the phase's "
+                "weight sum."
+            )
+        entry = dict(item)
+        entry.setdefault("src", rawphase.get("src", EE_ROLE))
+        entry.setdefault("dst", rawphase.get("dst", EE_ROLE))
+        entry["weight"] = 0.0
+        out.append(_clause(entry, key_of, scorable, relations, absolute,
+                           entity_id, f"{where}/requires"))
+    return tuple(out)
 
 
 def _clause(raw: Dict[str, Any], key_of, scorable, relations, absolute,
@@ -417,5 +518,8 @@ def compile_from_files(env_id: str, schedule_dir: str, configs: str,
         )
     with open(path) as handle:
         raw = json.load(handle)
-    objects, members, bin_edges = load_assets(env_id, configs)
-    return compile_schedule(raw, objects, members, bin_edges, entity_vocab)
+    objects, members, bin_edges, sites, structural = load_assets(
+        env_id, configs)
+    return compile_schedule(
+        raw, objects, members, bin_edges, entity_vocab, sites=sites,
+        structural=structural)

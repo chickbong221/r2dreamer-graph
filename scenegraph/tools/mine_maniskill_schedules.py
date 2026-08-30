@@ -36,6 +36,7 @@ from scenegraph.core.schedule import (
     load_assets,
     scorable_relations,
 )
+from scenegraph.core.sites import declaration_to_dict
 from scenegraph.tools.build_maniskill_assets import load_shards
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -368,7 +369,8 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
     a schedule that cannot exist.
     """
     try:
-        objects, members, bins = load_assets(env_id, str(configs))
+        objects, members, bins, sites, structural = load_assets(
+            env_id, str(configs))
     except ScheduleError as exc:
         raise SystemExit(
             f"{exc} Without them the bundle cannot say which clauses are "
@@ -395,7 +397,16 @@ def clause_inventory(env_id: str, configs: Path) -> Dict[str, Any]:
         "spatial_bins": {spatial_bin_key(scope, r): bool(
             bins.get(spatial_bin_key(scope, r)))
             for scope in SPATIAL_SCOPES for r in SPATIAL_RELATIONS},
-        "scorable": scorable_relations(objects, members, bins),
+        "scorable": scorable_relations(
+            objects, members, bins, sites, structural),
+        # Named so a reviewer can see why a table pair offers no planar rung.
+        "structural_surfaces": sorted(structural),
+        # Which pairs carry an exact environment tolerance, and where that
+        # tolerance came from. A reviewer reading the bundle should be able to
+        # tell a mined proximity bin from a task's own success geometry.
+        "sites": {
+            key: declaration_to_dict(decl) for key, decl in sorted(sites.items())
+        },
     }
 
 

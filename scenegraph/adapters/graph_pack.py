@@ -23,6 +23,7 @@ import numpy as np
 
 from ..core.relation_rules import (
     AFFORDANCE_RELATIONS,
+    GOAL_RELATIONS,
     PHYSICAL_RELATIONS,
     TEMPORAL_RELATIONS,
 )
@@ -34,11 +35,19 @@ from .graph_vocab import GraphVocab, entity_key_for
 # imported so this package never reaches into the model package.
 _PHYSICAL = frozenset(PHYSICAL_RELATIONS)
 _AFFORDANCE = frozenset(AFFORDANCE_RELATIONS)
+_GOAL = frozenset(GOAL_RELATIONS)
 
 
 def _edge_priority(edge) -> int:
-    """Deterministic order: physical state, then affordance, then spatial."""
-    if edge.relation in _PHYSICAL:
+    """Deterministic order: goal and physical state, then affordance, then
+    spatial.
+
+    Goal facts sort with the physical milestones rather than with the spatial
+    family they resemble. Overflow raises rather than truncates, so this is
+    ordering and not survival -- but a scheduled terminal milestone belongs
+    beside the other things a phase completes on.
+    """
+    if edge.relation in _GOAL or edge.relation in _PHYSICAL:
         return 0
     if edge.relation in _AFFORDANCE:
         return 1

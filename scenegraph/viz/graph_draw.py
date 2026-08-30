@@ -29,6 +29,7 @@ from .palette import ColorMap
 _FAMILY_PHYSICAL_STATE = "physical_state"
 _FAMILY_SPATIAL = "spatial"
 _FAMILY_AFFORDANCE = "affordance"
+_FAMILY_GOAL = "goal"
 
 _RELATION_FAMILY: Dict[str, str] = {
     "contact": _FAMILY_PHYSICAL_STATE,
@@ -41,15 +42,18 @@ _RELATION_FAMILY: Dict[str, str] = {
     "contact-compatibility": _FAMILY_AFFORDANCE,
     "support-compatibility": _FAMILY_AFFORDANCE,
     "contain-compatibility": _FAMILY_AFFORDANCE,
+    "reached": _FAMILY_GOAL,
 }
 
-_FAMILY_ORDER = (_FAMILY_PHYSICAL_STATE, _FAMILY_SPATIAL, _FAMILY_AFFORDANCE)
+_FAMILY_ORDER = (_FAMILY_PHYSICAL_STATE, _FAMILY_SPATIAL, _FAMILY_AFFORDANCE,
+                 _FAMILY_GOAL)
 
 _INTRA_FAMILY_ORDER = {
     _FAMILY_PHYSICAL_STATE: ("contact", "grasp", "support", "contain"),
     _FAMILY_SPATIAL: ("planar-distance", "height-offset"),
     _FAMILY_AFFORDANCE: ("grasp-compatibility", "contact-compatibility",
                          "support-compatibility", "contain-compatibility"),
+    _FAMILY_GOAL: ("reached",),
 }
 
 # Predicate states are useful to the model, but they are not relations a
@@ -60,11 +64,14 @@ _HIDDEN_LABELS = {"not-holds", "unobserved"}
 _POSITIVE_PHYSICAL_LABELS = {"holds", "src-holds", "dst-holds"}
 
 # Per-family chip styling. Affordance uses a green palette so it doesn't
-# read as the same family as the (also light+cool) spatial blue.
+# read as the same family as the (also light+cool) spatial blue. Goal takes a
+# warm violet: it is a terminal milestone, so it should not read as either the
+# spatial ladder that leads to it or the physical state it sits beside.
 _FAMILY_STYLE: Dict[str, Dict[str, str]] = {
     _FAMILY_PHYSICAL_STATE: {"bg": "#ffe0c2", "edge": "#c25a00", "text": "#5a2900"},
     _FAMILY_SPATIAL:        {"bg": "#d4e7ff", "edge": "#2f6ec2", "text": "#13396b"},
     _FAMILY_AFFORDANCE:     {"bg": "#d8f0dc", "edge": "#3a8f5b", "text": "#1c4a2b"},
+    _FAMILY_GOAL:           {"bg": "#e8dcf5", "edge": "#7a4fb5", "text": "#3c2160"},
 }
 
 # Chip layout scales with n_obj: small graphs use a large, easily readable

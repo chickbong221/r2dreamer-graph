@@ -8,6 +8,9 @@ temporal buffer.
   ``support`` / ``contain`` (obj--obj, directed). Binary and mutually
   independent -- a grasped object is also in contact.
 * spatial (ee--obj): ``planar-distance``, ``height-offset``.
+* goal-spatial: ``reached`` (obj--site). Binary, terminal, and measured
+  against the environment's own tolerance rather than a mined bin, so it is
+  emitted only for pairs a validated :class:`SiteSpec` declares.
 * affordance: ``grasp-`` / ``contact-`` / ``support-`` / ``contain-
   compatibility``. Scored for every admissible instance; the near gate only
   picks the label, emitting ``unobserved`` when far. Scoring outside the gate
@@ -27,7 +30,7 @@ emitted, so a token never means a hand-picked distance.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -41,6 +44,7 @@ from .affordance import (
     lookup_contain_components,
     lookup_bottom_components,
     lookup_key_components,
+    lookup_reference_surface,
     lookup_support_components,
     select_active_component,
     transform_anchors,
@@ -51,6 +55,7 @@ from .containment import (
     obj_contact_compatibility,
     support_compatibility,
 )
+from .sites import SiteSpec, reached_holds, site_distance
 from .schema import Edge, Graph, Node
 from ..adapters.privileged_state import PrivilegedState
 
@@ -64,8 +69,14 @@ AFFORDANCE_RELATIONS: Tuple[str, ...] = (
     "grasp-compatibility", "contact-compatibility",
     "support-compatibility", "contain-compatibility",
 )
+# Goal-spatial. Binary and terminal: the environment's own success geometry,
+# not a mined scale, so it carries no bin key and no temporal change. Appended
+# last on purpose -- inserting it beside the other spatial relations would
+# shift every affordance relation id and silently invalidate trained heads.
+GOAL_RELATIONS: Tuple[str, ...] = ("reached",)
 RELATION_TYPES: Tuple[str, ...] = (
     PHYSICAL_RELATIONS + SPATIAL_RELATIONS + AFFORDANCE_RELATIONS
+    + GOAL_RELATIONS
 )
 
 # Relations that carry a temporal-change label (mu^rho == 1).
@@ -126,6 +137,8 @@ def abs_labels_for() -> Dict[str, List[str]]:
         **{r: PHYSICAL_LABELS for r in PHYSICAL_RELATIONS},
         **SPATIAL_LABELS,
         **{r: COMPAT_LABELS for r in AFFORDANCE_RELATIONS},
+        # Reuses the physical pair, so sigma does not grow.
+        **{r: PHYSICAL_LABELS for r in GOAL_RELATIONS},
     }
     for relation in DIRECTED_RELATIONS:
         labels[relation] = DIRECTIONAL_PHYSICAL_LABELS
@@ -311,6 +324,89 @@ def height_offset(a: Node, b: Node) -> Optional[float]:
     if pa is None or pb is None:
         return None
     return height_offset_xyz(pa, pb)
+
+
+# --------------------------------------------------------------------------- #
+# Structural surfaces
+# --------------------------------------------------------------------------- #
+def structural_surface_keys(cfg: dict) -> Set[str]:
+    """Whitelist keys the asset marked as extended support planes."""
+    return set(cfg.get("structural_surfaces") or ())
+
+
+def is_structural_surface(node: Node, cfg: dict) -> bool:
+    key = _whitelist_key(node)
+    return bool(key) and key in structural_surface_keys(cfg)
+
+
+def reference_plane_world(node: Node, aff_set):
+    """``(anchor world, outward normal world)`` for a structural surface.
+
+    Raises rather than falling back. A member the asset called structural but
+    never gave a plane cannot be measured against its surface, and the only
+    available fallback -- the actor origin -- is the ~0.9m error this whole
+    change exists to remove. Failing closed here is what makes the mined
+    property load-bearing instead of advisory.
+    """
+    surface = lookup_reference_surface(aff_set, node) if aff_set else None
+    if surface is None:
+        raise ValueError(
+            f"{_whitelist_key(node)!r} is marked structural_surface but its "
+            "affordance asset carries no 'reference_surface'. Height would "
+            "fall back to the actor origin, which for a table sits ~0.9m "
+            "below its own top. Re-mine the task's assets."
+        )
+    if node.pose_world is None:
+        return None
+    anchor = spatial_metrics.anchor_world(
+        node.pose_world, surface.anchor_obj_frame)
+    rot = _quat_rot(node.pose_world)
+    if anchor is None or rot is None:
+        return None
+    normal = rot @ np.asarray(
+        surface.outward_normal_obj_frame, dtype=float).reshape(3)
+    return anchor, normal
+
+
+def _quat_rot(pose7) -> Optional[np.ndarray]:
+    pose = np.asarray(pose7, dtype=float).reshape(-1)
+    if pose.size < 7 or not np.all(np.isfinite(pose[:7])):
+        return None
+    w, x, y, z = pose[3:7]
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ], dtype=float)
+
+
+def _bottom_point(node: Node, partner_key: Optional[str], aff_set):
+    """The node's lower contact point in world, or its origin.
+
+    A sphere's bottom is ``centre - r * up`` whatever its quaternion says, so a
+    ball rolling in place keeps a constant height above the table.
+    """
+    comps = components_for_partner(
+        lookup_bottom_components(aff_set, node), partner_key) if aff_set else []
+    if len(comps) == 1:
+        point = spatial_metrics.anchor_world(
+            node.pose_world,
+            getattr(comps[0], "bottom_anchor_obj_frame", None),
+            getattr(comps[0], "radial_offset", None),
+        )
+        if point is not None:
+            return point
+    return _xyz(node)
+
+
+def surface_relative_height(
+    surface_node: Node, point: np.ndarray, aff_set,
+) -> Optional[float]:
+    """Height of a world point above a structural surface's plane."""
+    plane = reference_plane_world(surface_node, aff_set)
+    if plane is None or point is None:
+        return None
+    return spatial_metrics.surface_height(point, plane[0], plane[1])
 
 
 def _resolve_entity(
@@ -519,10 +615,15 @@ def ee_object_spatial_edges(
     pd_spec = _get_bin_spec(cfg, pd_key)
     ho_spec = _get_bin_spec(cfg, ho_key)
 
+    aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
     for node in _ee_object_nodes(graph):
         obj_xyz = _xyz(node)
-        if pd_spec is not None:
+        structural = is_structural_surface(node, cfg)
+        # A structural surface's origin names no place to approach: it is the
+        # centre of a metre-wide plane, so the planar distance to it says
+        # nothing the policy can act on. The height above it says a great deal.
+        if pd_spec is not None and not structural:
             d = planar_distance_xyz(ee_xyz, obj_xyz)
             edges.append(Edge(
                 "ee", node.node_id, "planar-distance",
@@ -530,7 +631,12 @@ def ee_object_spatial_edges(
                 bin_key=pd_key,
             ))
         if ho_spec is not None:
-            dz = height_offset_xyz(ee_xyz, obj_xyz)
+            if structural:
+                dz = surface_relative_height(node, ee_xyz, aff_set)
+                if dz is None:
+                    continue
+            else:
+                dz = height_offset_xyz(ee_xyz, obj_xyz)
             edges.append(Edge(
                 "ee", node.node_id, "height-offset",
                 bin_label(dz, ho_spec[0], ho_spec[1]), raw_value=dz,
@@ -1017,7 +1123,20 @@ def object_object_spatial_edges(
     edges: List[Edge] = []
     for a, b in _object_pairs(graph):
         d, dz = object_pair_measures(a, b, aff_set)
-        if pd_spec is not None:
+        surface = (a if is_structural_surface(a, cfg)
+                   else b if is_structural_surface(b, cfg) else None)
+        if surface is not None:
+            other = b if surface is a else a
+            height = surface_relative_height(
+                surface, _bottom_point(other, _whitelist_key(surface), aff_set),
+                aff_set)
+            if height is None:
+                continue
+            # The label is read in ``a - b`` order, so a surface in the first
+            # position inverts: "table above cube" is the cube's height below
+            # the tabletop.
+            dz = height if surface is b else -height
+        if pd_spec is not None and surface is None:
             edges.append(Edge(
                 a.node_id, b.node_id, "planar-distance",
                 bin_label(d, pd_spec[0], pd_spec[1]), raw_value=d,
@@ -1032,12 +1151,82 @@ def object_object_spatial_edges(
     return edges
 
 
+# --------------------------------------------------------------------------- #
+# goal sites
+# --------------------------------------------------------------------------- #
+def _node_for_key(graph: Graph, key: str) -> Optional[Node]:
+    """The single node carrying ``key``, or None. Several is not a match.
+
+    Two nodes under one entity key would make the pair ambiguous, and the
+    replay potential already refuses to guess between them; refusing here keeps
+    the two refusals consistent instead of emitting an edge the scorer will
+    then discard.
+    """
+    hits = [n for n in graph.nodes
+            if (n.attributes or {}).get("whitelist_key") == key]
+    return hits[0] if len(hits) == 1 else None
+
+
+def goal_edges(graph: Graph, state: PrivilegedState, cfg: dict) -> List[Edge]:
+    """One ``reached`` fact per declared site pair, every frame.
+
+    Unconditional by contract. The replay potential requires exactly one edge
+    per scored relation and masks the entire frame when one is missing, so a
+    subject the cameras lost still emits -- its pose and the site's are both
+    known -- and a provider that failed raises here rather than letting a stale
+    pose be read as a confident ``not-holds``.
+
+    Endpoints are stored in ``pair_sort_key`` order, the same order the
+    schedule compiler resolves a clause to, so a clause written subject-first
+    finds the fact whichever way the keys happen to sort.
+    """
+    specs: Sequence[SiteSpec] = cfg.get("site_specs") or ()
+    if not specs:
+        return []
+    edges: List[Edge] = []
+    for spec in specs:
+        spec.validate(f"{graph.env_id}/frame {graph.frame}")
+        site_node = _node_for_key(graph, spec.key)
+        subject_node = _node_for_key(graph, spec.subject_key)
+        if site_node is None or subject_node is None:
+            missing = spec.key if site_node is None else spec.subject_key
+            raise ValueError(
+                f"reached({spec.subject_key!r}, {spec.key!r}) cannot be "
+                f"emitted: no unique node for {missing!r} at frame "
+                f"{graph.frame}. A scheduled site pair has to resolve every "
+                "frame -- a missing fact masks the whole frame's potential "
+                "rather than scoring zero."
+            )
+        distance = site_distance(spec, subject_node.pose_world)
+        held = reached_holds(spec, subject_node.pose_world)
+        if distance is None or held is None:
+            raise ValueError(
+                f"reached({spec.subject_key!r}, {spec.key!r}) is unresolvable "
+                f"at frame {graph.frame}: the subject or the site has no "
+                "finite pose."
+            )
+        a, b = sorted((subject_node, site_node), key=pair_sort_key)
+        edges.append(Edge(
+            a.node_id, b.node_id, "reached",
+            HOLDS if held else NOT_HOLDS,
+            raw_value=distance,
+            attributes={
+                "site_key": spec.key,
+                "subject_key": spec.subject_key,
+                "metric": spec.metric,
+                "tolerance": float(spec.tolerance),
+            },
+        ))
+    return edges
+
+
 def build_absolute_edges(
     graph: Graph, state: PrivilegedState, cfg: dict,
     initial_physical_pairs: Optional[Set[Tuple[str, str]]] = None,
     capture_initial: bool = False,
 ) -> None:
     """Append every admissible fact to ``graph.edges`` in place."""
+    graph.edges.extend(goal_edges(graph, state, cfg))
     graph.edges.extend(ee_object_spatial_edges(graph, state, cfg))
     graph.edges.extend(ee_object_physical_edges(graph, state, cfg))
     graph.edges.extend(ee_object_affordance_edges(graph, state, cfg))

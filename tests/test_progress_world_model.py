@@ -28,7 +28,7 @@ from progress import (
 )
 
 N_ABS = progress.N_ABS
-N_REL = 11
+N_REL = 12
 
 
 class ScheduleCompletionConjunctionTest(unittest.TestCase):
@@ -129,6 +129,183 @@ class ScheduleCompletionConjunctionTest(unittest.TestCase):
 
         self.assertAlmostEqual(potential(False), 0.25, places=6)
         self.assertAlmostEqual(potential(True), 1.0, places=6)
+
+
+
+class ScheduleRequiresGateTest(unittest.TestCase):
+    """A phase's current-frame gate.
+
+    The gate is what makes PegInsertionSide's ordering real: nothing else in
+    the scorer consults phase order, so without it the containment ladder pays
+    from across the table. It is deliberately not a latch -- it reads this
+    frame only, so the potential stays a function of the observed state and the
+    shaping term still telescopes.
+    """
+
+    def _compiled(self):
+        from scenegraph.adapters.graph_vocab import (
+            EE_TOKEN,
+            PAD_TOKEN,
+            EntityVocab,
+        )
+        from scenegraph.core.schedule import compile_schedule
+        from scenegraph.core.spatial_metrics import (
+            SPATIAL_SCOPES,
+            spatial_bin_key,
+        )
+
+        objects = {
+            "actor:cubeA": {"contact_components": [{}]},
+            "actor:cubeB": {"contact_components": [{}]},
+            "actor:table": {"contact_components": [{}]},
+        }
+        members = {key: {"interaction_types": ["contact"]} for key in objects}
+        bins = {
+            spatial_bin_key(scope, relation): [0.1, 0.2, 0.3, 0.4]
+            for scope in SPATIAL_SCOPES
+            for relation in ("planar-distance", "height-offset")
+        }
+        vocab = EntityVocab(token_to_id={
+            PAD_TOKEN: 0, EE_TOKEN: 1, "actor:cubeA": 2, "actor:cubeB": 3,
+            "actor:table": 4,
+        })
+        fact = lambda src, dst: {
+            "relation": "contact", "src": src, "dst": dst, "labels": ["holds"],
+        }
+        clause = lambda src, dst, weight: {**fact(src, dst), "weight": weight}
+        raw = {
+            "_schema_version": 1,
+            "env_id": "Gated-v1",
+            "roles": {
+                "movable": "actor:cubeA",
+                "destination": "actor:cubeB",
+                "surface": "actor:table",
+            },
+            "phases": [
+                {
+                    "name": "reach", "weight": 0.3,
+                    "clauses": [clause("ee", "movable", 0.3)],
+                    "completion": fact("ee", "movable"),
+                },
+                {
+                    "name": "align", "weight": 0.3,
+                    # Gated on a fact it does not otherwise score, so the test
+                    # isolates the gate from the phase's own rung.
+                    "requires": {"all_of": [fact("movable", "surface")]},
+                    "clauses": [clause("movable", "destination", 0.3)],
+                    "completion": fact("movable", "destination"),
+                },
+                {
+                    "name": "settle", "weight": 0.4,
+                    "clauses": [clause("destination", "surface", 0.4)],
+                    "completion": fact("destination", "surface"),
+                },
+            ],
+        }
+        return compile_schedule(raw, objects, members, bins, vocab)
+
+    def setUp(self):
+        from scenegraph.adapters.graph_vocab import build_absolute_vocab
+
+        self.schedule = self._compiled()
+        self.absolute = build_absolute_vocab()
+        self.scorer = TaskScheduleReplayPotential(
+            self.schedule, len(self.absolute))
+        self.entities = list(self.schedule.entity_ids)
+        self.row = {e: i for i, e in enumerate(self.entities)}
+        self.slots = list(self.schedule.slots)
+        # (relation, src, dst) -> which fact each slot is, by role pair.
+        keys = {"ee": 1, "actor:cubeA": 2, "actor:cubeB": 3, "actor:table": 4}
+        self.slot_name = {}
+        for slot in self.slots:
+            src = next(k for k, v in keys.items() if v == slot[1])
+            dst = next(k for k, v in keys.items() if v == slot[2])
+            self.slot_name[(src, dst)] = slot
+
+    def _score(self, holding, drop=()):
+        """``(potential, valid)`` for one frame.
+
+        ``holding`` names the slots whose label is ``holds``; ``drop`` names
+        slots to leave out of the packed graph entirely, which is a different
+        thing from a fact that is false.
+        """
+        holds = self.absolute.encode("holds")
+        not_holds = self.absolute.encode("not-holds")
+        rel, abs_, src, dst = [], [], [], []
+        for pair, slot in self.slot_name.items():
+            if pair in drop:
+                continue
+            rel.append(slot[0])
+            abs_.append(holds if pair in holding else not_holds)
+            src.append(self.row[slot[1]])
+            dst.append(self.row[slot[2]])
+        value, valid = self.scorer(
+            torch.tensor([self.entities]),
+            torch.tensor(rel), torch.tensor(abs_),
+            torch.tensor(src), torch.tensor(dst),
+            torch.zeros(len(rel), dtype=torch.long), 1,
+        )
+        return float(value.item()), bool(valid.item())
+
+    ALL = (("ee", "actor:cubeA"), ("actor:cubeA", "actor:cubeB"),
+           ("actor:cubeA", "actor:table"), ("actor:cubeB", "actor:table"))
+    GATE = ("actor:cubeA", "actor:table")
+    SETTLE = ("actor:cubeB", "actor:table")
+
+    def test_an_open_gate_lets_the_phase_score(self):
+        value, valid = self._score(holding=self.ALL)
+        self.assertTrue(valid)
+        self.assertAlmostEqual(value, 1.0, places=6)
+
+    def test_a_closed_gate_costs_the_phase_its_quality(self):
+        """Everything the phase itself names still holds; only the gate is
+        false. The 0.3 it would have earned is withheld."""
+        without_settle = tuple(p for p in self.ALL if p != self.SETTLE)
+        open_gate, _ = self._score(holding=without_settle)
+        closed = tuple(p for p in without_settle if p != self.GATE)
+        shut_gate, _ = self._score(holding=closed)
+        self.assertAlmostEqual(open_gate, 0.6, places=6)
+        self.assertAlmostEqual(shut_gate, 0.3, places=6)
+
+    def test_cumulative_credit_overrides_a_closed_gate(self):
+        """Once a later phase has completed, this one was passed through.
+        Re-asking whether its entry condition still holds would take back
+        progress the episode already made."""
+        value, valid = self._score(
+            holding=tuple(p for p in self.ALL if p != self.GATE))
+        self.assertTrue(valid)
+        self.assertAlmostEqual(value, 1.0, places=6)
+
+    def test_a_gate_cannot_cost_a_successful_episode_its_terminal_one(self):
+        """The acceptance criterion the gate must never break."""
+        for gate_held in (True, False):
+            holding = self.ALL if gate_held else tuple(
+                p for p in self.ALL if p != self.GATE)
+            value, valid = self._score(holding=holding)
+            self.assertTrue(valid)
+            self.assertAlmostEqual(value, 1.0, places=6)
+
+    def test_a_missing_gate_fact_invalidates_the_frame(self):
+        """A gate the frame cannot read is not a gate that is closed -- it is
+        a frame that cannot be scored."""
+        without_settle = tuple(p for p in self.ALL if p != self.SETTLE)
+        _, valid = self._score(holding=without_settle, drop=(self.GATE,))
+        self.assertFalse(valid)
+
+    def test_a_missing_gate_fact_is_survivable_once_a_later_phase_completed(self):
+        _, valid = self._score(holding=self.ALL, drop=(self.GATE,))
+        self.assertTrue(valid)
+
+    def test_the_gate_carries_no_temporal_state(self):
+        """Same frame, same potential -- whatever came before it. This is what
+        keeps gamma * Phi' - Phi telescoping."""
+        without_settle = tuple(p for p in self.ALL if p != self.SETTLE)
+        closed = tuple(p for p in without_settle if p != self.GATE)
+        first, _ = self._score(holding=closed)
+        self._score(holding=self.ALL)          # gate opens, phase completes
+        again, _ = self._score(holding=closed)  # and closes again
+        self.assertAlmostEqual(first, again, places=6)
+
 
 # The scorer's own relation order, which is the stage table's order of first
 # appearance -- not the relation vocabulary's.

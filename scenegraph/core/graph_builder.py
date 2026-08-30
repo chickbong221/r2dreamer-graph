@@ -225,6 +225,12 @@ class GraphBuilder:
                 "tools/prepare_assets.py."
             )
         self.cfg["bin_edges"] = bin_edges
+        # Which members are extended support planes, and the goal geometry the
+        # scene has no actor for. Both are read off the same union asset the
+        # bins come from, so a run cannot end up measuring against one asset's
+        # surfaces while labelling with another's scale.
+        self.cfg["structural_surfaces"] = set(union.structural_surfaces)
+        self.cfg["site_declarations"] = dict(union.sites)
         self._bin_edges_subtask = subtask
 
     def _check_task_group(self, whitelist, path: str) -> None:

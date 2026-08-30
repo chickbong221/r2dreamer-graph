@@ -24,7 +24,7 @@ def make_config(args):
         bbox=8,
         reverse_edges=True,
         entity_vocab=14,
-        n_rel=11,
+        n_rel=12,
         n_abs=19,
         n_temp=6,
         act="SiLU",

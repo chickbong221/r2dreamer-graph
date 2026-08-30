@@ -119,6 +119,24 @@ class KeyComponent:
 
 
 @dataclass
+class ReferenceSurface:
+    """The one extended support plane an object presents, partner-independent.
+
+    Distinct from :class:`SupportComponent`, which is mined per partner: a
+    table carries different things at different places, so its support anchors
+    describe pairs. The tabletop itself is one plane whatever is on it, and the
+    end effector needs it without ever having been supported by anything.
+
+    ``outward_normal_obj_frame`` points away from the surface. Mining writes it
+    that way; :func:`spatial_metrics.oriented_normal` re-derives it at read
+    time so an asset carrying the old force-direction convention still measures
+    the right sign.
+    """
+    anchor_obj_frame: np.ndarray
+    outward_normal_obj_frame: np.ndarray
+
+
+@dataclass
 class AffordanceSet:
     """Per-relation component lists, keyed by canonical object id.
 
@@ -132,11 +150,14 @@ class AffordanceSet:
     bottom_by_object: Dict[str, List[BottomComponent]] = field(default_factory=dict)
     contain_by_object: Dict[str, List[ContainComponent]] = field(default_factory=dict)
     key_by_object: Dict[str, List[KeyComponent]] = field(default_factory=dict)
+    reference_surface_by_object: Dict[str, ReferenceSurface] = field(
+        default_factory=dict)
 
     def is_empty(self) -> bool:
         return not (
             self.by_object or self.contact_by_object or self.support_by_object
             or self.bottom_by_object or self.contain_by_object or self.key_by_object
+            or self.reference_surface_by_object
         )
 
 
@@ -309,6 +330,25 @@ def _parse_contain_components(comps_raw) -> List[ContainComponent]:
     return out
 
 
+def _parse_reference_surface(raw) -> Optional[ReferenceSurface]:
+    """Parse ``reference_surface``. Half a surface is not a surface.
+
+    An anchor with no normal cannot say which way is up off the plane, and a
+    normal with no anchor has no plane to be off. Either alone is dropped
+    rather than defaulted, so a structural surface that failed to mine fails
+    the runtime's fail-closed check instead of quietly measuring from the
+    object origin again.
+    """
+    if not isinstance(raw, dict):
+        return None
+    anchor = _parse_vec3(raw.get("anchor"))
+    normal = _parse_unit_vec3(raw.get("outward_normal"))
+    if anchor is None or normal is None:
+        return None
+    return ReferenceSurface(
+        anchor_obj_frame=anchor, outward_normal_obj_frame=normal)
+
+
 def _parse_key_components(comps_raw) -> List[KeyComponent]:
     out: List[KeyComponent] = []
     if not isinstance(comps_raw, list):
@@ -379,6 +419,10 @@ def load_affordance_set(path: Optional[str]) -> AffordanceSet:
         keyc = _parse_key_components(entry.get("key_components"))
         if keyc:
             out.key_by_object[str(key)] = keyc
+
+        surface = _parse_reference_surface(entry.get("reference_surface"))
+        if surface is not None:
+            out.reference_surface_by_object[str(key)] = surface
     return out
 
 
@@ -537,9 +581,12 @@ def select_active_component(
 _T = TypeVar("_T")
 
 
-def _lookup_in(
-    table: Dict[str, List[_T]], node: Node,
-) -> Optional[List[_T]]:
+def _lookup_in(table: Dict[str, _T], node: Node) -> Optional[_T]:
+    """Resolve a node against a per-object table under every key it may carry.
+
+    Generic in the value type: most tables hold component lists, the reference
+    surface holds one object, and the key resolution is identical for both.
+    """
     if not table:
         return None
 
@@ -593,6 +640,15 @@ def lookup_support_components(
     if aff_set is None:
         return None
     return _lookup_in(aff_set.support_by_object, node)
+
+
+def lookup_reference_surface(
+    aff_set: AffordanceSet, node: Node,
+) -> Optional[ReferenceSurface]:
+    """The object's own support plane, or None if it declares none."""
+    if aff_set is None:
+        return None
+    return _lookup_in(aff_set.reference_surface_by_object, node)
 
 
 def lookup_bottom_components(

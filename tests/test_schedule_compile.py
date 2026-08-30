@@ -20,6 +20,7 @@ from scenegraph.core.schedule import (
     compile_schedule,
     scorable_relations,
 )
+from scenegraph.core.sites import parse_site_declarations
 
 OBJECTS = {
     "actor:cubeA": {"grasp_components": [{}], "contact_components": [{}],
@@ -399,3 +400,162 @@ class ShippedScheduleTest(unittest.TestCase):
         for clause in phase.clauses:
             self.assertEqual(clause.src_key, "actor:cube")
             self.assertEqual(clause.dst_key, "actor:l_shape_tool")
+
+
+# --------------------------------------------------------------------------- #
+# goal sites
+# --------------------------------------------------------------------------- #
+SITE_MEMBERS = dict(MEMBERS, **{"actor:goal": {"interaction_types": []}})
+SITE_VOCAB = EntityVocab(token_to_id={
+    PAD_TOKEN: 0, EE_TOKEN: 1, "actor:cubeA": 2, "actor:cubeB": 3,
+    "actor:table": 4, "actor:goal": 5,
+})
+SITES = parse_site_declarations({"actor:goal": {
+    "site_type": "point", "subject": "actor:cubeA", "metric": "euclidean",
+    "source": "origin", "provenance": "T-v1.evaluate: is_obj_placed",
+}})
+SITE_ROLES = {"movable": "actor:cubeA", "destination": "actor:goal"}
+
+# A pair with the mined components a containment ladder needs, so the gate
+# tests exercise the gate rather than tripping over scorability first.
+CONTAIN_OBJECTS = dict(
+    OBJECTS,
+    **{
+        "actor:cubeA": dict(OBJECTS["actor:cubeA"], key_components=[{}]),
+        "actor:cubeB": dict(OBJECTS["actor:cubeB"], contain_components=[{}]),
+    },
+)
+CONTAIN_MEMBERS = dict(
+    MEMBERS,
+    **{
+        "actor:cubeA": {"interaction_types": ["contact", "contain"]},
+        "actor:cubeB": {"interaction_types": ["contact", "contain"]},
+    },
+)
+
+
+def _compile_sites(raw, sites=SITES, members=None):
+    return compile_schedule(raw, OBJECTS, members or SITE_MEMBERS, BINS,
+                            SITE_VOCAB, sites=sites)
+
+
+def _compile_contain(raw):
+    return compile_schedule(raw, CONTAIN_OBJECTS, CONTAIN_MEMBERS, BINS, VOCAB)
+
+
+class ReachedScorabilityTest(unittest.TestCase):
+    """``reached`` is the only relation whose threshold is not mined, so it is
+    scorable exactly where an asset declared a goal -- never as a generic
+    proximity alias any two objects would satisfy."""
+
+    def _reached_schedule(self, src="movable", dst="destination"):
+        return _schedule([_phase(
+            "goal",
+            [_clause("reached", src, dst, labels=("holds",), weight=1.0)],
+            _done("reached", src, dst),
+        )], roles=SITE_ROLES)
+
+    def test_a_declared_pair_is_scorable(self):
+        phase = _compile_sites(self._reached_schedule()).phases[0]
+        self.assertEqual(phase.clauses[0].relation, "reached")
+
+    def test_without_a_declaration_reached_is_rejected(self):
+        with self.assertRaises(ScheduleError) as ctx:
+            _compile_sites(self._reached_schedule(), sites={})
+        self.assertIn("reached", str(ctx.exception))
+
+    def test_an_undeclared_pair_is_rejected(self):
+        """A task may declare one goal and still not have licensed every other
+        pair in the scene to claim one."""
+        raw = _schedule([_phase(
+            "goal",
+            [_clause("reached", "movable", "other", labels=("holds",),
+                     weight=1.0)],
+            _done("reached", "movable", "other"),
+        )], roles={"movable": "actor:cubeA", "other": "actor:cubeB"})
+        with self.assertRaises(ScheduleError):
+            _compile_sites(raw)
+
+    def test_scorable_table_marks_only_the_declared_pair(self):
+        table = scorable_relations(OBJECTS, SITE_MEMBERS, BINS, SITES)
+        self.assertTrue(table["actor:cubeA / actor:goal"]["reached"])
+        self.assertFalse(table["actor:cubeA / actor:cubeB"]["reached"])
+        self.assertFalse(table["ee / actor:cubeA"]["reached"])
+
+
+class RequiresGateTest(unittest.TestCase):
+    """A phase's gate decides when its rungs pay. It is weightless, it is read
+    from the current frame only, and the facts it names have to be facts the
+    frame actually carries."""
+
+    def _gated(self, requires, weight=1.0):
+        phase = _phase(
+            "aligned",
+            [_clause("contain-compatibility", "movable", "destination",
+                     labels=("match",), weight=weight)],
+            _done("contact", "movable", "destination"),
+        )
+        phase["requires"] = requires
+        return _schedule([phase], roles={"movable": "actor:cubeA",
+                                         "destination": "actor:cubeB"})
+
+    def _ok_gate(self):
+        return {"all_of": [
+            _clause("contact", "movable", "destination", labels=("holds",),
+                    weight=0.0),
+        ]}
+
+    def test_a_gate_compiles_into_the_phase(self):
+        phase = _compile_contain(self._gated(self._ok_gate())).phases[0]
+        self.assertEqual(len(phase.requires), 1)
+        self.assertEqual(phase.requires[0].relation, "contact")
+
+    def test_a_phase_without_a_gate_has_none(self):
+        raw = _schedule([_phase(
+            "grasp",
+            [_clause("grasp", "ee", "movable", labels=("holds",), weight=1.0)],
+            _done("grasp", "ee", "movable"),
+        )])
+        self.assertEqual(_compile(raw).phases[0].requires, ())
+
+    def test_a_gate_carries_no_weight(self):
+        """Paying for the gate as well would double-count the milestone and
+        break the phase's own weight sum."""
+        raw = self._gated({"all_of": [
+            _clause("contact", "movable", "destination", labels=("holds",),
+                    weight=0.5),
+        ]})
+        with self.assertRaises(ScheduleError) as ctx:
+            _compile_contain(raw)
+        self.assertIn("weight", str(ctx.exception))
+
+    def test_a_gate_does_not_count_toward_the_phase_weight(self):
+        """The clause sum must still equal the phase weight on its own."""
+        schedule = _compile_contain(self._gated(self._ok_gate(), weight=1.0))
+        self.assertAlmostEqual(schedule.phases[0].weight, 1.0)
+        self.assertAlmostEqual(
+            sum(c.weight for c in schedule.phases[0].clauses), 1.0)
+        self.assertEqual(
+            [c.weight for c in schedule.phases[0].requires], [0.0])
+
+    def test_gate_slots_are_looked_up_by_the_runtime(self):
+        """A gate the frame cannot read has to invalidate the phase, which
+        means the runtime must be resolving its slot in the first place."""
+        schedule = _compile_contain(self._gated(self._ok_gate()))
+        self.assertIn(schedule.phases[0].requires[0].slot, schedule.slots)
+
+    def test_a_malformed_gate_is_rejected(self):
+        for bad in ({"any_of": []}, {"all_of": []}, {"all_of": {}},
+                    {"all_of": [1]}, {"all_of": [], "extra": 1}):
+            with self.assertRaises(ScheduleError):
+                _compile_contain(self._gated(bad))
+
+    def test_a_gate_naming_an_unscorable_relation_is_rejected(self):
+        """Same bar as a rung: a gate on a fact the assets cannot produce
+        would hold the phase shut for the whole episode."""
+        raw = self._gated({"all_of": [
+            {"relation": "support", "src": "movable", "dst": "destination",
+             "holder": "destination", "weight": 0.0},
+        ]})
+        with self.assertRaises(ScheduleError):
+            _compile_contain(raw)

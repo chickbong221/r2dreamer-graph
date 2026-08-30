@@ -362,6 +362,15 @@ class TaskScheduleReplayPotential(torch.nn.Module):
       its full weight. Without it StackCube's success state -- stacked and
       released -- would score below its own mid-episode peak, because the grasp
       it needed is over.
+    * **Current-frame gates.** A phase may name ``requires`` facts that must
+      hold *this frame* before its own clauses pay. That is what makes an
+      ordering real rather than decorative: nothing else here consults phase
+      order when scoring, so without a gate PegInsertionSide's containment
+      ladder would pay from across the table. The gate reads only the current
+      frame, so the potential stays a function of the observed state and the
+      shaping term still telescopes; and it multiplies the clause quality only,
+      never the cumulative-credit branch, so a gate can never cost a completed
+      episode its terminal 1.0.
     """
 
     def __init__(self, schedule, n_abs: int):
@@ -387,6 +396,7 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         done_slot, done_phase, done_mask, done_required, phase_weight = (
             [], [], [], [], []
         )
+        req_slot, req_phase, req_mask, req_required = [], [], [], []
         phase_uses = torch.zeros(self.n_phases, self.n_slots, dtype=torch.bool)
         for p, phase in enumerate(schedule.phases):
             phase_weight.append(phase.weight)
@@ -405,6 +415,16 @@ class TaskScheduleReplayPotential(torch.nn.Module):
                 done_mask.append(_label_mask(
                     completion.label_ids, self.n_abs))
                 phase_uses[p, slot] = True
+            req_required.append(len(phase.requires))
+            for gate in phase.requires:
+                slot = index[gate.slot]
+                req_slot.append(slot)
+                req_phase.append(p)
+                req_mask.append(_label_mask(gate.label_ids, self.n_abs))
+                # A gate the frame cannot read is not a gate that is closed --
+                # it is a frame that cannot be scored, so it joins the phase's
+                # validity set like any other fact the phase names.
+                phase_uses[p, slot] = True
 
         self.register_buffer("clause_slot", long_buf(clause_slot), persistent=False)
         self.register_buffer("clause_phase", long_buf(clause_phase), persistent=False)
@@ -417,6 +437,18 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         self.register_buffer("done_mask", torch.stack(done_mask), persistent=False)
         self.register_buffer(
             "done_required", long_buf(done_required), persistent=False)
+        self.register_buffer("req_slot", long_buf(req_slot), persistent=False)
+        self.register_buffer("req_phase", long_buf(req_phase), persistent=False)
+        # ``stack`` needs a non-empty list; a schedule with no gates keeps an
+        # empty [0, n_abs] mask and every ``req_required`` at zero, which the
+        # equality below reads as "gate satisfied".
+        self.register_buffer(
+            "req_mask",
+            torch.stack(req_mask) if req_mask
+            else torch.zeros(0, self.n_abs, dtype=torch.float32),
+            persistent=False)
+        self.register_buffer(
+            "req_required", long_buf(req_required), persistent=False)
         self.register_buffer(
             "phase_weight", torch.tensor(phase_weight, dtype=torch.float32),
             persistent=False)
@@ -495,6 +527,21 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         done_count.index_add_(1, self.done_phase, done_clause.long())
         done = done_count.eq(self.done_required)
 
+        # Current-frame gate. A phase with no ``requires`` has zero required
+        # and zero satisfied, so the equality holds and the gate is open.
+        gate_clause = (
+            onehot.index_select(1, self.req_slot) * self.req_mask
+        ).sum(-1)
+        gate_clause = (
+            (gate_clause > 0) & present.index_select(1, self.req_slot)
+        )
+        gate_count = torch.zeros(
+            int(graph_count), self.n_phases,
+            device=gate_clause.device, dtype=torch.long,
+        )
+        gate_count.index_add_(1, self.req_phase, gate_clause.long())
+        gate = gate_count.eq(self.req_required)
+
         # OR over strictly later phases, so a completed settle carries the grasp
         # that is no longer held.
         back = done.flip(-1).cummax(-1).values.flip(-1)
@@ -505,7 +552,11 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         missing = (~present)[:, None, :] & self.phase_uses
         phase_valid = ~missing.any(-1)
 
-        credit = torch.maximum(quality * phase_valid,
+        # The gate multiplies the clause quality only. Cumulative credit is
+        # deliberately outside it: once a later phase has completed, this one
+        # was passed through, and re-asking whether its entry condition still
+        # holds would take back progress the episode already made.
+        credit = torch.maximum(quality * gate * phase_valid,
                                self.phase_weight * later.float())
         # An unreadable phase is still resolvable when a later one completed:
         # cumulative credit gives it its full weight regardless of its own
