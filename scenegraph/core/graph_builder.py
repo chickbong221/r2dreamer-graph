@@ -215,6 +215,19 @@ class GraphBuilder:
                 "with tools/prepare_assets.py before training."
             )
         bin_edges = dict(union.bin_edges or {})
+        # Which members are extended support planes, which height family each
+        # takes, and the goal geometry the scene has no actor for. All read
+        # off the same union asset the bins come from, so a run cannot measure
+        # against one asset's surfaces while labelling with another's scale.
+        #
+        # Assigned before the check below, not after: what an asset is
+        # required to calibrate depends on what it classified, so a check that
+        # ran first saw no families and demanded the single shared height
+        # scale that a families asset deliberately drops.
+        self.cfg["structural_surfaces"] = set(union.structural_surfaces)
+        self.cfg["families"] = dict(union.families)
+        self.cfg["site_declarations"] = dict(union.sites)
+
         missing = [r for r in required_bin_keys(self.cfg)
                    if not bin_edges.get(r)]
         if missing:
@@ -226,13 +239,6 @@ class GraphBuilder:
                 "tools/prepare_assets.py."
             )
         self.cfg["bin_edges"] = bin_edges
-        # Which members are extended support planes, and the goal geometry the
-        # scene has no actor for. Both are read off the same union asset the
-        # bins come from, so a run cannot end up measuring against one asset's
-        # surfaces while labelling with another's scale.
-        self.cfg["structural_surfaces"] = set(union.structural_surfaces)
-        self.cfg["families"] = dict(union.families)
-        self.cfg["site_declarations"] = dict(union.sites)
         self._bin_edges_subtask = subtask
 
     def _check_task_group(self, whitelist, path: str) -> None:

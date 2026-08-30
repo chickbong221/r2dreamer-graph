@@ -710,5 +710,74 @@ class SiteNodeMergeTest(unittest.TestCase):
         self.assertEqual(sorted(merged), ["actor:cube", "spatial:hole_site"])
 
 
+class GlobalBinBindingTest(unittest.TestCase):
+    """Binding the shipped assets, which is the first thing a run does.
+
+    What an asset is *required* to calibrate depends on what it *classified*:
+    a families asset carries per-family height scales and deliberately drops
+    the single shared one. So the classification has to reach the config
+    before the requirement is computed. It did not, and every one of the four
+    tasks died on ``env.reset()`` demanding ``ee-object-height-offset`` --
+    the one key the miner had just, correctly, removed.
+
+    Compilation never caught it: the schedule compiler reads the asset
+    directly and never binds.
+    """
+
+    from scenegraph.core.graph_builder import GraphBuilder, TASK_LEVEL_SUBTASK
+
+    TASKS = ("PickCube-v1", "PlaceSphere-v1", "PegInsertionSide-v1",
+             "PullCubeTool-v1")
+
+    def _builder(self, env_id):
+        import os
+        cfg = {
+            "temporal": {"K": 2},
+            "selection": {"n_max": 8},
+            "whitelist_dir": os.path.join(
+                "scenegraph", "configs", "subtask_whitelists", env_id),
+            "object_object_spatial": True,
+        }
+        return self.GraphBuilder(
+            None, cfg, env_id=env_id, use_target_flag=False)
+
+    def test_every_shipped_asset_binds(self):
+        for env_id in self.TASKS:
+            with self.subTest(env=env_id):
+                builder = self._builder(env_id)
+                builder._bind_global_bin_edges(self.TASK_LEVEL_SUBTASK)
+                self.assertTrue(builder.cfg["bin_edges"])
+
+    def test_binding_publishes_the_classification(self):
+        """The three things every later emission decision reads."""
+        builder = self._builder("PegInsertionSide-v1")
+        builder._bind_global_bin_edges(self.TASK_LEVEL_SUBTASK)
+        self.assertEqual(builder.cfg["structural_surfaces"],
+                         {"actor:table-workspace"})
+        self.assertEqual(builder.cfg["families"]["actor:peg"], "manipuland")
+        self.assertIn("spatial:hole_site", builder.cfg["site_declarations"])
+
+    def test_a_families_asset_does_not_need_the_shared_height_scale(self):
+        """The regression itself, stated as the property it violated."""
+        for env_id in self.TASKS:
+            with self.subTest(env=env_id):
+                builder = self._builder(env_id)
+                builder._bind_global_bin_edges(self.TASK_LEVEL_SUBTASK)
+                self.assertNotIn("ee-object-height-offset",
+                                 builder.cfg["bin_edges"])
+
+    def test_each_family_present_has_its_own_scale_bound(self):
+        for env_id in self.TASKS:
+            with self.subTest(env=env_id):
+                builder = self._builder(env_id)
+                builder._bind_global_bin_edges(self.TASK_LEVEL_SUBTASK)
+                edges = builder.cfg["bin_edges"]
+                for family in set(builder.cfg["families"].values()):
+                    self.assertTrue(
+                        edges.get(ee_family_bin_key(family)),
+                        f"{env_id}: {family} has no height scale",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()
