@@ -8,16 +8,6 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Treatment arm. beta ramps from 0 to 0.05 across steps 400k-700k, so the
-# progress head and the progress critic are both fitted before either can
-# move the actor.
-#
-# Six tabletop tasks, one after another. No plans, no spawn data, no scene
-# builder: ordinary ManiSkill, so the robot, the camera set and the episode
-# horizon all come from each task's own registration.
-#
-# Deliberately no `set -e`: a task that dies must not cancel the five after it.
-
 echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
@@ -60,6 +50,9 @@ export MS_ASSET_DIR=/mnt/data/tuannl
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 
+# Mined per task. Each directory holds the task_all.json the builder binds.
+WL=scenegraph/configs/subtask_whitelists
+
 mkdir -p $HOME/output
 
 # Print initial GPU state
@@ -75,27 +68,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 python train.py \
   env=maniskill \
   model=size50M_graph_simple \
-  env.task=maniskill_PlaceSphere-v1 \
-  model.progress.beta=0.05 \
-  wandb.group=maniskill_PlaceSphere-v1 \
-  wandb.name=PlaceSphere-v1-beta005 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlaceSphere-v1-beta005
-
-python train.py \
-  env=maniskill \
-  model=size50M_graph_simple \
-  env.reward_mode=sparse \
-  'env.reward_fallback=[]' \
-  env.task=maniskill_PlaceSphere-v1 \
-  model.progress.beta=1.0 \
-  wandb.group=maniskill_PlaceSphere-v1 \
-  wandb.name=PlaceSphere-v1-sparse-beta1 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PlaceSphere-v1-sparse-beta1
-
-python train.py \
-  env=maniskill \
-  model=size50M_graph_simple \
   env.task=maniskill_PullCubeTool-v1 \
+  env.graph.whitelist_dir=$WL/PullCubeTool-v1 \
   model.progress.beta=0.05 \
   wandb.group=maniskill_PullCubeTool-v1 \
   wandb.name=PullCubeTool-v1-beta005 \
@@ -104,78 +78,28 @@ python train.py \
 python train.py \
   env=maniskill \
   model=size50M_graph_simple \
-  env.reward_mode=sparse \
-  'env.reward_fallback=[]' \
-  env.task=maniskill_PullCubeTool-v1 \
-  model.progress.beta=1.0 \
-  wandb.group=maniskill_PullCubeTool-v1 \
-  wandb.name=PullCubeTool-v1-sparse-beta1 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-sparse-beta1
+  env.task=maniskill_PickCube-v1 \
+  env.graph.whitelist_dir=$WL/PickCube-v1 \
+  model.progress.beta=0.05 \
+  wandb.group=maniskill_PickCube-v1 \
+  wandb.name=PickCube-v1-beta005 \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-beta005
 
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.task=maniskill_PickCube-v1 \
-#   model.progress.beta=0.05 \
-#   wandb.group=maniskill_PickCube-v1 \
-#   wandb.name=PickCube-v1-beta005 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-beta005
-
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.reward_mode=sparse \
-#   'env.reward_fallback=[]' \
-#   env.task=maniskill_PickCube-v1 \
-#   model.progress.beta=1.0 \
-#   wandb.group=maniskill_PickCube-v1 \
-#   wandb.name=PickCube-v1-sparse-beta1 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PickCube-v1-sparse-beta1
-
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.task=maniskill_StackCube-v1 \
-#   model.progress.beta=0.05 \
-#   wandb.group=maniskill_StackCube-v1 \
-#   wandb.name=StackCube-v1-beta005 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-beta005
-
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.reward_mode=sparse \
-#   'env.reward_fallback=[]' \
-#   env.task=maniskill_StackCube-v1 \
-#   model.progress.beta=1.0 \
-#   wandb.group=maniskill_StackCube-v1 \
-#   wandb.name=StackCube-v1-sparse-beta1 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/StackCube-v1-sparse-beta1
-
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.task=maniskill_PegInsertionSide-v1 \
-#   model.progress.beta=0.05 \
-#   wandb.group=maniskill_PegInsertionSide-v1 \
-#   wandb.name=PegInsertionSide-v1-beta005 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-beta005
-
-# python train.py \
-#   env=maniskill \
-#   model=size50M_graph_simple \
-#   env.reward_mode=sparse \
-#   'env.reward_fallback=[]' \
-#   env.task=maniskill_PegInsertionSide-v1 \
-#   model.progress.beta=1.0 \
-#   wandb.group=maniskill_PegInsertionSide-v1 \
-#   wandb.name=PegInsertionSide-v1-sparse-beta1 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-sparse-beta1
+python train.py \
+  env=maniskill \
+  model=size50M_graph_simple \
+  env.task=maniskill_PegInsertionSide-v1 \
+  env.graph.whitelist_dir=$WL/PegInsertionSide-v1 \
+  model.progress.beta=0.05 \
+  wandb.group=maniskill_PegInsertionSide-v1 \
+  wandb.name=PegInsertionSide-v1-beta005 \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PegInsertionSide-v1-beta005
 
 # python train.py \
 #   env=maniskill \
 #   model=size50M_graph_simple \
 #   env.task=maniskill_PlugCharger-v1 \
+#   env.graph.whitelist_dir=$WL/PlugCharger-v1 \
 #   model.progress.beta=0.05 \
 #   wandb.group=maniskill_PlugCharger-v1 \
 #   wandb.name=PlugCharger-v1-beta005 \
@@ -187,6 +111,7 @@ python train.py \
 #   env.reward_mode=sparse \
 #   'env.reward_fallback=[]' \
 #   env.task=maniskill_PlugCharger-v1 \
+#   env.graph.whitelist_dir=$WL/PlugCharger-v1 \
 #   model.progress.beta=1.0 \
 #   wandb.group=maniskill_PlugCharger-v1 \
 #   wandb.name=PlugCharger-v1-sparse-beta1 \
