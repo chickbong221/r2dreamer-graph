@@ -1,0 +1,13 @@
+{
+  "env_id": "PegInsertionSide-v1",
+  "sites": {
+    "spatial:hole_site": {
+      "site_type": "surface",
+      "subject": "actor:peg",
+      "metric": "euclidean",
+      "source": "provider",
+      "provider": "peg_hole_mouth",
+      "provenance": "PegInsertionSide-v1: box_hole_pose walked back along the entry axis by the box half-depth read from collision geometry. Subject point is the live peg_head_pose; tolerance is box_hole_radii."
+    }
+  }
+}

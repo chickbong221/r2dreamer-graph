@@ -33,6 +33,7 @@ from scenegraph.adapters.interaction_events import (
 )
 from scenegraph.core import spatial_metrics
 from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
     OBJECT_OBJECT_SCOPE,
     SPATIAL_SCOPES,
     spatial_bin_key,
@@ -453,7 +454,7 @@ def orientation_counts(merged: Dict[str, Any]) -> Dict[str, int]:
 
 
 def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
-                 env_id: str) -> Tuple[Dict, Dict]:
+                 env_id: str, configs: Path = CONFIGS) -> Tuple[Dict, Dict]:
     objects: Dict[str, Dict[str, list]] = defaultdict(
         lambda: defaultdict(list))
     members: Dict[str, Dict[str, Any]] = defaultdict(
@@ -590,6 +591,8 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
     for key, family in families.items():
         plain_members[key]["family"] = family
 
+    sites = site_declarations(merged, plain_members, env_id, configs)
+
     affordances = {
         "_schema_version": AFFORDANCE_SCHEMA_VERSION,
         "env_id": env_id,
@@ -602,8 +605,8 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
         "task_group": env_id,
         "target": TASK_TARGET,
         "members": plain_members,
-        "sites": site_declarations(merged, plain_members),
-        "bin_edges": _bin_edges(merged, objects, families),
+        "sites": sites,
+        "bin_edges": _bin_edges(merged, objects, families, sites),
         "episodes": merged["episodes"],
     }
     return affordances, whitelist
@@ -760,61 +763,78 @@ def unclassified_supporters(merged, members) -> List[str]:
     )
 
 
-def site_declarations(merged, members) -> Dict[str, Any]:
-    """Goal sites this task exposes, from what the shard actually recorded.
+def declared_sites(env_id: str, configs: Path) -> Dict[str, Any]:
+    """The reviewed site declarations for one task, or none.
 
-    Driven by evidence, not by env id: a site is declared only when the
-    calibration reservoir holds pairs against it, which happens only when the
-    live geometry reader found the attributes it needs. PickCube's marker is a
-    real actor and is declared when it is a member and nothing ever interacted
-    with it.
+    Sites are task semantics, not something a pose stream reveals. The
+    collector records region pairs against *every* movable actor, because it
+    cannot know which one a task drags into its goal -- so letting the miner
+    turn that into a declaration invented a goal region for PlaceSphere, a
+    task with no goal region at all.
+
+    So the declaration is written and reviewed, like a schedule, and the miner
+    only checks the evidence agrees with it. Absent file means no sites.
     """
-    kinds = defaultdict(set)
+    path = Path(configs) / "sites" / f"{env_id}.json"
+    if not path.is_file():
+        return {}
+    with open(path) as handle:
+        raw = json.load(handle)
+    return dict(raw.get("sites") or {})
+
+
+def keyed_pair_kinds(merged) -> Dict[str, set]:
+    """``kind -> {(src_key, dst_key)}`` actually present in the reservoir."""
+    kinds: Dict[str, set] = defaultdict(set)
     for record in merged.get("bin_keyed_pairs") or []:
         kinds[record.get("kind")].add(
             (record.get("src_key"), record.get("dst_key")))
+    return kinds
 
-    out: Dict[str, Any] = {}
-    for src, dst in sorted(kinds.get(KIND_OBJECT_SITE, ())):
-        if src not in members:
-            continue
-        out[dst] = {
-            "site_type": "surface", "subject": src, "metric": "euclidean",
-            "source": "provider", "provider": "peg_hole_mouth",
-            "provenance": "PegInsertionSide-v1: box_hole_pose walked back "
-                          "along the entry axis by the box half-depth read "
-                          "from collision geometry; the subject point is the "
-                          "live peg_head_pose and the tolerance is "
-                          "box_hole_radii",
-        }
-    # A region is declared for the movable the task's own schedule names, and
-    # the miner does not know which that is. Every candidate is reported;
-    # exactly one survives review into the shipped asset.
-    for src, dst in sorted(kinds.get(KIND_OBJECT_REGION, ())):
-        if src not in members:
-            continue
-        out.setdefault(f"{dst}::candidate::{src}", {
-            "site_type": "region", "subject": src, "metric": "planar",
-            "source": "origin", "provider": "robot_base_region",
-            "provenance": "PullCubeTool-v1.evaluate: "
-                          "XY_distance(cube, robot_base) < 0.6",
-        })
-    # Actor-backed point goals: a member nothing ever interacted with.
-    for key, entry in sorted(members.items()):
-        if entry.get("interaction_types"):
-            continue
-        subjects = [k for k, v in members.items()
-                    if "grasp" in (v.get("interaction_types") or ())]
-        if len(subjects) != 1:
-            continue
-        out[key] = {
-            "site_type": "point", "subject": subjects[0],
-            "metric": "euclidean", "source": "origin",
-            "provider": "pick_cube_goal",
-            "provenance": "PickCube-v1.evaluate: is_obj_placed = "
-                          "norm(cube - goal_site) <= goal_thresh, read live",
-        }
-    return out
+
+def site_declarations(merged, members, env_id, configs) -> Dict[str, Any]:
+    """Reviewed declarations, checked against what the shard recorded.
+
+    Every declared site has to be backed by samples and by members that exist,
+    and every kind of evidence has to be claimed by some declaration. A site
+    nothing measured would calibrate no scale and label nothing; evidence
+    nothing declared is a task whose goal geometry was collected and then
+    silently dropped. Both are errors here rather than surprises at runtime.
+    """
+    declared = declared_sites(env_id, configs)
+    if not declared:
+        return {}
+    kinds = keyed_pair_kinds(merged)
+    site_pairs = kinds.get(KIND_OBJECT_SITE, set())
+    region_pairs = kinds.get(KIND_OBJECT_REGION, set())
+
+    for key, entry in sorted(declared.items()):
+        subject = entry.get("subject")
+        if subject not in members:
+            raise SystemExit(
+                f"{env_id}: site {key!r} names subject {subject!r}, which is "
+                "not a whitelist member of this task."
+            )
+        kind = entry.get("site_type")
+        if kind == "surface" and (subject, key) not in site_pairs:
+            raise SystemExit(
+                f"{env_id}: site {key!r} is declared but the shard holds no "
+                f"object-site samples for ({subject}, {key}). Its ladder "
+                "would have no scale. Re-collect, or drop the declaration."
+            )
+        if kind == "region" and (subject, key) not in region_pairs:
+            raise SystemExit(
+                f"{env_id}: site {key!r} is declared but the shard holds no "
+                f"object-region samples for ({subject}, {key})."
+            )
+    if site_pairs and not any(
+            e.get("site_type") == "surface" for e in declared.values()):
+        raise SystemExit(
+            f"{env_id}: the shard holds object-site samples {sorted(site_pairs)} "
+            "that no declaration claims. Declare the site or the geometry was "
+            "collected for nothing."
+        )
+    return declared
 
 
 def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
@@ -918,7 +938,19 @@ def _ee_structural_height(src, dst_pose, surface) -> Optional[float]:
     return spatial_metrics.surface_height(src[:3], anchor, normal)
 
 
-def _keyed_stats(merged, families, objects=None) -> Dict[str, float]:
+def _declared_pairs(sites) -> set:
+    """``(subject, site)`` pairs a declaration claims.
+
+    Only these calibrate. The collector records region samples against every
+    movable actor because it cannot know the subject, so calibrating on all of
+    them would set PullCubeTool's goal scale from the tool as well as the cube
+    -- and would invent a scale entirely for tasks with no region at all.
+    """
+    return {(entry.get("subject"), key) for key, entry in (sites or {}).items()}
+
+
+def _keyed_stats(merged, families, objects=None, declared=None
+                 ) -> Dict[str, float]:
     """Scales that only the keyed reservoir can produce.
 
     Per-family end-effector heights, the object-to-site ladder and the
@@ -938,6 +970,11 @@ def _keyed_stats(merged, families, objects=None) -> Dict[str, float]:
 
     for record in merged.get("bin_keyed_pairs") or []:
         kind = record.get("kind")
+        if kind in (KIND_OBJECT_SITE, KIND_OBJECT_REGION):
+            if declared is None or (
+                    record.get("src_key"), record.get("dst_key")
+            ) not in declared:
+                continue
         src, dst = _pair(record, kind)
         if src is None:
             continue
@@ -1016,7 +1053,7 @@ def _keyed_stats(merged, families, objects=None) -> Dict[str, float]:
     return stats
 
 
-def _keyed_planar_samples(merged) -> Dict[str, np.ndarray]:
+def _keyed_planar_samples(merged, declared=None) -> Dict[str, np.ndarray]:
     """Raw planar samples per unsigned keyed scale, for equal-population edges."""
     out: Dict[str, List[float]] = defaultdict(list)
     for record in merged.get("bin_keyed_pairs") or []:
@@ -1027,6 +1064,9 @@ def _keyed_planar_samples(merged) -> Dict[str, np.ndarray]:
             key = spatial_metrics.OBJECT_REGION_PLANAR_KEY
         else:
             continue
+        if declared is None or (
+                record.get("src_key"), record.get("dst_key")) not in declared:
+            continue
         src = np.asarray(record.get("src_pose"), dtype=float)
         dst = np.asarray(record.get("dst_pose"), dtype=float)
         if src.size >= 3 and dst.size >= 3:
@@ -1034,7 +1074,7 @@ def _keyed_planar_samples(merged) -> Dict[str, np.ndarray]:
     return {k: np.asarray(v, dtype=np.float32) for k, v in out.items() if v}
 
 
-def _bin_edges(merged, objects, families=None):
+def _bin_edges(merged, objects, families=None, sites=None):
     """Scoped edges: EE from recorded stats, object-object from reprojection.
 
     Quantiles apply only to non-negative planar distance, where they stop an
@@ -1056,15 +1096,23 @@ def _bin_edges(merged, objects, families=None):
         if robust is not None:
             stats[key] = robust
     stats.update(object_stats)
-    stats.update(_keyed_stats(merged, families or {}, objects))
+    declared = _declared_pairs(sites)
+    stats.update(_keyed_stats(merged, families or {}, objects, declared))
     edges = derive_bin_edges(stats)
     if object_planar.size:
         samples[stat_key(OBJECT_OBJECT_SCOPE, "planar-distance")] = object_planar
 
     quantile_keys = dict(_QUANTILE_KEYS)
-    for key, values in _keyed_planar_samples(merged).items():
+    for key, values in _keyed_planar_samples(merged, declared).items():
         samples[key.replace("-", "_")] = values
         quantile_keys[key.replace("-", "_")] = key
+
+    if families:
+        # Superseded. Leaving it in the asset invites something to read a
+        # scale nothing calibrates against any more.
+        shared = spatial_bin_key(EE_OBJECT_SCOPE, "height-offset")
+        edges.pop(shared, None)
+        edges.pop(spatial_metrics.change_bin_key(shared), None)
 
     for stat, key in quantile_keys.items():
         values = samples.get(stat)
@@ -1113,7 +1161,8 @@ def main(argv=None) -> int:
     buckets = usable_buckets(merged, target, args.min_presence)
     if not buckets:
         raise SystemExit("no complete buckets; nothing to mine")
-    affordances, whitelist = build_assets(merged, buckets, args.env_id)
+    affordances, whitelist = build_assets(
+        merged, buckets, args.env_id, Path(args.configs))
 
     print(f"[mine] {len(affordances['objects'])} objects, "
           f"{len(whitelist['members'])} whitelist members")

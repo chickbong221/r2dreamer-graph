@@ -1,0 +1,13 @@
+{
+  "env_id": "PullCubeTool-v1",
+  "sites": {
+    "spatial:pull_goal_region": {
+      "site_type": "region",
+      "subject": "actor:cube",
+      "metric": "planar",
+      "source": "origin",
+      "provider": "robot_base_region",
+      "provenance": "PullCubeTool-v1.evaluate: XY_distance(cube, robot_base) < 0.6. The unused goal_radius=0.3 attribute and the shifted dense-reward workspace centre are deliberately not used."
+    }
+  }
+}

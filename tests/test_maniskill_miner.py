@@ -821,10 +821,18 @@ class KeyedCalibrationTest(unittest.TestCase):
         return {"bin_keyed_pairs": pairs, "bin_pose_pairs": [],
                 "bin_stats": {}, "bin_samples": {}}
 
-    def _edges(self, objects=None):
+    SITES = {
+        "spatial:hole_site": {"subject": "actor:peg", "site_type": "surface"},
+        "spatial:pull_goal_region": {"subject": "actor:cube",
+                                     "site_type": "region"},
+    }
+
+    def _edges(self, objects=None, sites=None):
         if objects is None:
             objects = {self.TABLE: {"reference_surface": dict(self.SURFACE)}}
-        return miner._bin_edges(self._merged(), objects, self.FAMILIES)
+        return miner._bin_edges(
+            self._merged(), objects, self.FAMILIES,
+            self.SITES if sites is None else sites)
 
     def test_the_table_does_not_set_the_manipuland_scale(self):
         """The whole failure: one shared scale gave every end-effector height
@@ -871,11 +879,31 @@ class KeyedCalibrationTest(unittest.TestCase):
         edges = self._edges()
         self.assertGreater(max(edges[_REGION_PD]), 0.6)
 
+    def test_an_undeclared_region_calibrates_nothing(self):
+        """The collector records region samples against every movable actor,
+        because it cannot know which one a task drags into its goal. Only a
+        reviewed declaration turns those into a scale -- otherwise PlaceSphere,
+        which has no goal region at all, would be given one."""
+        edges = self._edges(sites={})
+        self.assertNotIn(_REGION_PD, edges)
+        self.assertNotIn(_SITE_PD, edges)
+
+    def test_only_the_declared_subject_calibrates_the_region(self):
+        edges = self._edges(sites={
+            "spatial:pull_goal_region": {"subject": "actor:other",
+                                         "site_type": "region"}})
+        self.assertNotIn(_REGION_PD, edges)
+
+    def test_the_superseded_shared_height_scale_is_dropped(self):
+        """Nothing reads it once families exist, and leaving it in the asset
+        invites something to."""
+        self.assertNotIn("ee-object-height-offset", self._edges())
+
     def test_an_unclassified_member_contributes_to_no_family(self):
         edges = miner._bin_edges(
             self._merged(),
             {self.TABLE: {"reference_surface": dict(self.SURFACE)}},
-            {"actor:sphere": _MANIPULAND},
+            {"actor:sphere": _MANIPULAND}, self.SITES,
         )
         self.assertIn(_fkey(_MANIPULAND), edges)
         self.assertNotIn(_fkey(_RECEPTACLE), edges)
