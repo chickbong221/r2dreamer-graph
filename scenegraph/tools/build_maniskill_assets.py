@@ -39,6 +39,8 @@ from scenegraph.core.spatial_metrics import (
     spatial_bin_key,
     stat_key,
 )
+from scenegraph.core.relation_rules import required_bin_keys
+from scenegraph.core.sites import parse_site_declarations
 from scenegraph.core.whitelist import WHITELIST_SCHEMA_VERSION, derive_bin_edges
 
 # Equal-population edges for unsigned distance only. Signed quantities keep
@@ -1186,33 +1188,30 @@ def main(argv=None) -> int:
     # families asset has no shared end-effector height scale by design -- it
     # was dropped as superseded -- so asking for one here would reject exactly
     # the assets the split was built to produce.
+    # Asked of the runtime's own rule, not of a copy of it. A second copy
+    # here immediately diverged: it demanded the object-site ladder for
+    # PickCube's goal marker, which is a real actor riding the ordinary
+    # object-object scale, and rejected a perfectly good asset.
     edges = whitelist["bin_edges"]
-    required = [spatial_bin_key(scope, "planar-distance")
-                for scope in SPATIAL_SCOPES]
-    required.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"))
-    families = sorted({
-        entry.get("family") for entry in whitelist["members"].values()
+    families = {
+        key: entry.get("family")
+        for key, entry in whitelist["members"].items()
         if isinstance(entry, dict) and entry.get("family")
+    }
+    required = required_bin_keys({
+        "families": families,
+        "site_declarations": parse_site_declarations(
+            whitelist.get("sites"), where=args.env_id),
+        "object_object_spatial": True,
     })
-    if families:
-        required.extend(
-            spatial_metrics.ee_family_bin_key(f) for f in families)
-    else:
-        required.append(spatial_bin_key(EE_OBJECT_SCOPE, "height-offset"))
-    for key, entry in (whitelist.get("sites") or {}).items():
-        if entry.get("site_type") == "region":
-            required.append(spatial_metrics.OBJECT_REGION_PLANAR_KEY)
-        else:
-            required.extend((spatial_metrics.OBJECT_SITE_PLANAR_KEY,
-                             spatial_metrics.OBJECT_SITE_HEIGHT_KEY))
-
     missing = sorted({k for k in required if not edges.get(k)})
     if missing:
         raise SystemExit(
             f"bin_stats calibrate no edges for {missing}; those relations "
             "would emit nothing for the whole run. Re-collect before mining."
         )
-    print(f"[mine] families: {families or ['(none -- legacy shard)']}")
+    print(f"[mine] families: "
+          f"{sorted(set(families.values())) or ['(none -- legacy shard)']}")
     if whitelist.get("sites"):
         print(f"[mine] sites: {sorted(whitelist['sites'])}")
     write_assets(affordances, whitelist, args.env_id, Path(args.configs))
