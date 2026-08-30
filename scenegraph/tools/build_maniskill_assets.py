@@ -1166,15 +1166,39 @@ def main(argv=None) -> int:
 
     print(f"[mine] {len(affordances['objects'])} objects, "
           f"{len(whitelist['members'])} whitelist members")
-    missing = [spatial_bin_key(scope, rel)
-               for scope in SPATIAL_SCOPES
-               for rel in ("planar-distance", "height-offset")
-               if not whitelist["bin_edges"].get(spatial_bin_key(scope, rel))]
+    # What this asset must calibrate depends on what it classified. A
+    # families asset has no shared end-effector height scale by design -- it
+    # was dropped as superseded -- so asking for one here would reject exactly
+    # the assets the split was built to produce.
+    edges = whitelist["bin_edges"]
+    required = [spatial_bin_key(scope, "planar-distance")
+                for scope in SPATIAL_SCOPES]
+    required.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"))
+    families = sorted({
+        entry.get("family") for entry in whitelist["members"].values()
+        if isinstance(entry, dict) and entry.get("family")
+    })
+    if families:
+        required.extend(
+            spatial_metrics.ee_family_bin_key(f) for f in families)
+    else:
+        required.append(spatial_bin_key(EE_OBJECT_SCOPE, "height-offset"))
+    for key, entry in (whitelist.get("sites") or {}).items():
+        if entry.get("site_type") == "region":
+            required.append(spatial_metrics.OBJECT_REGION_PLANAR_KEY)
+        else:
+            required.extend((spatial_metrics.OBJECT_SITE_PLANAR_KEY,
+                             spatial_metrics.OBJECT_SITE_HEIGHT_KEY))
+
+    missing = sorted({k for k in required if not edges.get(k)})
     if missing:
         raise SystemExit(
-            f"bin_stats calibrate no edges for {missing}; the shard predates "
-            "scoped spatial statistics. Re-collect before mining."
+            f"bin_stats calibrate no edges for {missing}; those relations "
+            "would emit nothing for the whole run. Re-collect before mining."
         )
+    print(f"[mine] families: {families or ['(none -- legacy shard)']}")
+    if whitelist.get("sites"):
+        print(f"[mine] sites: {sorted(whitelist['sites'])}")
     write_assets(affordances, whitelist, args.env_id, Path(args.configs))
     return 0
 
