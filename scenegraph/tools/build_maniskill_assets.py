@@ -81,6 +81,10 @@ def _robust_scale(values, is_change: bool) -> Optional[float]:
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "scenegraph" / "configs"
+# Reviewed site declarations are repository input, read regardless of where
+# the mined assets are written. Conflating the two made a pilot that wrote to
+# /tmp look for its declarations there too, and find none.
+SITES_DIR = CONFIGS / "sites"
 AFFORDANCE_SCHEMA_VERSION = 5
 # Shards below this carry no interaction traces, no env predicate traces
 # and no raw presence counts.
@@ -454,7 +458,8 @@ def orientation_counts(merged: Dict[str, Any]) -> Dict[str, int]:
 
 
 def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
-                 env_id: str, configs: Path = CONFIGS) -> Tuple[Dict, Dict]:
+                 env_id: str, sites_dir: Path = SITES_DIR
+                 ) -> Tuple[Dict, Dict]:
     objects: Dict[str, Dict[str, list]] = defaultdict(
         lambda: defaultdict(list))
     members: Dict[str, Dict[str, Any]] = defaultdict(
@@ -591,7 +596,7 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
     for key, family in families.items():
         plain_members[key]["family"] = family
 
-    sites = site_declarations(merged, plain_members, env_id, configs)
+    sites = site_declarations(merged, plain_members, env_id, sites_dir)
 
     affordances = {
         "_schema_version": AFFORDANCE_SCHEMA_VERSION,
@@ -763,7 +768,7 @@ def unclassified_supporters(merged, members) -> List[str]:
     )
 
 
-def declared_sites(env_id: str, configs: Path) -> Dict[str, Any]:
+def declared_sites(env_id: str, sites_dir: Path) -> Dict[str, Any]:
     """The reviewed site declarations for one task, or none.
 
     Sites are task semantics, not something a pose stream reveals. The
@@ -775,7 +780,7 @@ def declared_sites(env_id: str, configs: Path) -> Dict[str, Any]:
     So the declaration is written and reviewed, like a schedule, and the miner
     only checks the evidence agrees with it. Absent file means no sites.
     """
-    path = Path(configs) / "sites" / f"{env_id}.json"
+    path = Path(sites_dir) / f"{env_id}.json"
     if not path.is_file():
         return {}
     with open(path) as handle:
@@ -792,7 +797,7 @@ def keyed_pair_kinds(merged) -> Dict[str, set]:
     return kinds
 
 
-def site_declarations(merged, members, env_id, configs) -> Dict[str, Any]:
+def site_declarations(merged, members, env_id, sites_dir) -> Dict[str, Any]:
     """Reviewed declarations, checked against what the shard recorded.
 
     Every declared site has to be backed by samples and by members that exist,
@@ -801,12 +806,26 @@ def site_declarations(merged, members, env_id, configs) -> Dict[str, Any]:
     nothing declared is a task whose goal geometry was collected and then
     silently dropped. Both are errors here rather than surprises at runtime.
     """
-    declared = declared_sites(env_id, configs)
-    if not declared:
-        return {}
+    declared = declared_sites(env_id, sites_dir)
     kinds = keyed_pair_kinds(merged)
     site_pairs = kinds.get(KIND_OBJECT_SITE, set())
     region_pairs = kinds.get(KIND_OBJECT_REGION, set())
+
+    # Checked before the empty-declaration shortcut, not after. Returning
+    # early on "no declarations" is exactly how a task that *does* expose goal
+    # geometry ends up silently dropping it -- which is what happened to
+    # PegInsertionSide when the declaration directory was pointed at the
+    # asset output directory instead of the repo.
+    if site_pairs and not any(
+            e.get("site_type") == "surface" for e in declared.values()):
+        raise SystemExit(
+            f"{env_id}: the shard holds object-site samples "
+            f"{sorted(site_pairs)} that no declaration claims. The live hole "
+            f"geometry was collected and would be thrown away. Declare the "
+            f"site in {sites_dir}/{env_id}.json, or pass --sites."
+        )
+    if not declared:
+        return {}
 
     for key, entry in sorted(declared.items()):
         subject = entry.get("subject")
@@ -827,13 +846,6 @@ def site_declarations(merged, members, env_id, configs) -> Dict[str, Any]:
                 f"{env_id}: site {key!r} is declared but the shard holds no "
                 f"object-region samples for ({subject}, {key})."
             )
-    if site_pairs and not any(
-            e.get("site_type") == "surface" for e in declared.values()):
-        raise SystemExit(
-            f"{env_id}: the shard holds object-site samples {sorted(site_pairs)} "
-            "that no declaration claims. Declare the site or the geometry was "
-            "collected for nothing."
-        )
     return declared
 
 
@@ -1145,7 +1157,11 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Mine ManiSkill shards into assets")
     p.add_argument("--env-id", required=True)
     p.add_argument("--shards", default="data/maniskill_evidence")
-    p.add_argument("--configs", default=str(CONFIGS))
+    p.add_argument("--configs", default=str(CONFIGS),
+                   help="where the mined assets are written")
+    p.add_argument("--sites", default=str(SITES_DIR),
+                   help="reviewed site declarations to validate against; "
+                        "input, not output")
     p.add_argument("--target", type=int, default=0,
                    help="0 uses the target recorded in the shard")
     p.add_argument("--min-presence", type=float, default=0.2,
@@ -1162,7 +1178,7 @@ def main(argv=None) -> int:
     if not buckets:
         raise SystemExit("no complete buckets; nothing to mine")
     affordances, whitelist = build_assets(
-        merged, buckets, args.env_id, Path(args.configs))
+        merged, buckets, args.env_id, Path(args.sites))
 
     print(f"[mine] {len(affordances['objects'])} objects, "
           f"{len(whitelist['members'])} whitelist members")

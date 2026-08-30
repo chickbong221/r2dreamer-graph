@@ -773,6 +773,74 @@ from scenegraph.core.spatial_metrics import (
 )
 
 
+class SiteDeclarationSourceTest(unittest.TestCase):
+    """Reviewed declarations are input; mined assets are output.
+
+    Reading them from the same directory meant a pilot writing to /tmp looked
+    for its declarations there, found none, and silently mined a Peg asset
+    with no hole site at all -- the live geometry collected and thrown away.
+    """
+
+    SITE_SAMPLE = {"kind": "object-site", "src_key": "actor:peg",
+                   "dst_key": "spatial:hole_site",
+                   "src_pose": [0, 0, 0, 1, 0, 0, 0],
+                   "dst_pose": [0.1, 0, 0, 1, 0, 0, 0],
+                   "prev_src_pose": None, "prev_dst_pose": None}
+    MEMBERS = {"actor:peg": {"interaction_types": ["grasp"]}}
+
+    def _sites_dir(self, declared):
+        import json as _json
+        tmp = Path(tempfile.mkdtemp())
+        if declared is not None:
+            with open(tmp / "PegInsertionSide-v1.json", "w") as handle:
+                _json.dump({"env_id": "PegInsertionSide-v1",
+                            "sites": declared}, handle)
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        return tmp
+
+    def test_the_shipped_declarations_are_found_by_default(self):
+        for env in ("PickCube-v1", "PegInsertionSide-v1", "PullCubeTool-v1"):
+            self.assertTrue(
+                miner.declared_sites(env, miner.SITES_DIR), env)
+
+    def test_a_task_with_no_declaration_file_has_no_sites(self):
+        self.assertEqual(
+            miner.declared_sites("PlaceSphere-v1", miner.SITES_DIR), {})
+
+    def test_unclaimed_site_evidence_fails_loudly(self):
+        """Not silently mined away, which is what happened."""
+        with self.assertRaises(SystemExit) as ctx:
+            miner.site_declarations(
+                {"bin_keyed_pairs": [self.SITE_SAMPLE]}, self.MEMBERS,
+                "PegInsertionSide-v1", self._sites_dir(None))
+        self.assertIn("no declaration claims", str(ctx.exception))
+
+    def test_a_declaration_with_no_evidence_fails_loudly(self):
+        declared = {"spatial:hole_site": {
+            "site_type": "surface", "subject": "actor:peg"}}
+        with self.assertRaises(SystemExit) as ctx:
+            miner.site_declarations(
+                {"bin_keyed_pairs": []}, self.MEMBERS,
+                "PegInsertionSide-v1", self._sites_dir(declared))
+        self.assertIn("no object-site samples", str(ctx.exception))
+
+    def test_a_declaration_naming_an_absent_member_fails(self):
+        declared = {"spatial:hole_site": {
+            "site_type": "surface", "subject": "actor:ghost"}}
+        with self.assertRaises(SystemExit):
+            miner.site_declarations(
+                {"bin_keyed_pairs": [self.SITE_SAMPLE]}, self.MEMBERS,
+                "PegInsertionSide-v1", self._sites_dir(declared))
+
+    def test_matching_declaration_and_evidence_passes(self):
+        declared = {"spatial:hole_site": {
+            "site_type": "surface", "subject": "actor:peg"}}
+        out = miner.site_declarations(
+            {"bin_keyed_pairs": [self.SITE_SAMPLE]}, self.MEMBERS,
+            "PegInsertionSide-v1", self._sites_dir(declared))
+        self.assertEqual(sorted(out), ["spatial:hole_site"])
+
+
 class KeyedCalibrationTest(unittest.TestCase):
     """Scales that only the keyed reservoir can produce.
 
