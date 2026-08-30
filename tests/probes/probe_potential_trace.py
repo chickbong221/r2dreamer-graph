@@ -141,6 +141,43 @@ def report(env_id, frames, potentials, valids, verbose):
     return failed
 
 
+def explain(root, configs, schedules, index):
+    """Which completion facts hold at one frame, and with what labels.
+
+    A phase completing early hands every earlier phase its full weight through
+    cumulative credit, so one spurious fact on an unsettled first frame can
+    read as a finished episode. This says which fact.
+    """
+    frames = load_frames(root)
+    env_id = frames[0]["env_id"]
+    entity = build_entity_vocab(
+        os.path.join(configs, "subtask_whitelists", env_id))
+    schedule = compile_from_files(env_id, schedules, configs, entity)
+    frame = frames[index if index >= 0 else len(frames) + index]
+    labels = {(e["src"], e["relation"], e["dst"]): e for e in frame["edges"]}
+    key_of = {}
+    for node in frame["nodes"]:
+        key_of[node["node_id"]] = (
+            "ee" if node["node_type"] == "ee"
+            else (node.get("attributes") or {}).get("whitelist_key"))
+    by_key = {v: k for k, v in key_of.items()}
+
+    print("")
+    print(f"--- {env_id} frame {index} completions")
+    for phase in schedule.phases:
+        for clause in phase.completions:
+            src = by_key.get(clause.src_key, clause.src_key)
+            dst = by_key.get(clause.dst_key, clause.dst_key)
+            edge = labels.get((src, clause.relation, dst))
+            got = edge["label"] if edge else "<missing>"
+            hit = got in clause.labels
+            print(f"  [{'DONE' if hit else '    '}] {phase.name:22s} "
+                  f"{clause.relation:22s} {src} -> {dst}  "
+                  f"= {got:12s} wants {list(clause.labels)}"
+                  + (f"  raw={edge['raw_value']:.4f}"
+                     if edge and edge.get("raw_value") is not None else ""))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("roots", nargs="+")
@@ -148,7 +185,14 @@ def main():
     p.add_argument("--schedules",
                    default=str(ROOT / "scenegraph" / "configs" / "schedules"))
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--explain", type=int, action="append", metavar="FRAME",
+                   help="report which completion facts hold at this frame")
     args = p.parse_args()
+    if args.explain:
+        for root in args.roots:
+            for index in args.explain:
+                explain(root, args.configs, args.schedules, index)
+        return 0
     failed = 0
     for root in args.roots:
         failed += report(*score(root, args.configs, args.schedules), args.verbose)
