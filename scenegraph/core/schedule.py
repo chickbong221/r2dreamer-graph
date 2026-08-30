@@ -185,6 +185,13 @@ def scorable_relations(
     # Virtual, non-region sites carry a ladder on the object-site scale.
     ladders = {key for key, decl in (sites or {}).items()
                if key.startswith(SITE_PREFIX) and decl.site_type != SITE_REGION}
+    def _declared(site_keys, a, b):
+        for site, other in ((a, b), (b, a)):
+            if site in site_keys and (
+                    sites or {}).get(site).subject_key == other:
+                return True
+        return False
+
     ladder_spatial = {
         "planar-distance": bool(bin_edges.get(OBJECT_SITE_PLANAR_KEY)),
         "height-offset": bool(bin_edges.get(OBJECT_SITE_HEIGHT_KEY)),
@@ -244,8 +251,14 @@ def scorable_relations(
                                                   "key_components"),
                 "reached": reached_on(a, b),
                 **obj_spatial,
-                **(region_spatial if (a in regions or b in regions) else {}),
-                **(ladder_spatial if (a in ladders or b in ladders) else {}),
+                # Only the declared pair. A site relates to one subject;
+                # any other pairing is a fact the runtime does not emit.
+                **(region_spatial if _declared(regions, a, b) else {}),
+                **(ladder_spatial if _declared(ladders, a, b) else {}),
+                **({"planar-distance": False, "height-offset": False}
+                   if ((a in regions or b in regions
+                        or a in ladders or b in ladders)
+                       and not _declared(regions | ladders, a, b)) else {}),
                 **({"planar-distance": False}
                    if (a in surfaces or b in surfaces) else {}),
             }

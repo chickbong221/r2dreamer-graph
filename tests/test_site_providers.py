@@ -119,10 +119,60 @@ class PegHoleMouthTest(unittest.TestCase):
         near = sp.peg_hole_mouth(_peg_env(head=(-0.13, 0.3, 0.10)), 0, _decl())
         self.assertLess(site_distance(near, None), site_distance(far, None))
 
-    def test_reached_fires_inside_the_aperture(self):
-        at_mouth = _peg_env(depth=0.11, radius=0.018, head=(-0.111, 0.3, 0.10))
-        self.assertTrue(reached_holds(
-            sp.peg_hole_mouth(at_mouth, 0, _decl()), None))
+    def _reached(self, head, depth=0.11, radius=0.018,
+                 hole=(0.0, 0.3, 0.10), q=(1.0, 0.0, 0.0, 0.0)):
+        sp.reset_depth_cache()
+        env = _peg_env(depth=depth, radius=radius, hole=hole, head=head)
+        env.box_hole_pose = _Pose(hole, q)
+        return reached_holds(sp.peg_hole_mouth(env, 0, _decl()), None)
+
+    # A surface site is an oriented entry tube, not a distance ball. Nothing
+    # stops at a hole mouth: the peg head crosses it and keeps going, so a
+    # ball went true on the way in and false again a centimetre later --
+    # taking the phase gate with it for most of the insertion stroke.
+
+    def test_outside_the_entry_plane_is_not_reached(self):
+        self.assertFalse(self._reached(head=(-0.20, 0.3, 0.10)))
+
+    def test_at_the_mouth_and_aligned_is_reached(self):
+        self.assertTrue(self._reached(head=(-0.11, 0.3, 0.10)))
+
+    def test_deep_inside_and_aligned_is_still_reached(self):
+        """The regression: this is where the old ball said no, and the whole
+        insertion stroke lost its alignment reward."""
+        self.assertTrue(self._reached(head=(-0.02, 0.3, 0.10)))
+
+    def test_it_stays_reached_all_the_way_to_containment(self):
+        depth = 0.11
+        axials = [-depth + step * 0.01 for step in range(11)]
+        for axial in axials:
+            with self.subTest(axial=round(axial, 3)):
+                self.assertTrue(self._reached(head=(axial, 0.3, 0.10)))
+
+    def test_crossed_but_outside_the_aperture_is_not_reached(self):
+        """Past the plane a hand's width off to the side is not the hole."""
+        self.assertFalse(self._reached(head=(-0.02, 0.36, 0.10)))
+
+    def test_a_rotated_entry_axis_behaves_the_same(self):
+        """90 degrees about z, so the hole opens along +y. Nothing about the
+        test may depend on the axis happening to be the world x."""
+        q = (0.70710678, 0.0, 0.0, 0.70710678)
+        hole = (0.0, 0.3, 0.10)
+        # Mouth is a half-depth back along +y, so inside is larger y.
+        self.assertFalse(self._reached(head=(0.0, 0.10, 0.10), hole=hole, q=q))
+        self.assertTrue(self._reached(head=(0.0, 0.19, 0.10), hole=hole, q=q))
+        self.assertTrue(self._reached(head=(0.0, 0.28, 0.10), hole=hole, q=q))
+        self.assertFalse(self._reached(head=(0.06, 0.28, 0.10), hole=hole, q=q))
+
+    def test_a_surface_site_without_an_axis_is_rejected(self):
+        from scenegraph.core.sites import SiteSpec
+        import numpy as _np
+        spec = SiteSpec(declaration=_decl(),
+                        pose_world=_np.array([0, 0, 0, 1, 0, 0, 0], float),
+                        tolerance=0.018,
+                        subject_point_world=_np.zeros(3))
+        with self.assertRaises(SiteError):
+            spec.validate()
 
     def test_moving_the_box_origin_does_not_move_the_mouth_relative_to_the_hole(self):
         """The mouth is derived from the live hole frame, so a box that slid

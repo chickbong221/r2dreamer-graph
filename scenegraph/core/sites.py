@@ -72,6 +72,12 @@ SITE_HOLE = f"{SITE_PREFIX}hole_site"
 SITE_PULL_REGION = f"{SITE_PREFIX}pull_goal_region"
 
 
+# How far *before* the entry plane still counts as having reached it. A
+# millimetre: enough that a head resting exactly on the plane is not decided by
+# floating-point noise, small enough that it is not a second aperture.
+SURFACE_ENTRY_EPSILON = 1e-3
+
+
 class SiteError(ValueError):
     """A site declaration or observation that cannot be scored."""
 
@@ -237,6 +243,18 @@ class SiteSpec:
                 "the provider supplied no subject point. Falling back to the "
                 "subject's origin would calibrate one point and read another."
             )
+        if self.declaration.site_type == SITE_SURFACE:
+            axis = None if self.axis_world is None else np.asarray(
+                self.axis_world, dtype=float).reshape(-1)
+            if (axis is None or axis.size < 3
+                    or not np.all(np.isfinite(axis[:3]))
+                    or float(np.linalg.norm(axis[:3])) <= 0.0):
+                raise SiteError(
+                    f"{where}: surface site {self.key!r} has no usable entry "
+                    "axis. Without one 'reached' has no side to be on and "
+                    "would fall back to a distance ball, which a subject "
+                    "passing through the surface leaves again."
+                )
 
 
 def site_pair_points(
@@ -285,13 +303,50 @@ def reached_holds(
     one and an exact component of the other -- never an approximation of
     either.
 
-    A region is ``<`` because PullCubeTool's ``evaluate`` is; a point and a
-    surface are ``<=`` because PickCube's ``is_obj_placed`` is. The asymmetry
-    is the environments', not ours.
+    A region is ``<`` because PullCubeTool's ``evaluate`` is; a point is
+    ``<=`` because PickCube's ``is_obj_placed`` is. The asymmetry is the
+    environments', not ours.
+
+    A surface is neither. It is an oriented entry tube: past the plane, and
+    within the opening. A distance ball is wrong for a surface because nothing
+    stops at one -- PegInsertionSide's peg head crosses the hole mouth and
+    keeps going, so a ball went true on the way in and false again a
+    centimetre later, taking the phase gate with it for most of the insertion
+    stroke. Being inside the hole is emphatically still having reached its
+    mouth.
     """
+    if spec.declaration.site_type == SITE_SURFACE:
+        return _entered_surface(spec, subject_pose_world)
     distance = site_distance(spec, subject_pose_world)
     if distance is None:
         return None
     if spec.declaration.site_type == SITE_REGION:
         return bool(distance < float(spec.tolerance))
     return bool(distance <= float(spec.tolerance))
+
+
+def _entered_surface(
+    spec: SiteSpec, subject_pose_world: Optional[Sequence[float]],
+) -> Optional[bool]:
+    """Whether the subject is at or past the entry plane, inside the opening.
+
+    The provider's axis points from the mouth *into* the body, so a positive
+    axial component means the subject has gone in. Radial slack is the
+    opening's own half-width, which is what makes this a tube rather than a
+    half-space: a peg that crossed the plane a hand's width off to the side
+    has not reached the hole.
+    """
+    points = site_pair_points(spec, subject_pose_world)
+    if points is None or spec.axis_world is None:
+        return None
+    source, site = points
+    axis = np.asarray(spec.axis_world, dtype=float).reshape(-1)[:3]
+    norm = float(np.linalg.norm(axis))
+    if norm <= 0.0 or not np.all(np.isfinite(axis)):
+        return None
+    axis = axis / norm
+    delta = source - site
+    axial = float(np.dot(delta, axis))
+    radial = float(np.linalg.norm(delta - axial * axis))
+    return bool(axial >= -SURFACE_ENTRY_EPSILON
+                and radial <= float(spec.tolerance))

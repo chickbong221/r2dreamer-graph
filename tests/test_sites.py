@@ -779,5 +779,75 @@ class GlobalBinBindingTest(unittest.TestCase):
                     )
 
 
+class DeclaredSitePairTest(unittest.TestCase):
+    """A site relates to one subject. Every other pairing is a fact the
+    runtime does not emit and no sample calibrated.
+
+    PullCubeTool's goal region was emitting a second edge for the *tool*,
+    scored on a scale mined from the cube -- an extra target row the schedule
+    never reads. The miner already filtered to the declared pair; emission did
+    not.
+    """
+
+    REGION = "spatial:pull_goal_region"
+
+    def _cfg(self, subject="actor:cube"):
+        decl = SiteDeclaration(
+            key=self.REGION, site_type=SITE_REGION, subject_key=subject,
+            metric=METRIC_PLANAR, source=SOURCE_ORIGIN,
+            provider="robot_base_region", provenance="p")
+        spec = SiteSpec(declaration=decl,
+                        pose_world=np.asarray(_pose(), float), tolerance=0.6)
+        return {
+            "bin_edges": {OBJECT_REGION_PLANAR_KEY: [0.7, 0.75, 0.8, 0.86],
+                          spatial_bin_key(OBJECT_OBJECT_SCOPE,
+                                          "planar-distance"): [.1, .2, .3, .4],
+                          spatial_bin_key(OBJECT_OBJECT_SCOPE,
+                                          "height-offset"): [-.2, -.06, .06, .2]},
+            "site_declarations": {self.REGION: decl},
+            "site_specs": [spec],
+            "families": {"actor:cube": "manipuland",
+                         "actor:l_shape_tool": "manipuland"},
+            "structural_surfaces": set(),
+            "object_object_spatial": True,
+            "affordance_set": None,
+        }
+
+    def _region_edges(self, cfg):
+        graph = _graph(
+            _obj("actor:cube", (0.8, 0.0, 0.9)),
+            _obj("actor:l_shape_tool", (0.5, 0.1, 0.9)),
+            _obj(self.REGION, (0.0, 0.0, 0.0), dynamic=False),
+        )
+        return [e for e in object_object_spatial_edges(graph, None, cfg)
+                if e.bin_key == OBJECT_REGION_PLANAR_KEY]
+
+    def test_only_the_declared_subject_gets_a_region_edge(self):
+        edges = self._region_edges(self._cfg())
+        self.assertEqual(len(edges), 1)
+        self.assertEqual({edges[0].src, edges[0].dst},
+                         {"actor:cube", self.REGION})
+
+    def test_the_other_movable_gets_none(self):
+        edges = self._region_edges(self._cfg())
+        self.assertNotIn("actor:l_shape_tool",
+                         {e.src for e in edges} | {e.dst for e in edges})
+
+    def test_changing_the_declared_subject_moves_the_edge(self):
+        """Driven by the declaration, not by a name."""
+        edges = self._region_edges(self._cfg(subject="actor:l_shape_tool"))
+        self.assertEqual(len(edges), 1)
+        self.assertEqual({edges[0].src, edges[0].dst},
+                         {"actor:l_shape_tool", self.REGION})
+
+    def test_a_region_pair_still_emits_no_height(self):
+        graph = _graph(
+            _obj("actor:cube", (0.8, 0.0, 0.9)),
+            _obj(self.REGION, (0.0, 0.0, 0.0), dynamic=False),
+        )
+        edges = object_object_spatial_edges(graph, None, self._cfg())
+        self.assertEqual([e.relation for e in edges], ["planar-distance"])
+
+
 if __name__ == "__main__":
     unittest.main()

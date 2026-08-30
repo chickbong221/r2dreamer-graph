@@ -445,6 +445,22 @@ def is_ladder_site(node: Node, cfg: dict) -> bool:
     return bool(key) and key in ladder_site_keys(cfg)
 
 
+def is_declared_site_pair(cfg: dict, site: Node, other: Node) -> bool:
+    """Whether this pair is the one the site's declaration names.
+
+    A site node pairs with every other object in the scene, but only one of
+    those pairs was declared, calibrated and scheduled. PullCubeTool's goal
+    region emitted a second edge for the *tool*, labelled on a scale mined
+    from the cube -- an extra fact in the world-model target that no schedule
+    reads and no sample calibrated. The miner already filters to the declared
+    pair; this is the same rule on the emitting side.
+    """
+    decl = (cfg.get("site_declarations") or {}).get(_whitelist_key(site))
+    if decl is None:
+        return False
+    return _whitelist_key(other) == getattr(decl, "subject_key", None)
+
+
 def _spec_for(cfg: dict, key: str):
     for spec in cfg.get("site_specs") or ():
         if spec.key == key:
@@ -1300,16 +1316,22 @@ def object_object_spatial_edges(
         site = (a if is_ladder_site(a, cfg)
                 else b if is_ladder_site(b, cfg) else None)
         if site is not None:
-            edges.extend(_site_ladder_edges(
-                a, b, site, cfg, site_pd_spec, site_ho_spec))
+            # Same discipline as the region above: one declared pair per site.
+            if is_declared_site_pair(cfg, site, b if site is a else a):
+                edges.extend(_site_ladder_edges(
+                    a, b, site, cfg, site_pd_spec, site_ho_spec))
             continue
         d, dz = object_pair_measures(a, b, aff_set)
         # A region is a disc, not a body: planar distance to its centre is the
         # whole of its geometry, on its own scale, and there is no height to
         # report. Handled before the structural branch because the two are
         # mutually exclusive and this one owns both of the pair's outputs.
-        if is_region_site(a, cfg) or is_region_site(b, cfg):
-            if region_spec is not None:
+        region = (a if is_region_site(a, cfg)
+                  else b if is_region_site(b, cfg) else None)
+        if region is not None:
+            other = b if region is a else a
+            if (region_spec is not None
+                    and is_declared_site_pair(cfg, region, other)):
                 edges.append(Edge(
                     a.node_id, b.node_id, "planar-distance",
                     bin_label(d, region_spec[0], region_spec[1]), raw_value=d,
