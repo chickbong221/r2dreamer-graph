@@ -238,6 +238,21 @@ def _paper_edge_fractions(
     return np.linspace(0.18, 0.58, int(count), dtype=float)
 
 
+def _paper_pair_offset(
+    graph: Graph, pair: Tuple[str, str],
+) -> Optional[np.ndarray]:
+    """Give crowded PlaceSphere pairs a stable label lane.
+
+    The EE-bin edge is vertical and sits immediately beside the bin-sphere
+    diagonal.  Keeping its chips just to the left of the vertical edge makes
+    it clear which line they describe without hiding any valid relations.
+    """
+    ee_bin = tuple(sorted(("ee", "actor:bin")))
+    if graph.env_id == "PlaceSphere-v1" and tuple(sorted(pair)) == ee_bin:
+        return np.asarray([-1.60, -0.45], dtype=float)
+    return None
+
+
 def _paper_display_edges(graph: Graph) -> List[Edge]:
     """Return a paper-only, presentation-focused view of ``graph.edges``.
 
@@ -267,25 +282,6 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
                     bin_id, table_id, "support", "dst-holds",
                     attributes={"support_role": "supporter"},
                 ))
-        # The paper figure explains the two schedule pairs. EE-bin and spatial
-        # relations to the structural table are valid context for the model,
-        # but their chips collide with the task relations in a narrow paper
-        # panel. Keep the exact JSON untouched and simplify only this rendered
-        # view: EE-sphere, sphere-bin, plus positive physical table supports.
-        schedule_pairs = {
-            tuple(sorted(("ee", "actor:sphere"))),
-            tuple(sorted(("actor:sphere", "actor:bin"))),
-        }
-        table_id = "actor:table-workspace"
-        edges = [
-            edge for edge in edges
-            if _unordered_pair(edge) in schedule_pairs
-            or (
-                table_id in (edge.src, edge.dst)
-                and edge.relation in _PRIMARY_PHYSICAL_RELATIONS
-                and str(edge.label) in _POSITIVE_PHYSICAL_LABELS
-            )
-        ]
     # Once a stronger physical predicate holds, positive contact is implied
     # and only repeats the same event.  Apply the same visual hierarchy to an
     # established affordance, where contact-compatibility would otherwise add
@@ -579,8 +575,14 @@ def render_graph(
                 ]
                 y_offsets = [float(anchor[1] - mid[1]) for anchor in anchors]
             else:
+                fixed_offset = _paper_pair_offset(graph, pair)
                 anchors = [
                     np.array([float(mid[0]), float(mid[1] + offset)])
+                    + (
+                        fixed_offset
+                        if fixed_offset is not None
+                        else np.zeros(2, dtype=float)
+                    )
                     for offset in y_offsets
                 ]
                 # Move collisions across this edge, not vertically down the
@@ -590,7 +592,10 @@ def render_graph(
                 normal = np.array([-u[1], u[0]], dtype=float)
                 push_direction = None
                 nudge = max(0.35, chip["nudge_step"] * 0.5)
-                for _ in range(int(chip["max_iters"])):
+                for _ in range(
+                    0 if fixed_offset is not None
+                    else int(chip["max_iters"])
+                ):
                     hit = next((
                         (anchor, width, height, box)
                         for anchor, width, height in zip(

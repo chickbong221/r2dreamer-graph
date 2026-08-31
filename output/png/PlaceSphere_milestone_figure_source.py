@@ -411,16 +411,22 @@ def build() -> None:
 
     # Preserve every node label. Any aspect-ratio padding uses the graph's own
     # peach background, so there are no white head/foot bands and no crop.
+    # The inner margin protects labels that sit at the graph image boundary.
     graph_top, graph_h = 486, 390
+    graph_inset = 10
     for index, step in enumerate(MILESTONES):
         x = content_x0 + index * (col_w + GAP)
         with Image.open(GRAPH_DIR / f"graph_{step:04d}.png") as source:
             graph = fit_contain(
                 source.convert("RGBA"),
-                (col_w, graph_h),
+                (col_w - 2 * graph_inset, graph_h - 2 * graph_inset),
                 background=(253, 240, 233, 255),
             )
-        canvas.alpha_composite(graph, (x, graph_top))
+        graph_panel = Image.new(
+            "RGBA", (col_w, graph_h), (253, 240, 233, 255)
+        )
+        graph_panel.alpha_composite(graph, (graph_inset, graph_inset))
+        canvas.alpha_composite(graph_panel, (x, graph_top))
         draw.rectangle((x, graph_top, x + col_w, graph_top + graph_h), outline=GRID, width=2)
 
     # Complete subject-relation-object phrases; no relation-category prefix.

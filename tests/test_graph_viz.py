@@ -10,6 +10,7 @@ from scenegraph.viz.graph_draw import (
     _node_display_label,
     _paper_display_edges,
     _paper_edge_fractions,
+    _paper_pair_offset,
     _radial_layout,
     render_graph,
     render_graph_array,
@@ -145,7 +146,7 @@ class GraphDisplayFactsTest(unittest.TestCase):
         np.testing.assert_allclose(fractions, [0.18, 0.38, 0.58])
         self.assertTrue(np.all((fractions > 0.0) & (fractions < 1.0)))
 
-    def test_place_sphere_paper_view_keeps_only_schedule_and_support_pairs(self):
+    def test_place_sphere_paper_view_preserves_context_relations(self):
         graph = Graph(
             frame=94,
             env_id="PlaceSphere-v1",
@@ -168,11 +169,18 @@ class GraphDisplayFactsTest(unittest.TestCase):
         shown = _paper_display_edges(graph)
         facts = {(edge.src, edge.dst, edge.relation) for edge in shown}
 
-        self.assertNotIn(("ee", "actor:bin", "planar-distance"), facts)
-        self.assertNotIn(("ee", "actor:table-workspace", "height-offset"), facts)
+        self.assertIn(("ee", "actor:bin", "planar-distance"), facts)
+        self.assertIn(("ee", "actor:table-workspace", "height-offset"), facts)
         self.assertIn(("ee", "actor:sphere", "planar-distance"), facts)
         self.assertIn(("actor:bin", "actor:sphere", "planar-distance"), facts)
         self.assertIn(("actor:sphere", "actor:table-workspace", "support"), facts)
+
+    def test_place_sphere_ee_bin_labels_use_left_lane(self):
+        graph = Graph(frame=94, env_id="PlaceSphere-v1", camera="base")
+
+        offset = _paper_pair_offset(graph, ("actor:bin", "ee"))
+
+        np.testing.assert_allclose(offset, [-1.60, -0.45])
 
     def test_paper_graph_is_cropped_and_has_no_title_strip(self):
         from PIL import Image
