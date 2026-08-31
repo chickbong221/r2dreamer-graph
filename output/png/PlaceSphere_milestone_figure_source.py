@@ -416,33 +416,18 @@ def build() -> None:
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), PAPER)
     draw = ImageDraw.Draw(canvas)
 
-    draw.text((MARGIN, 34), "PlaceSphere: relational milestones and schedule reward", font=F_TITLE, fill=INK)
-    draw.text(
-        (MARGIN, 92),
-        "Selected relation-kind changes from a successful episode (seed 0006); distance-only threshold crossings are compressed.",
-        font=F_SUBTITLE,
-        fill=MUTED,
-    )
-    legend_x = WIDTH - MARGIN - 710
-    draw.rounded_rectangle((legend_x, 36, legend_x + 28, 64), radius=5, fill=BLUE_LIGHT, outline=BLUE_DARK, width=2)
-    draw.text((legend_x + 40, 38), "scheduled progress", font=F_SMALL, fill=INK)
-    draw.rounded_rectangle((legend_x + 264, 36, legend_x + 292, 64), radius=5, fill=PEACH, outline=PEACH_DARK, width=2)
-    draw.text((legend_x + 304, 38), "neutral / regressive", font=F_SMALL, fill=INK)
-
     content_x0 = MARGIN + SIDE_LABEL
     content_x1 = WIDTH - MARGIN
     usable = content_x1 - content_x0
     col_w = (usable - GAP * (len(MILESTONES) - 1)) // len(MILESTONES)
 
-    # Filmstrip: step label above, transition reward inside each frame.
-    strip_top, image_top, image_h = 152, 205, 345
+    # Paper filmstrip: no headline or step labels, only transition reward.
+    strip_top, image_top, image_h = 10, 42, 400
     strip_bottom = image_top + image_h + 30
     draw.rounded_rectangle((content_x0 - 10, strip_top, content_x1 + 10, strip_bottom), radius=8, fill=FILM)
     draw_film_holes(draw, strip_top, strip_bottom)
-    draw.text((MARGIN, image_top + 130), "FRAME", font=F_TINY, fill=MUTED, anchor="mm")
     for index, step in enumerate(MILESTONES):
         x = content_x0 + index * (col_w + GAP)
-        draw.text((x + col_w / 2, 167), f"Step {step:03d}", font=F_STEP, fill=INK, anchor="ma")
         with Image.open(FRAME_DIR / f"frame_{step:04d}.png") as source:
             frame = fit_cover(source.convert("RGBA"), (col_w, image_h))
         canvas.alpha_composite(frame, (x, image_top))
@@ -450,63 +435,38 @@ def build() -> None:
         reward_text = f"r = {rewards[step]:+.3f}"
         rounded_text_box(draw, (x + 12, image_top + 12), reward_text, (20, 27, 34, 220))
 
-    # Corresponding graph row.
-    graph_title_y, graph_top, graph_h = 608, 652, 410
-    draw.text((content_x0, graph_title_y), "Corresponding scene graphs", font=F_SECTION, fill=INK)
-    draw.text((MARGIN, graph_top + graph_h / 2), "GRAPH", font=F_TINY, fill=MUTED, anchor="mm")
+    # Original paper-renderer graphs, cropped to fill each panel without white
+    # head/foot bands.  The graph renderer itself owns edge-label placement.
+    graph_top, graph_h = 486, 390
     for index, step in enumerate(MILESTONES):
         x = content_x0 + index * (col_w + GAP)
         with Image.open(GRAPH_DIR / f"graph_{step:04d}.png") as source:
-            graph = fit_contain(source.convert("RGBA"), (col_w, graph_h), background=WHITE)
+            graph = fit_cover(source.convert("RGBA"), (col_w, graph_h))
         canvas.alpha_composite(graph, (x, graph_top))
         draw.rectangle((x, graph_top, x + col_w, graph_top + graph_h), outline=GRID, width=2)
 
-    # True-time schedule bands.  Same-kind distance ladders are summarized in
-    # one interval, matching the request to avoid a frame for each threshold.
-    draw.text((content_x0, 1094), "Schedule-aligned relation summary", font=F_SECTION, fill=INK)
+    # Complete subject-relation-object phrases; no relation-category prefix.
     draw_schedule_row(
         draw,
-        1134,
-        "EE  →  Sphere",
+        900,
         [
-            (1, 10, "medium distance\nfit unobserved", "reward"),
-            (11, 35, "near → very-near\npoor grasp fit", "reward"),
-            (36, 42, "partial\ngrasp fit", "reward"),
-            (43, 43, "contact + match", "reward"),
-            (44, 110, "grasp holds", "reward"),
-            (111, 111, "release", "neutral"),
-            (112, 116, "near; partial fit", "neutral"),
+            (1, 10, "ee is medium-distance from sphere", "reward"),
+            (11, 35, "ee is near sphere\nee has poor grasp fit with sphere", "reward"),
+            (36, 42, "ee has partial grasp fit with sphere", "reward"),
+            (43, 43, "ee contacts sphere", "reward"),
+            (44, 110, "ee grasps sphere", "reward"),
+            (111, 116, "ee is near sphere", "neutral"),
         ],
     )
     draw_schedule_row(
         draw,
-        1274,
-        "Sphere  →  Bin",
+        1032,
         [
-            (1, 83, "very-far; support fit unobserved", "neutral"),
-            (84, 93, "far → medium\ndistance progress", "reward"),
-            (94, 111, "near → very-near\npoor support fit", "reward"),
-            (112, 116, "contact\nsupported", "reward"),
+            (1, 83, "sphere is very-far from bin", "neutral"),
+            (84, 93, "sphere approaches bin", "reward"),
+            (94, 111, "sphere is near to very-near bin\nsphere has poor support fit with bin", "reward"),
+            (112, 116, "bin supports sphere", "reward"),
         ],
-    )
-
-    draw.text(
-        (content_x0, 1422),
-        "Reward overlay: r_t = Φ_t − Φ_t−1 (undiscounted schedule potential).  Step 001 is the first reliable post-reset frame.",
-        font=F_SMALL,
-        fill=MUTED,
-    )
-    draw.text(
-        (content_x0, 1460),
-        "Milestones: start · grasp affordance introduced/refined · contact · grasp · support affordance introduced · release · settled support.",
-        font=F_SMALL,
-        fill=MUTED,
-    )
-    draw.text(
-        (content_x0, 1512),
-        f"Potential: Phi(1)={potentials[1]:.3f}  ->  Phi(112)={potentials[112]:.3f}",
-        font=F_SECTION,
-        fill=INK,
     )
 
     canvas.convert("RGB").save(OUT, format="PNG", optimize=True, dpi=(300, 300))
