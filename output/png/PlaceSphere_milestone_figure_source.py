@@ -10,9 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from scipy import ndimage
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +19,6 @@ FRAME_DIR = EPISODE / "frames"
 GRAPH_DIR = EPISODE / "graphs"
 GRAPH_JSON_DIR = EPISODE / "graph_json"
 OUT = Path(__file__).with_name("PlaceSphere_milestone_figure.png")
-EPISODE_JSON = json.loads((EPISODE / "episode.json").read_text(encoding="utf-8"))
 
 # Start, affordance introductions/refinements, physical transitions, and settle.
 # Distance-only far/medium/very-near crossings are deliberately not separate
@@ -171,63 +168,6 @@ def fit_contain(source: Image.Image, size: tuple[int, int], background=WHITE) ->
     out = Image.new("RGBA", size, background)
     out.alpha_composite(resized.convert("RGBA"), ((target_w - resized.width) // 2, (target_h - resized.height) // 2))
     return out
-
-
-def callouts_at(step: int) -> list[dict]:
-    record = next(item for item in EPISODE_JSON["steps"] if int(item["step"]) == step)
-    return list(record["callouts"])
-
-
-def move_table_callout_left(source: Image.Image, step: int) -> Image.Image:
-    """Move the baked table chip to clear left-side tabletop space.
-
-    Exported paper frames already contain their callouts.  The old table chip
-    and leader are filled from the nearest surrounding tabletop pixels, then a
-    matching chip is placed low on the left, vertically clear of the sphere
-    chip.  Other entity labels and all scene pixels remain unchanged.
-    """
-    image = source.convert("RGB")
-    table = next(item for item in callouts_at(step) if item["node_id"] == "actor:table-workspace")
-    chip = tuple(round(float(v)) for v in table["chip"])
-    anchor = tuple(float(v) for v in table["anchor"])
-    mask = Image.new("L", image.size, 0)
-    md = ImageDraw.Draw(mask)
-    expand = 9
-    md.rectangle((chip[0] - expand, chip[1] - expand, chip[2] + expand, chip[3] + expand), fill=255)
-    cx = 0.5 * (chip[0] + chip[2])
-    start_y = chip[3] if anchor[1] > chip[3] else chip[1]
-    md.line((cx, start_y, cx, anchor[1]), fill=255, width=22)
-    md.ellipse((cx - 18, anchor[1] - 18, cx + 18, anchor[1] + 18), fill=255)
-
-    pixels = np.asarray(image).copy()
-    unknown = np.asarray(mask) > 0
-    nearest = ndimage.distance_transform_edt(unknown, return_distances=False, return_indices=True)
-    pixels[unknown] = pixels[tuple(nearest[:, unknown])]
-    repaired = Image.fromarray(pixels, mode="RGB")
-
-    draw = ImageDraw.Draw(repaired)
-    label_font = font(49, bold=True)
-    color = tuple(int(v) for v in table["color"])
-    bbox = draw.textbbox((0, 0), "table", font=label_font)
-    pad_x, pad_y = 17, 11
-    chip_w = bbox[2] - bbox[0] + 2 * pad_x
-    chip_h = bbox[3] - bbox[1] + 2 * pad_y
-    rect = (18, 808, 18 + chip_w, 808 + chip_h)
-    target = (max(95, rect[2] - 22), 790)
-    start = (target[0], rect[1])
-    draw.line((start, target), fill=WHITE[:3], width=12)
-    draw.line((start, target), fill=color, width=4)
-    draw.ellipse((target[0] - 13, target[1] - 13, target[0] + 13, target[1] + 13), fill=WHITE[:3])
-    draw.ellipse((target[0] - 9, target[1] - 9, target[0] + 9, target[1] + 9), fill=color)
-    draw.rounded_rectangle(rect, radius=14, fill=color, outline=WHITE[:3], width=4)
-    draw.text(
-        ((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2),
-        "table",
-        font=label_font,
-        fill=WHITE[:3],
-        anchor="mm",
-    )
-    return repaired
 
 
 def arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int],
