@@ -18,7 +18,7 @@ Usage::
     export MS_ASSET_DIR=/root/.maniskill
     python -m scenegraph.tools.collect_robot_success_states \\
         --ckpt-root /root/projects/ReLDreamer/mshab_checkpoints \\
-        --n-success 30 --num-envs 8
+        --algo rl --n-success 30 --num-envs 8
 
 Filters::
 
@@ -42,6 +42,14 @@ from typing import Iterable, List, Optional, Set, Tuple
 # nests them under an extra level wants that level named here, and discovery
 # says which one when it finds none.
 DEFAULT_CKPT_ROOT = "/root/projects/ReLDreamer/mshab_checkpoints"
+# The release keeps one tree per training algorithm --  bc, dp, rl -- above
+# the task level, so the full path is
+# ``<root>/<algo>/<task>/<subtask>/<target>/policy.pt``. Which algorithm
+# produced a rollout is not cosmetic: the whitelist and the calibration bins
+# describe the behaviour of the policy that was rolled out, so mixing two
+# would mine one asset from two different behaviours. Named explicitly, and
+# printed, rather than merged by globbing every tree at once.
+DEFAULT_CKPT_ALGO = "rl"
 
 # What ``--skip-done`` accepts as already collected. Must track the collector
 # wrapper's ``_SCHEMA_VERSION`` and the miner's ``MIN_ROLLOUT_SCHEMA``: all
@@ -50,11 +58,23 @@ DEFAULT_CKPT_ROOT = "/root/projects/ReLDreamer/mshab_checkpoints"
 REQUIRED_ROLLOUT_SCHEMA = 9
 
 
+def checkpoint_glob(subtask: str, algo: str = "") -> str:
+    """The pattern that finds one policy per (task, target).
+
+    With an algorithm the tree is ``<algo>/<task>/<subtask>/<target>``; the
+    flat form without one is kept so a root already pointed at a single
+    algorithm still works.
+    """
+    prefix = f"{algo}/" if algo else ""
+    return f"{prefix}*/{subtask}/*/policy.pt"
+
+
 def _discover_work(
     ckpt_root: Path,
     subtask: str,
     task_filter: List[str],
     obj_filter: List[str],
+    algo: str = "",
 ) -> List[Tuple[str, str, Path]]:
     """Find per-object checkpoints, deduplicated by (task, subtask, obj_id).
 
@@ -63,9 +83,13 @@ def _discover_work(
     on the counter -- so collapsing them keeps whichever task sorted first and
     silently mines every other task's whitelist against the wrong scene. The
     output tree is task-namespaced to match, so the three collections coexist.
+
+    ``algo`` names the training-algorithm tree above the task level. The
+    positions read below are counted from the end, so both layouts index the
+    same way.
     """
     seen: dict = {}
-    for pt in sorted(ckpt_root.glob(f"*/{subtask}/*/policy.pt")):
+    for pt in sorted(ckpt_root.glob(checkpoint_glob(subtask, algo))):
         parts = pt.parts
         if len(parts) < 4:
             continue
@@ -89,10 +113,9 @@ def suggest_ckpt_roots(ckpt_root: Path, scan_cap: int = 500) -> List[str]:
 
     Discovery wants ``<root>/<task>/<subtask>/<target>/policy.pt``, so for any
     policy found, the root it implies is its fourth parent. A release that
-    nests everything one level deeper -- ``.../mshab_checkpoints/rl/...`` --
-    yields nothing and reports the same "no checkpoints matched" as an empty
-    directory, which is the least useful thing it could say. This turns that
-    into the root that would have worked.
+    nests everything one level deeper yields nothing and reports the same "no
+    checkpoints matched" as an empty directory, which is the least useful
+    thing it could say.
     """
     roots: Set[Path] = set()
     for index, policy in enumerate(ckpt_root.glob("**/policy.pt")):
@@ -101,6 +124,23 @@ def suggest_ckpt_roots(ckpt_root: Path, scan_cap: int = 500) -> List[str]:
         if len(policy.parents) >= 4:
             roots.add(policy.parents[3])
     return sorted(str(path) for path in roots)
+
+
+def available_algos(ckpt_root: Path, scan_cap: int = 500) -> List[str]:
+    """Algorithm trees that hold policies at the expected depth.
+
+    The released checkpoints are ``<root>/{bc,dp,rl}/<task>/...``, so a root
+    pointed at the base finds nothing and the missing piece is an algorithm
+    name, not a different root. Derived from where the policies actually are
+    rather than from a hardcoded list, so a release that adds a fourth
+    algorithm reports it without a code change.
+    """
+    names: Set[str] = set()
+    for root in suggest_ckpt_roots(ckpt_root, scan_cap):
+        candidate = Path(root)
+        if candidate.parent == ckpt_root:
+            names.add(candidate.name)
+    return sorted(names)
 
 
 def _already_done(
@@ -468,6 +508,12 @@ def parse_args(argv: Optional[Iterable[str]] = None):
         help="Manipulation subtask checkpoint tree to collect.",
     )
     p.add_argument(
+        "--algo", default=DEFAULT_CKPT_ALGO,
+        help="Training-algorithm tree under --ckpt-root (bc, dp, rl). The "
+             "released checkpoints keep one per algorithm above the task "
+             "level. Pass an empty string if the root already names one.",
+    )
+    p.add_argument(
         "--build-config", default="",
         help="Collect only from this ReplicaCAD build configuration. Required "
              "for a scene-pinned experiment: without it the task plans are "
@@ -583,17 +629,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                   "Collection runs on the server.", file=sys.stderr)
         return 2
 
-    work = _discover_work(ckpt_root, args.subtask, args.task, args.obj)
+    algo = str(getattr(args, "algo", "") or "")
+    work = _discover_work(ckpt_root, args.subtask, args.task, args.obj, algo)
     if not work:
         print("ERROR: no per-object checkpoints matched the filters under "
               f"{ckpt_root}", file=sys.stderr)
-        print(f"       expected {ckpt_root}/<task>/{args.subtask}"
+        shape = f"{algo}/" if algo else ""
+        print(f"       expected {ckpt_root}/{shape}<task>/{args.subtask}"
               "/<target>/policy.pt", file=sys.stderr)
-        candidates = [c for c in suggest_ckpt_roots(ckpt_root)
-                      if c != str(ckpt_root)]
-        if candidates:
-            print("       policies do exist, one level in. Try --ckpt-root "
-                  + " or ".join(candidates), file=sys.stderr)
+        algos = sorted({name for name in available_algos(ckpt_root)
+                        if name != algo})
+        if algos:
+            print("       policies do exist under: "
+                  + ", ".join(f"--algo {name}" for name in algos),
+                  file=sys.stderr)
         elif not any(ckpt_root.glob("**/policy.pt")):
             print(f"       no policy.pt anywhere under {ckpt_root}",
                   file=sys.stderr)
@@ -602,6 +651,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if args.list_build_configs:
         return _list_build_configs(work, args)
 
+    print(f"[plan] algo={algo or '<flat>'} under {ckpt_root}")
     print(f"[plan] {len(work)} (task, obj) units; n_success target={args.n_success}")
     print(
         f"[plan] writing under "

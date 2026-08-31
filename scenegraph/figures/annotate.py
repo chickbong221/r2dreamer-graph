@@ -158,8 +158,8 @@ def draw_callouts(
     """Return ``frame`` with a chip per callout. The input is not modified.
 
     Compact objects prefer a free side. The end effector uses a horizontal
-    callout on its left, and large background surfaces are labelled at their
-    right-hand edge, where paper frames normally have clear tabletop space.
+    callout on its left, and large background surfaces are labelled on the
+    left in a raised free lane with a leader back to the tabletop.
     Candidate positions on all four sides still provide de-collision when
     projected objects are close.
     """
@@ -244,15 +244,16 @@ def _place_chip(call, chip_w, chip_h, width, height, gap, margin, pad, placed):
     below = (vertical_x, bottom + gap + half_h)
     surface = _is_large_surface(call, width, height)
     if surface:
-        # Keep both the table name and its dot in the empty space at the right
-        # of the tabletop rather than competing with the manipulated objects.
-        ax = min(right - margin - half_w, width - margin - half_w)
-        ax = max(ax, margin + half_w)
+        # Keep the table name on the left, where it reads as the base of the
+        # graph/frame composition.  Prefer a raised chip with a visible leader
+        # into the tabletop.  If the sphere label already occupies that lane,
+        # the ordinary collision check below falls through to the lower lane
+        # rather than allowing the two names to overlap.
+        ax = margin + half_w
         ay = min(max(float(call.anchor[1]), top), bottom)
         candidates = [
             (ax, ay - gap - half_h),
             (ax, ay + gap + half_h),
-            (ax - gap - half_w, ay),
             (ax + gap + half_w, ay),
             *horizontal,
             above,

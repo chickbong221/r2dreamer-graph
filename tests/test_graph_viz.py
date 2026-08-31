@@ -9,6 +9,7 @@ from scenegraph.viz.graph_draw import (
     _group_by_family,
     _node_display_label,
     _paper_display_edges,
+    _paper_fixed_push_direction,
     _radial_layout,
     render_graph,
     render_graph_array,
@@ -131,6 +132,21 @@ class GraphDisplayFactsTest(unittest.TestCase):
         ee_offset = pos["ee"] - pos["cube"]
         cross = object_edge[0] * ee_offset[1] - object_edge[1] * ee_offset[0]
         self.assertGreater(abs(float(cross)), 1.0)
+
+    def test_place_sphere_bin_labels_are_pushed_outside_the_triangle(self):
+        graph = Graph(frame=94, env_id="PlaceSphere-v1", camera="base")
+        mid = np.asarray([2.0, 1.0])
+        normal = np.asarray([0.8, 0.6])
+
+        direction = _paper_fixed_push_direction(
+            graph,
+            ("actor:bin", "actor:sphere"),
+            mid,
+            normal,
+        )
+
+        np.testing.assert_allclose(direction, normal)
+        self.assertGreater(float(np.dot(direction, mid)), 0.0)
 
     def test_paper_graph_is_cropped_and_has_no_title_strip(self):
         from PIL import Image

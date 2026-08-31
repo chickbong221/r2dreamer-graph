@@ -299,7 +299,7 @@ class LabelLayoutTest(unittest.TestCase):
         self.assertGreater(call.chip[3], call.anchor[1])
         np.testing.assert_array_equal(image[200, 200], call.color)
 
-    def test_a_wide_surface_is_labelled_at_its_right_edge(self):
+    def test_a_wide_surface_is_labelled_high_on_the_left_with_a_leader(self):
         call = Callout(
             "actor:table-workspace", "table", (200.0, 280.0), (10, 20, 30),
             box=(0.0, 120.0, 400.0, 400.0),
@@ -307,7 +307,7 @@ class LabelLayoutTest(unittest.TestCase):
         image = draw_callouts(_blank(), [call], font_size=20, lift=10)
         self.assertGreater(call.chip[1], call.box[1])
         self.assertLess(call.chip[3], call.anchor[1])
-        self.assertGreater(call.chip[0], 0.75 * W)
+        self.assertLess(call.chip[2], 0.25 * W)
         dot_x = int(0.5 * (call.chip[0] + call.chip[2]))
         np.testing.assert_array_equal(image[280, dot_x], call.color)
 

@@ -16,7 +16,7 @@ released Fetch checkpoints expect it.
 
 Usage:
     python -m tests.probes.probe_mshab_pick_bowl \\
-        --ckpt-dir /root/projects/ReLDreamer/mshab_checkpoints/tidy_house/pick/024_bowl \\
+        --ckpt-dir /root/projects/ReLDreamer/mshab_checkpoints/rl/tidy_house/pick/024_bowl \\
         --steps 200 --human-res 1000
 """
 

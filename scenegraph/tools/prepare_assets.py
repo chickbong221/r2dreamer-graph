@@ -59,16 +59,22 @@ def _plan_pairs(mshab_task, subtasks, splits, obj):
 
 
 def _checkpointed_objects(ckpt_root: Path, mshab_task: str,
-                          subtasks: List[str]) -> Set[str]:
+                          subtasks: List[str], algo: str = '') -> Set[str]:
     """Objects the collector can drive under THIS task group.
 
     Scoped to the group on purpose: a bowl policy released under
     prepare_groceries cannot roll out set_table's drawer scene, so counting it
     here would report coverage this group does not have.
+
+    ``algo`` is the training-algorithm tree above the task level, and has to
+    match what the collector will use -- a coverage report read off one
+    algorithm while the collection runs another describes a different set of
+    policies.
     """
+    prefix = f'{algo}/' if algo else ''
     found = set()
     for subtask in subtasks:
-        for pt in ckpt_root.glob(f'{mshab_task}/{subtask}/*/policy.pt'):
+        for pt in ckpt_root.glob(f'{prefix}{mshab_task}/{subtask}/*/policy.pt'):
             found.add(pt.parent.name)
     return found
 
@@ -147,6 +153,11 @@ def main(argv=None) -> int:
     parser.add_argument(
         '--ckpt-root',
         default=str(collect_robot_success_states.DEFAULT_CKPT_ROOT))
+    parser.add_argument(
+        '--algo', default=collect_robot_success_states.DEFAULT_CKPT_ALGO,
+        help='Training-algorithm tree under --ckpt-root (bc, dp, rl). '
+             'Forwarded to the collector so the coverage report and the '
+             'collection read the same policies.')
     parser.add_argument('--asset-dir', default=None,
                         help='data root holding robot_success_states/; '
                              'defaults to $MS_ASSET_DIR/data then ~/.maniskill/data')
@@ -202,7 +213,8 @@ def main(argv=None) -> int:
 
     print(f'[prep] task group {group!r}, subtasks {args.subtask}')
     needed = _plan_pairs(group, args.subtask, args.splits, args.obj)
-    ckpt_objects = _checkpointed_objects(ckpt_root, group, args.subtask)
+    ckpt_objects = _checkpointed_objects(
+        ckpt_root, group, args.subtask, args.algo)
     uncollectable = _report(needed, ckpt_objects, runtime_dir, table)
 
     # Stop here, before --clean deletes anything and before hours of GPU
@@ -243,6 +255,9 @@ def main(argv=None) -> int:
             _run([
                 'scenegraph.tools.collect_robot_success_states',
                 '--ckpt-root', str(ckpt_root),
+                # Forwarded so the collection reads the policies the coverage
+                # report above counted.
+                '--algo', str(args.algo),
                 '--subtask', subtask,
                 '--task', group,
                 '--n-success', str(args.n_success),

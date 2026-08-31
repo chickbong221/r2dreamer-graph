@@ -35,7 +35,9 @@ from scenegraph.tools.build_subtask_whitelists import (
 )
 from scenegraph.tools.build_union_whitelist import merge
 from scenegraph.tools.collect_robot_success_states import (
+    DEFAULT_CKPT_ALGO,
     DEFAULT_CKPT_ROOT,
+    available_algos,
     REQUIRED_ROLLOUT_SCHEMA,
     _already_done,
     _discover_work,
@@ -109,12 +111,24 @@ class TestCollectorDiscovery(TempTree):
     """One checkpoint per (task, object), never collapsed to the object."""
 
     def _ckpt_tree(self):
-        root = self.tmp / "rl"
+        """The flat layout: a root already pointed at one algorithm."""
+        root = self.tmp / "flat"
         for task in ("prepare_groceries", "set_table", "tidy_house"):
             for obj in ("024_bowl", "013_apple"):
                 pt = root / task / "pick" / obj / "policy.pt"
                 pt.parent.mkdir(parents=True, exist_ok=True)
                 pt.write_text("")
+        return root
+
+    def _release_tree(self, algos=("bc", "dp", "rl")):
+        """The released layout: one tree per training algorithm above task."""
+        root = self.tmp / "release"
+        for algo in algos:
+            for task in ("set_table", "tidy_house"):
+                for obj in ("024_bowl", "013_apple"):
+                    pt = root / algo / task / "pick" / obj / "policy.pt"
+                    pt.parent.mkdir(parents=True, exist_ok=True)
+                    pt.write_text("")
         return root
 
     def test_same_object_in_two_groups_is_two_units_of_work(self):
@@ -130,24 +144,50 @@ class TestCollectorDiscovery(TempTree):
         work = _discover_work(self._ckpt_tree(), "pick", ["set_table"], [])
         self.assertEqual({task for task, _, _ in work}, {"set_table"})
 
-    def test_a_root_one_level_short_finds_nothing(self):
-        """Which is indistinguishable from an empty directory without help."""
-        nested = self.tmp / "outer"
-        (nested / "rl" / "set_table" / "pick" / "024_bowl").mkdir(parents=True)
-        (nested / "rl" / "set_table" / "pick" / "024_bowl"
-         / "policy.pt").write_text("")
-        self.assertEqual(_discover_work(nested, "pick", [], []), [])
+    def test_the_release_layout_needs_the_algorithm(self):
+        """Without it the glob is one level short, and finding nothing is
+        indistinguishable from an empty directory."""
+        self.assertEqual(_discover_work(self._release_tree(), "pick", [], []),
+                         [])
+
+    def test_the_algorithm_selects_one_policy_family(self):
+        root = self._release_tree()
+        work = _discover_work(root, "pick", [], [], "rl")
+        self.assertEqual({obj for _, obj, _ in work},
+                         {"024_bowl", "013_apple"})
+        for _task, _obj, ckpt_dir in work:
+            self.assertEqual(ckpt_dir.parts[-4], "rl")
+
+    def test_two_algorithms_are_never_collected_together(self):
+        """One asset mined from two behaviours would describe neither."""
+        root = self._release_tree()
+        for algo in ("bc", "dp", "rl"):
+            with self.subTest(algo=algo):
+                dirs = {d.parts[-4]
+                        for _t, _o, d in _discover_work(
+                            root, "pick", [], [], algo)}
+                self.assertEqual(dirs, {algo})
+
+    def test_it_names_the_algorithms_that_do_exist(self):
+        self.assertEqual(available_algos(self._release_tree()),
+                         ["bc", "dp", "rl"])
+
+    def test_a_flat_root_offers_no_algorithm(self):
+        """Nothing to choose: the root already names one."""
+        self.assertEqual(available_algos(self._ckpt_tree()), [])
 
     def test_it_names_the_root_that_would_have_worked(self):
-        nested = self.tmp / "outer"
-        (nested / "rl" / "set_table" / "pick" / "024_bowl").mkdir(parents=True)
-        (nested / "rl" / "set_table" / "pick" / "024_bowl"
-         / "policy.pt").write_text("")
-        self.assertEqual(suggest_ckpt_roots(nested), [str(nested / "rl")])
+        root = self._release_tree(algos=("rl",))
+        self.assertEqual(suggest_ckpt_roots(root), [str(root / "rl")])
 
     def test_a_correct_root_suggests_itself(self):
         root = self._ckpt_tree()
         self.assertEqual(suggest_ckpt_roots(root), [str(root)])
+
+    def test_the_default_algorithm_is_the_rl_baseline(self):
+        """What the released MS-HAB numbers were produced with, and what the
+        old ``mshab_checkpoints/rl`` default pointed at."""
+        self.assertEqual(DEFAULT_CKPT_ALGO, "rl")
 
     def test_an_empty_tree_suggests_nothing(self):
         empty = self.tmp / "nothing"
@@ -169,7 +209,15 @@ class TestCollectorDiscovery(TempTree):
         source = Path("scenegraph/tools/prepare_assets.py").read_text(
             encoding="utf-8")
         self.assertIn("collect_robot_success_states.DEFAULT_CKPT_ROOT", source)
+        self.assertIn("collect_robot_success_states.DEFAULT_CKPT_ALGO", source)
         self.assertNotIn("mshab_checkpoints/rl", source)
+
+    def test_prepare_assets_forwards_the_algorithm_to_the_collector(self):
+        """A coverage report read off one algorithm while the collection runs
+        another describes a different set of policies."""
+        source = Path("scenegraph/tools/prepare_assets.py").read_text(
+            encoding="utf-8")
+        self.assertIn("'--algo', str(args.algo)", source)
 
     def test_rollouts_land_in_per_group_files(self):
         # The two groups' bowl rollouts must not be able to name the same

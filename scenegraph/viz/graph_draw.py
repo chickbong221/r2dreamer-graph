@@ -217,6 +217,28 @@ def _unordered_pair(edge: Edge) -> Tuple[str, str]:
     return tuple(sorted((edge.src, edge.dst)))
 
 
+def _paper_fixed_push_direction(
+    graph: Graph,
+    pair: Tuple[str, str],
+    mid: np.ndarray,
+    normal: np.ndarray,
+) -> Optional[np.ndarray]:
+    """Keep PlaceSphere's dense sphere-bin labels beside their own edge.
+
+    In the contact/support frames this pair carries spatial, physical, and
+    affordance chips.  Letting the first collision choose either normal can
+    push the whole stack inward across the ee-bin edge, making it look attached
+    to the wrong relation.  Pin this one pair to the outward side of the
+    triangle; every other graph retains the general collision rule.
+    """
+    sphere_bin = tuple(sorted(("actor:sphere", "actor:bin")))
+    if graph.env_id != "PlaceSphere-v1" or tuple(sorted(pair)) != sphere_bin:
+        return None
+    projection = float(np.dot(mid, normal))
+    sign = 1.0 if projection >= 0.0 else -1.0
+    return normal * sign
+
+
 def _paper_display_edges(graph: Graph) -> List[Edge]:
     """Return a paper-only, presentation-focused view of ``graph.edges``.
 
@@ -536,7 +558,9 @@ def render_graph(
             # That keeps a wide diagonal-edge label beside its own edge and
             # prevents repeated collisions from pushing it below the graph.
             normal = np.array([-u[1], u[0]], dtype=float)
-            push_direction = None
+            push_direction = _paper_fixed_push_direction(
+                graph, pair, mid, normal,
+            )
             nudge = max(0.35, chip["nudge_step"] * 0.5)
             for _ in range(int(chip["max_iters"])):
                 hit = next((
