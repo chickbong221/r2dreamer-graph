@@ -7,6 +7,7 @@ import numpy as np
 from scenegraph.core.schema import Edge, Graph, Node
 from scenegraph.viz.graph_draw import (
     _group_by_family,
+    _node_display_label,
     _paper_display_edges,
     _radial_layout,
     render_graph,
@@ -39,6 +40,17 @@ class GraphDisplayFactsTest(unittest.TestCase):
         self.assertEqual(
             grouped["affordance"],
             ["grasp match", "support partial-match"],
+        )
+
+    def test_place_sphere_paper_view_shortens_the_table_name(self):
+        graph = Graph(0, "PlaceSphere-v1", "base")
+        table = Node(
+            "actor:table-workspace", "object", "table-workspace",
+        )
+
+        self.assertEqual(_node_display_label(graph, table, True), "table")
+        self.assertEqual(
+            _node_display_label(graph, table, False), "table-workspace",
         )
 
     def test_paper_view_hides_contact_after_stronger_relation_holds(self):

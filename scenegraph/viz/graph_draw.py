@@ -309,6 +309,17 @@ def _node_label_layout(
     return y - node_r - 0.18, "top"
 
 
+def _node_display_label(graph: Graph, node, paper_style: bool) -> str:
+    """Human-facing node name, including paper-only task abbreviations."""
+    if (
+        paper_style
+        and graph.env_id == "PlaceSphere-v1"
+        and node.node_id == "actor:table-workspace"
+    ):
+        return "table"
+    return "ee" if node.node_type == "ee" else display_name(node.name)
+
+
 def render_graph(
     graph: Graph,
     out_path: Optional[str],
@@ -330,7 +341,7 @@ def render_graph(
     n_obj = sum(1 for n in graph.nodes if n.node_type == "object")
     chip = _chip_layout(n_obj)
     if paper_style:
-        chip["fontsize"] += 2.0
+        chip["fontsize"] += 1.0
         scale = chip["fontsize"] / 13.0
         chip.update({
             "min_sep_x": 2.5 * scale,
@@ -400,7 +411,7 @@ def render_graph(
             placed_chip_boxes.append((
                 float(x), float(y), node_r + 0.08, node_r + 0.08,
             ))
-            label = "ee" if node.node_type == "ee" else display_name(node.name)
+            label = _node_display_label(graph, node, paper_style)
             label_width_px = renderer.get_text_width_height_descent(
                 label, node_font, ismath=False,
             )[0]
@@ -639,7 +650,7 @@ def render_graph(
         )
         ax.add_patch(circ)
 
-        label = "ee" if node.node_type == "ee" else display_name(node.name)
+        label = _node_display_label(graph, node, paper_style)
         label_color = tuple(0.45 * np.asarray(face))
         label_y, label_va = _node_label_layout(
             graph, nid, float(y), node_r, paper_style,
