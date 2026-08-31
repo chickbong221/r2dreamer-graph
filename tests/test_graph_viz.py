@@ -5,6 +5,7 @@ import numpy as np
 from scenegraph.core.schema import Edge, Graph, Node
 from scenegraph.viz.graph_draw import (
     _group_by_family,
+    _paper_display_edges,
     _radial_layout,
     render_graph_array,
 )
@@ -25,6 +26,45 @@ class GraphDisplayFactsTest(unittest.TestCase):
         rendered = " ".join(text for lines in grouped.values() for text in lines)
         self.assertNotIn("holds", rendered)
         self.assertNotIn("unobserved", rendered)
+
+    def test_paper_view_hides_contact_after_stronger_relation_holds(self):
+        graph = Graph(
+            frame=0,
+            env_id="test",
+            camera="base",
+            edges=[
+                Edge("ee", "cube", "contact", "holds"),
+                Edge("ee", "cube", "grasp", "holds"),
+                Edge("ee", "cube", "contact-compatibility", "match"),
+                Edge("ee", "cube", "grasp-compatibility", "match"),
+            ],
+        )
+
+        relations = [edge.relation for edge in _paper_display_edges(graph)]
+
+        self.assertEqual(
+            relations, ["grasp", "grasp-compatibility"]
+        )
+
+    def test_place_sphere_paper_view_adds_static_table_bin_support(self):
+        graph = Graph(
+            frame=0,
+            env_id="PlaceSphere-v1",
+            camera="base",
+            nodes=[
+                Node("actor:bin", "object", "bin"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+            ],
+        )
+
+        shown = _paper_display_edges(graph)
+
+        self.assertEqual(graph.edges, [])
+        self.assertEqual(
+            {(edge.relation, edge.label) for edge in shown},
+            {("support", "dst-holds"),
+             ("support-compatibility", "match")},
+        )
 
     def test_hidden_facts_leave_the_reference_background_visible(self):
         graph = Graph(

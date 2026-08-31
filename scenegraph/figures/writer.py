@@ -77,12 +77,14 @@ class EpisodeWriter:
         save_clean: bool = False,
         graph_image: bool = True,
         graph_json: bool = True,
+        paper_graph_style: bool = False,
     ):
         self.root = Path(root)
         self.name = str(name)
         self.save_clean = bool(save_clean)
         self.graph_image = bool(graph_image)
         self.graph_json = bool(graph_json)
+        self.paper_graph_style = bool(paper_graph_style)
         self.staging = self.root / f".staging_{self.name}"
         self.records: List[Dict[str, Any]] = []
         self._index = 0
@@ -137,6 +139,7 @@ class EpisodeWriter:
                 graph,
                 str(self.staging / GRAPH_DIR / f"graph_{stem}.png"),
                 colormap=colormap,
+                paper_style=self.paper_graph_style,
             )
             record["graph"] = f"{GRAPH_DIR}/graph_{stem}.png"
         if self.graph_json:

@@ -62,6 +62,10 @@ _INTRA_FAMILY_ORDER = {
 # predicate is much clearer when named by the relation it establishes.
 _HIDDEN_LABELS = {"not-holds", "unobserved"}
 _POSITIVE_PHYSICAL_LABELS = {"holds", "src-holds", "dst-holds"}
+_PRIMARY_PHYSICAL_RELATIONS = {"grasp", "support", "contain"}
+_PRIMARY_AFFORDANCE_RELATIONS = {
+    "grasp-compatibility", "support-compatibility", "contain-compatibility",
+}
 
 # Per-family chip styling. Affordance uses a green palette so it doesn't
 # read as the same family as the (also light+cool) spatial blue. Goal takes a
@@ -201,16 +205,87 @@ def _group_by_family(elist: List[Edge]) -> Dict[str, List[str]]:
     return out
 
 
+def _unordered_pair(edge: Edge) -> Tuple[str, str]:
+    """Stable visual identity for facts joining the same two vertices."""
+    return tuple(sorted((edge.src, edge.dst)))
+
+
+def _paper_display_edges(graph: Graph) -> List[Edge]:
+    """Return a paper-only, presentation-focused view of ``graph.edges``.
+
+    This deliberately does not mutate the graph.  The JSON written beside the
+    diagram therefore remains the exact builder output used by training and
+    diagnostics.
+    """
+    edges = list(graph.edges)
+
+    # The bin and table are both kinematic in PlaceSphere, so the runtime graph
+    # intentionally omits their unchanging scene-layout pair.  It is useful in
+    # the explanatory paper diagram, however: the table supports the bin and
+    # their corresponding support affordance is already satisfied.
+    if graph.env_id == "PlaceSphere-v1":
+        node_ids = set(graph.node_ids())
+        bin_id = "actor:bin"
+        table_id = "actor:table-workspace"
+        if {bin_id, table_id}.issubset(node_ids):
+            pair = tuple(sorted((bin_id, table_id)))
+            relations = {
+                edge.relation for edge in edges
+                if _unordered_pair(edge) == pair
+            }
+            if "support" not in relations:
+                # Stable physical-pair ordering is bin -> table; dst is the
+                # supporter, matching the schema's directional label.
+                edges.append(Edge(
+                    bin_id, table_id, "support", "dst-holds",
+                    attributes={"support_role": "supporter"},
+                ))
+            if "support-compatibility" not in relations:
+                edges.append(Edge(
+                    table_id, bin_id, "support-compatibility", "match",
+                    attributes={"support_role": "supporter"},
+                ))
+
+    # Once a stronger physical predicate holds, positive contact is implied
+    # and only repeats the same event.  Apply the same visual hierarchy to an
+    # established affordance, where contact-compatibility would otherwise add
+    # a second identical ``match`` line.
+    established_physical = {
+        _unordered_pair(edge) for edge in edges
+        if edge.relation in _PRIMARY_PHYSICAL_RELATIONS
+        and str(edge.label) in _POSITIVE_PHYSICAL_LABELS
+    }
+    established_affordance = {
+        _unordered_pair(edge) for edge in edges
+        if edge.relation in _PRIMARY_AFFORDANCE_RELATIONS
+        and str(edge.label) == "match"
+    }
+    return [
+        edge for edge in edges
+        if not (
+            edge.relation == "contact"
+            and _unordered_pair(edge) in established_physical
+        )
+        and not (
+            edge.relation == "contact-compatibility"
+            and _unordered_pair(edge) in established_affordance
+        )
+    ]
+
+
 def render_graph(
     graph: Graph,
     out_path: Optional[str],
     colormap: Optional[ColorMap] = None,
+    *,
+    paper_style: bool = False,
 ):
     """Write a PNG and return its path, or return an RGB array when
     ``out_path`` is None."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties
     from matplotlib.patches import Circle
 
     cmap = colormap or ColorMap()
@@ -218,6 +293,14 @@ def render_graph(
 
     n_obj = sum(1 for n in graph.nodes if n.node_type == "object")
     chip = _chip_layout(n_obj)
+    if paper_style:
+        chip["fontsize"] += 2.0
+        scale = chip["fontsize"] / 13.0
+        chip.update({
+            "min_sep_x": 2.5 * scale,
+            "min_sep_y": 1.8 * scale,
+            "nudge_step": 1.0 * scale,
+        })
 
     # Square canvas that matches the overlay panels (6" @ 200 dpi -> 1200 px)
     # so the three panels hstack without any padding in the video.
@@ -248,20 +331,34 @@ def render_graph(
 
     # ----------------------------------------------------------------- edges
     by_pair: Dict[Tuple[str, str], List[Edge]] = {}
-    for e in graph.edges:
+    display_edges = _paper_display_edges(graph) if paper_style else graph.edges
+    for e in display_edges:
         if e.src not in pos or e.dst not in pos:
             continue
         # Do not leave an unlabeled line behind for a pair whose only facts are
         # negative or unobserved.
         if _display_text(e) is None:
             continue
-        by_pair.setdefault((e.src, e.dst), []).append(e)
+        pair = _unordered_pair(e) if paper_style else (e.src, e.dst)
+        by_pair.setdefault(pair, []).append(e)
 
     # Track every placed chip center across ALL edges so a chip laid down
     # for a later edge can nudge itself away from earlier chips.
     placed_chip_centers: List[Tuple[float, float]] = []
+    placed_chip_boxes: List[Tuple[float, float, float, float]] = []
 
-    for (src, dst), elist in by_pair.items():
+    for pair, elist in by_pair.items():
+        if paper_style:
+            # Prefer the stable physical direction for the single drawn line.
+            # Affordance edges can run in the opposite direction even though
+            # they describe the same unordered object pair.
+            representative = next(
+                (e for e in elist if e.relation in ("support", "contain")),
+                elist[0],
+            )
+            src, dst = representative.src, representative.dst
+        else:
+            src, dst = pair
         p0, p1 = pos[src], pos[dst]
         d = p1 - p0
         L = float(np.linalg.norm(d)) + 1e-9
@@ -306,40 +403,121 @@ def render_graph(
         # nudging the later chip further up or down, so the stack stays
         # vertical instead of drifting off to the side.
         mid = a0 + (a1 - a0) * chip["fraction"]
-        spacing = 0.55
         families_present = [f for f in _FAMILY_ORDER if f in grouped]
         n = len(families_present)
-        if n == 1:
-            y_offsets = [0.0]
-        elif n == 2:
-            y_offsets = [spacing * 0.5, -spacing * 0.5]
-        else:
-            y_offsets = [spacing, 0.0, -spacing]
 
-        for y_offset, family in zip(y_offsets, families_present):
-            anchor = np.array([float(mid[0]), float(mid[1] + y_offset)])
+        if paper_style:
+            # Estimate each rounded chip's true height in axes units, then
+            # pack the family boxes edge-to-edge.  Moving the whole block for
+            # cross-edge collisions keeps one pair's relations together.
+            axis_height_px = max(float(ax.bbox.height), 1.0)
+            axis_width_px = max(float(ax.bbox.width), 1.0)
+            data_per_y_px = (2.0 * view_half) / axis_height_px
+            data_per_x_px = (2.0 * view_half) / axis_width_px
+            line_px = chip["fontsize"] * fig.dpi / 72.0
+            pad_px = 2.0 * 0.35 * line_px
+            renderer = fig.canvas.get_renderer()
+            font = FontProperties(size=chip["fontsize"], style="italic")
+            heights = [
+                data_per_y_px * (
+                    line_px * (1.0 + 1.05 * (len(grouped[f]) - 1))
+                    + pad_px
+                )
+                for f in families_present
+            ]
+            widths = [
+                data_per_x_px * (
+                    max(
+                        renderer.get_text_width_height_descent(
+                            line, font, ismath=False,
+                        )[0]
+                        for line in grouped[f]
+                    )
+                    + pad_px
+                )
+                for f in families_present
+            ]
+            total_height = sum(heights)
+            cursor = total_height * 0.5
+            y_offsets = []
+            for height in heights:
+                y_offsets.append(cursor - height * 0.5)
+                cursor -= height
+
+            anchors = [
+                np.array([float(mid[0]), float(mid[1] + offset)])
+                for offset in y_offsets
+            ]
+            push_sign = 0.0
+            for _ in range(int(chip["max_iters"])):
+                hit = next((
+                    (anchor, width, height, box)
+                    for anchor, width, height in zip(
+                        anchors, widths, heights
+                    )
+                    for box in placed_chip_boxes
+                    if abs(anchor[0] - box[0])
+                    < width * 0.5 + box[2]
+                    and abs(anchor[1] - box[1])
+                    < height * 0.5 + box[3]
+                ), None)
+                if hit is None:
+                    break
+                anchor, _width, _height, box = hit
+                if push_sign == 0.0:
+                    push_sign = 1.0 if anchor[1] >= box[1] else -1.0
+                shift = np.array([0.0, chip["nudge_step"] * push_sign])
+                anchors = [anchor + shift for anchor in anchors]
+            placed_chip_boxes.extend(
+                (float(anchor[0]), float(anchor[1]),
+                 float(width * 0.5), float(height * 0.5))
+                for anchor, width, height in zip(anchors, widths, heights)
+            )
+        else:
+            spacing = 0.55
+            if n == 1:
+                y_offsets = [0.0]
+            elif n == 2:
+                y_offsets = [spacing * 0.5, -spacing * 0.5]
+            else:
+                y_offsets = [spacing, 0.0, -spacing]
+            anchors = [
+                np.array([float(mid[0]), float(mid[1] + offset)])
+                for offset in y_offsets
+            ]
+
+        for y_offset, anchor, family in zip(
+            y_offsets, anchors, families_present
+        ):
             # Direction the chip prefers to escape in when de-colliding:
             # top-slot pushes up, bottom-slot pushes down. The centre slot
             # (spatial when three families present) picks its direction
             # from the first collision it hits so it doesn't oscillate.
-            push_sign = 1.0 if y_offset > 0 else (-1.0 if y_offset < 0 else 0.0)
-            for _ in range(int(chip["max_iters"])):
-                collided = False
-                first_hit_side = 0.0
-                for px, py in placed_chip_centers:
-                    if (
-                        abs(anchor[0] - px) < chip["min_sep_x"]
-                        and abs(anchor[1] - py) < chip["min_sep_y"]
-                    ):
-                        collided = True
-                        first_hit_side = 1.0 if anchor[1] >= py else -1.0
+            if not paper_style:
+                push_sign = (
+                    1.0 if y_offset > 0 else (-1.0 if y_offset < 0 else 0.0)
+                )
+                for _ in range(int(chip["max_iters"])):
+                    collided = False
+                    first_hit_side = 0.0
+                    for px, py in placed_chip_centers:
+                        if (
+                            abs(anchor[0] - px) < chip["min_sep_x"]
+                            and abs(anchor[1] - py) < chip["min_sep_y"]
+                        ):
+                            collided = True
+                            first_hit_side = 1.0 if anchor[1] >= py else -1.0
+                            break
+                    if not collided:
                         break
-                if not collided:
-                    break
-                step_sign = push_sign if push_sign != 0.0 else first_hit_side
-                if step_sign == 0.0:
-                    step_sign = 1.0
-                anchor = anchor + np.array([0.0, chip["nudge_step"] * step_sign])
+                    step_sign = (
+                        push_sign if push_sign != 0.0 else first_hit_side
+                    )
+                    if step_sign == 0.0:
+                        step_sign = 1.0
+                    anchor = anchor + np.array([
+                        0.0, chip["nudge_step"] * step_sign,
+                    ])
             placed_chip_centers.append((float(anchor[0]), float(anchor[1])))
             style = _FAMILY_STYLE[family]
             ax.text(

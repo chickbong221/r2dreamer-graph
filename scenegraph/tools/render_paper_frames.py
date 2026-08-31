@@ -73,6 +73,7 @@ class FigureSession:
             save_clean=self.args.save_clean,
             graph_image=not self.args.no_graph_image,
             graph_json=not self.args.no_graph_json,
+            paper_graph_style=True,
         )
         self.writer.open()
         self._export(self.graphs.step(obs))
