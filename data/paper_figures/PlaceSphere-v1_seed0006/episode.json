@@ -41,8 +41,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 24,
-      "frame_clean": "frames_clean/frame_0000.png",
+      "n_edges": 22,
       "graph": "graphs/graph_0000.png",
       "graph_json": "graph_json/graph_0000.json",
       "callouts": [
@@ -153,8 +152,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0001.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0001.png",
       "graph_json": "graph_json/graph_0001.json",
       "callouts": [
@@ -265,8 +263,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0002.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0002.png",
       "graph_json": "graph_json/graph_0002.json",
       "callouts": [
@@ -377,8 +374,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0003.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0003.png",
       "graph_json": "graph_json/graph_0003.json",
       "callouts": [
@@ -489,8 +485,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0004.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0004.png",
       "graph_json": "graph_json/graph_0004.json",
       "callouts": [
@@ -601,8 +596,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0005.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0005.png",
       "graph_json": "graph_json/graph_0005.json",
       "callouts": [
@@ -713,8 +707,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0006.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0006.png",
       "graph_json": "graph_json/graph_0006.json",
       "callouts": [
@@ -825,8 +818,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0007.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0007.png",
       "graph_json": "graph_json/graph_0007.json",
       "callouts": [
@@ -937,8 +929,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0008.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0008.png",
       "graph_json": "graph_json/graph_0008.json",
       "callouts": [
@@ -1049,8 +1040,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0009.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0009.png",
       "graph_json": "graph_json/graph_0009.json",
       "callouts": [
@@ -1161,8 +1151,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0010.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0010.png",
       "graph_json": "graph_json/graph_0010.json",
       "callouts": [
@@ -1273,8 +1262,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0011.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0011.png",
       "graph_json": "graph_json/graph_0011.json",
       "callouts": [
@@ -1385,8 +1373,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0012.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0012.png",
       "graph_json": "graph_json/graph_0012.json",
       "callouts": [
@@ -1497,8 +1484,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0013.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0013.png",
       "graph_json": "graph_json/graph_0013.json",
       "callouts": [
@@ -1609,8 +1595,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0014.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0014.png",
       "graph_json": "graph_json/graph_0014.json",
       "callouts": [
@@ -1721,8 +1706,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0015.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0015.png",
       "graph_json": "graph_json/graph_0015.json",
       "callouts": [
@@ -1833,8 +1817,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0016.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0016.png",
       "graph_json": "graph_json/graph_0016.json",
       "callouts": [
@@ -1945,8 +1928,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0017.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0017.png",
       "graph_json": "graph_json/graph_0017.json",
       "callouts": [
@@ -2057,8 +2039,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0018.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0018.png",
       "graph_json": "graph_json/graph_0018.json",
       "callouts": [
@@ -2169,8 +2150,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0019.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0019.png",
       "graph_json": "graph_json/graph_0019.json",
       "callouts": [
@@ -2281,8 +2261,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0020.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0020.png",
       "graph_json": "graph_json/graph_0020.json",
       "callouts": [
@@ -2393,8 +2372,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0021.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0021.png",
       "graph_json": "graph_json/graph_0021.json",
       "callouts": [
@@ -2505,8 +2483,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0022.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0022.png",
       "graph_json": "graph_json/graph_0022.json",
       "callouts": [
@@ -2617,8 +2594,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0023.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0023.png",
       "graph_json": "graph_json/graph_0023.json",
       "callouts": [
@@ -2729,8 +2705,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0024.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0024.png",
       "graph_json": "graph_json/graph_0024.json",
       "callouts": [
@@ -2841,8 +2816,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0025.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0025.png",
       "graph_json": "graph_json/graph_0025.json",
       "callouts": [
@@ -2953,8 +2927,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0026.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0026.png",
       "graph_json": "graph_json/graph_0026.json",
       "callouts": [
@@ -3065,8 +3038,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0027.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0027.png",
       "graph_json": "graph_json/graph_0027.json",
       "callouts": [
@@ -3177,8 +3149,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0028.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0028.png",
       "graph_json": "graph_json/graph_0028.json",
       "callouts": [
@@ -3289,8 +3260,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0029.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0029.png",
       "graph_json": "graph_json/graph_0029.json",
       "callouts": [
@@ -3401,8 +3371,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0030.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0030.png",
       "graph_json": "graph_json/graph_0030.json",
       "callouts": [
@@ -3513,8 +3482,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0031.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0031.png",
       "graph_json": "graph_json/graph_0031.json",
       "callouts": [
@@ -3625,8 +3593,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0032.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0032.png",
       "graph_json": "graph_json/graph_0032.json",
       "callouts": [
@@ -3737,8 +3704,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0033.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0033.png",
       "graph_json": "graph_json/graph_0033.json",
       "callouts": [
@@ -3849,8 +3815,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0034.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0034.png",
       "graph_json": "graph_json/graph_0034.json",
       "callouts": [
@@ -3961,8 +3926,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0035.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0035.png",
       "graph_json": "graph_json/graph_0035.json",
       "callouts": [
@@ -4073,8 +4037,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0036.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0036.png",
       "graph_json": "graph_json/graph_0036.json",
       "callouts": [
@@ -4185,8 +4148,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0037.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0037.png",
       "graph_json": "graph_json/graph_0037.json",
       "callouts": [
@@ -4297,8 +4259,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0038.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0038.png",
       "graph_json": "graph_json/graph_0038.json",
       "callouts": [
@@ -4409,8 +4370,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0039.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0039.png",
       "graph_json": "graph_json/graph_0039.json",
       "callouts": [
@@ -4521,8 +4481,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0040.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0040.png",
       "graph_json": "graph_json/graph_0040.json",
       "callouts": [
@@ -4633,8 +4592,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0041.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0041.png",
       "graph_json": "graph_json/graph_0041.json",
       "callouts": [
@@ -4745,8 +4703,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0042.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0042.png",
       "graph_json": "graph_json/graph_0042.json",
       "callouts": [
@@ -4857,8 +4814,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0043.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0043.png",
       "graph_json": "graph_json/graph_0043.json",
       "callouts": [
@@ -4969,8 +4925,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0044.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0044.png",
       "graph_json": "graph_json/graph_0044.json",
       "callouts": [
@@ -5081,8 +5036,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0045.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0045.png",
       "graph_json": "graph_json/graph_0045.json",
       "callouts": [
@@ -5193,8 +5147,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0046.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0046.png",
       "graph_json": "graph_json/graph_0046.json",
       "callouts": [
@@ -5305,8 +5258,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0047.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0047.png",
       "graph_json": "graph_json/graph_0047.json",
       "callouts": [
@@ -5417,8 +5369,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0048.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0048.png",
       "graph_json": "graph_json/graph_0048.json",
       "callouts": [
@@ -5529,8 +5480,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0049.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0049.png",
       "graph_json": "graph_json/graph_0049.json",
       "callouts": [
@@ -5583,7 +5533,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            483.1,
+            483.11,
             734.9
           ],
           "color": [
@@ -5592,7 +5542,7 @@
             199
           ],
           "box": [
-            450.47,
+            450.48,
             700.46,
             515.74,
             769.34
@@ -5641,8 +5591,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0050.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0050.png",
       "graph_json": "graph_json/graph_0050.json",
       "callouts": [
@@ -5753,8 +5702,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0051.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0051.png",
       "graph_json": "graph_json/graph_0051.json",
       "callouts": [
@@ -5816,7 +5764,7 @@
             199
           ],
           "box": [
-            450.38,
+            450.39,
             699.67,
             515.63,
             768.48
@@ -5865,8 +5813,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0052.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0052.png",
       "graph_json": "graph_json/graph_0052.json",
       "callouts": [
@@ -5929,7 +5876,7 @@
           ],
           "box": [
             450.33,
-            698.14,
+            698.15,
             515.57,
             766.84
           ],
@@ -5977,8 +5924,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0053.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0053.png",
       "graph_json": "graph_json/graph_0053.json",
       "callouts": [
@@ -6089,8 +6035,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0054.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0054.png",
       "graph_json": "graph_json/graph_0054.json",
       "callouts": [
@@ -6201,8 +6146,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0055.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0055.png",
       "graph_json": "graph_json/graph_0055.json",
       "callouts": [
@@ -6313,8 +6257,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0056.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0056.png",
       "graph_json": "graph_json/graph_0056.json",
       "callouts": [
@@ -6425,8 +6368,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0057.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0057.png",
       "graph_json": "graph_json/graph_0057.json",
       "callouts": [
@@ -6488,7 +6430,7 @@
             199
           ],
           "box": [
-            450.27,
+            450.28,
             673.53,
             515.49,
             740.37
@@ -6537,8 +6479,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0058.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0058.png",
       "graph_json": "graph_json/graph_0058.json",
       "callouts": [
@@ -6649,8 +6590,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0059.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0059.png",
       "graph_json": "graph_json/graph_0059.json",
       "callouts": [
@@ -6761,8 +6701,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0060.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0060.png",
       "graph_json": "graph_json/graph_0060.json",
       "callouts": [
@@ -6873,8 +6812,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0061.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0061.png",
       "graph_json": "graph_json/graph_0061.json",
       "callouts": [
@@ -6985,8 +6923,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0062.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0062.png",
       "graph_json": "graph_json/graph_0062.json",
       "callouts": [
@@ -7039,7 +6976,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            483.27,
+            483.28,
             653.35
           ],
           "color": [
@@ -7049,7 +6986,7 @@
           ],
           "box": [
             450.65,
-            621.88,
+            621.89,
             515.9,
             684.82
           ],
@@ -7097,8 +7034,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0063.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0063.png",
       "graph_json": "graph_json/graph_0063.json",
       "callouts": [
@@ -7209,8 +7145,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0064.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0064.png",
       "graph_json": "graph_json/graph_0064.json",
       "callouts": [
@@ -7274,13 +7209,13 @@
           "box": [
             450.78,
             602.75,
-            516.07,
+            516.08,
             664.21
           ],
           "chip": [
-            571.07,
+            571.08,
             580.98,
-            849.07,
+            849.08,
             685.98
           ]
         },
@@ -7321,8 +7256,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0065.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0065.png",
       "graph_json": "graph_json/graph_0065.json",
       "callouts": [
@@ -7433,8 +7367,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0066.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0066.png",
       "graph_json": "graph_json/graph_0066.json",
       "callouts": [
@@ -7545,8 +7478,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0067.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0067.png",
       "graph_json": "graph_json/graph_0067.json",
       "callouts": [
@@ -7657,8 +7589,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0068.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0068.png",
       "graph_json": "graph_json/graph_0068.json",
       "callouts": [
@@ -7722,13 +7653,13 @@
           "box": [
             450.69,
             579.05,
-            515.96,
+            515.97,
             638.67
           ],
           "chip": [
-            570.96,
+            570.97,
             556.36,
-            848.96,
+            848.97,
             661.36
           ]
         },
@@ -7769,8 +7700,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0069.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0069.png",
       "graph_json": "graph_json/graph_0069.json",
       "callouts": [
@@ -7823,7 +7753,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            483.29,
+            483.3,
             606.16
           ],
           "color": [
@@ -7833,7 +7763,7 @@
           ],
           "box": [
             450.66,
-            576.45,
+            576.46,
             515.93,
             635.87
           ],
@@ -7881,8 +7811,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0070.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0070.png",
       "graph_json": "graph_json/graph_0070.json",
       "callouts": [
@@ -7993,8 +7922,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0071.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0071.png",
       "graph_json": "graph_json/graph_0071.json",
       "callouts": [
@@ -8105,8 +8033,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0072.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0072.png",
       "graph_json": "graph_json/graph_0072.json",
       "callouts": [
@@ -8217,8 +8144,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0073.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0073.png",
       "graph_json": "graph_json/graph_0073.json",
       "callouts": [
@@ -8282,13 +8208,13 @@
           "box": [
             450.54,
             577.67,
-            515.74,
+            515.75,
             637.2
           ],
           "chip": [
-            570.74,
+            570.75,
             554.93,
-            848.74,
+            848.75,
             659.93
           ]
         },
@@ -8329,8 +8255,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0074.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0074.png",
       "graph_json": "graph_json/graph_0074.json",
       "callouts": [
@@ -8441,8 +8366,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0075.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0075.png",
       "graph_json": "graph_json/graph_0075.json",
       "callouts": [
@@ -8553,8 +8477,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0076.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0076.png",
       "graph_json": "graph_json/graph_0076.json",
       "callouts": [
@@ -8665,8 +8588,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0077.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0077.png",
       "graph_json": "graph_json/graph_0077.json",
       "callouts": [
@@ -8777,8 +8699,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0078.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0078.png",
       "graph_json": "graph_json/graph_0078.json",
       "callouts": [
@@ -8889,8 +8810,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0079.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0079.png",
       "graph_json": "graph_json/graph_0079.json",
       "callouts": [
@@ -9001,8 +8921,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0080.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0080.png",
       "graph_json": "graph_json/graph_0080.json",
       "callouts": [
@@ -9113,8 +9032,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0081.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0081.png",
       "graph_json": "graph_json/graph_0081.json",
       "callouts": [
@@ -9177,7 +9095,7 @@
           ],
           "box": [
             455.27,
-            584.39,
+            584.4,
             521.63,
             645.31
           ],
@@ -9225,8 +9143,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0082.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0082.png",
       "graph_json": "graph_json/graph_0082.json",
       "callouts": [
@@ -9337,8 +9254,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0083.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0083.png",
       "graph_json": "graph_json/graph_0083.json",
       "callouts": [
@@ -9449,8 +9365,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0084.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0084.png",
       "graph_json": "graph_json/graph_0084.json",
       "callouts": [
@@ -9561,8 +9476,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0085.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0085.png",
       "graph_json": "graph_json/graph_0085.json",
       "callouts": [
@@ -9673,8 +9587,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0086.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0086.png",
       "graph_json": "graph_json/graph_0086.json",
       "callouts": [
@@ -9738,13 +9651,13 @@
           "box": [
             466.66,
             600.7,
-            535.82,
+            535.83,
             665.09
           ],
           "chip": [
-            590.82,
+            590.83,
             580.39,
-            868.82,
+            868.83,
             685.39
           ]
         },
@@ -9785,8 +9698,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0087.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0087.png",
       "graph_json": "graph_json/graph_0087.json",
       "callouts": [
@@ -9897,8 +9809,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0088.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0088.png",
       "graph_json": "graph_json/graph_0088.json",
       "callouts": [
@@ -10009,8 +9920,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0089.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0089.png",
       "graph_json": "graph_json/graph_0089.json",
       "callouts": [
@@ -10121,8 +10031,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0090.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0090.png",
       "graph_json": "graph_json/graph_0090.json",
       "callouts": [
@@ -10233,8 +10142,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0091.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0091.png",
       "graph_json": "graph_json/graph_0091.json",
       "callouts": [
@@ -10243,7 +10151,7 @@
           "text": "ee",
           "anchor": [
             521.6,
-            608.91
+            608.9
           ],
           "color": [
             46,
@@ -10253,9 +10161,9 @@
           "box": null,
           "chip": [
             339.6,
-            568.41,
+            568.4,
             466.6,
-            649.41
+            649.4
           ]
         },
         {
@@ -10345,8 +10253,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0092.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0092.png",
       "graph_json": "graph_json/graph_0092.json",
       "callouts": [
@@ -10410,13 +10317,13 @@
           "box": [
             490.22,
             634.28,
-            565.29,
+            565.3,
             706.18
           ],
           "chip": [
-            620.29,
+            620.3,
             617.73,
-            898.29,
+            898.3,
             722.73
           ]
         },
@@ -10457,8 +10364,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0093.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0093.png",
       "graph_json": "graph_json/graph_0093.json",
       "callouts": [
@@ -10569,8 +10475,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0094.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0094.png",
       "graph_json": "graph_json/graph_0094.json",
       "callouts": [
@@ -10633,7 +10538,7 @@
           ],
           "box": [
             499.83,
-            648.21,
+            648.22,
             577.36,
             723.34
           ],
@@ -10681,8 +10586,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0095.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0095.png",
       "graph_json": "graph_json/graph_0095.json",
       "callouts": [
@@ -10793,8 +10697,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0096.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0096.png",
       "graph_json": "graph_json/graph_0096.json",
       "callouts": [
@@ -10859,7 +10762,7 @@
             508.91,
             661.56,
             588.78,
-            739.82
+            739.81
           ],
           "chip": [
             643.78,
@@ -10905,8 +10808,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0097.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0097.png",
       "graph_json": "graph_json/graph_0097.json",
       "callouts": [
@@ -11017,8 +10919,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0098.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0098.png",
       "graph_json": "graph_json/graph_0098.json",
       "callouts": [
@@ -11083,7 +10984,7 @@
             517.06,
             673.45,
             599.04,
-            754.56
+            754.55
           ],
           "chip": [
             654.04,
@@ -11129,8 +11030,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0099.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0099.png",
       "graph_json": "graph_json/graph_0099.json",
       "callouts": [
@@ -11241,8 +11141,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0100.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0100.png",
       "graph_json": "graph_json/graph_0100.json",
       "callouts": [
@@ -11353,8 +11252,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0101.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0101.png",
       "graph_json": "graph_json/graph_0101.json",
       "callouts": [
@@ -11418,13 +11316,13 @@
           "box": [
             527.18,
             688.06,
-            611.82,
+            611.83,
             772.76
           ],
           "chip": [
-            666.82,
+            666.83,
             677.91,
-            944.82,
+            944.83,
             782.91
           ]
         },
@@ -11465,8 +11363,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0102.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0102.png",
       "graph_json": "graph_json/graph_0102.json",
       "callouts": [
@@ -11530,13 +11427,13 @@
           "box": [
             529.98,
             692.07,
-            615.36,
+            615.37,
             777.77
           ],
           "chip": [
-            670.36,
+            670.37,
             682.42,
-            948.36,
+            948.37,
             787.42
           ]
         },
@@ -11577,8 +11474,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0103.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0103.png",
       "graph_json": "graph_json/graph_0103.json",
       "callouts": [
@@ -11640,10 +11536,10 @@
             199
           ],
           "box": [
-            532.49,
+            532.48,
             695.66,
             618.54,
-            782.27
+            782.26
           ],
           "chip": [
             673.54,
@@ -11689,8 +11585,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0104.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0104.png",
       "graph_json": "graph_json/graph_0104.json",
       "callouts": [
@@ -11801,8 +11696,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0105.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0105.png",
       "graph_json": "graph_json/graph_0105.json",
       "callouts": [
@@ -11913,8 +11807,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0106.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0106.png",
       "graph_json": "graph_json/graph_0106.json",
       "callouts": [
@@ -11978,13 +11871,13 @@
           "box": [
             538.25,
             703.92,
-            625.84,
+            625.85,
             792.62
           ],
           "chip": [
-            680.84,
+            680.85,
             695.77,
-            958.84,
+            958.85,
             800.77
           ]
         },
@@ -12025,8 +11918,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0107.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0107.png",
       "graph_json": "graph_json/graph_0107.json",
       "callouts": [
@@ -12137,8 +12029,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0108.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0108.png",
       "graph_json": "graph_json/graph_0108.json",
       "callouts": [
@@ -12201,7 +12092,7 @@
           ],
           "box": [
             540.66,
-            707.33,
+            707.34,
             628.9,
             796.91
           ],
@@ -12249,8 +12140,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0109.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0109.png",
       "graph_json": "graph_json/graph_0109.json",
       "callouts": [
@@ -12361,8 +12251,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0110.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0110.png",
       "graph_json": "graph_json/graph_0110.json",
       "callouts": [
@@ -12473,8 +12362,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0111.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0111.png",
       "graph_json": "graph_json/graph_0111.json",
       "callouts": [
@@ -12527,7 +12415,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            584.31,
+            584.32,
             769.38
           ],
           "color": [
@@ -12536,7 +12424,7 @@
             199
           ],
           "box": [
-            539.56,
+            539.57,
             723.98,
             629.06,
             814.78
@@ -12585,8 +12473,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0112.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0112.png",
       "graph_json": "graph_json/graph_0112.json",
       "callouts": [
@@ -12639,8 +12526,8 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            584.79,
-            795.2
+            584.71,
+            795.15
           ],
           "color": [
             51,
@@ -12649,15 +12536,15 @@
           ],
           "box": [
             538.2,
-            745.59,
-            631.37,
-            844.81
+            745.65,
+            631.22,
+            844.65
           ],
           "chip": [
-            686.37,
-            742.7,
-            964.37,
-            847.7
+            686.22,
+            742.65,
+            964.22,
+            847.65
           ]
         },
         {
@@ -12697,8 +12584,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0113.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0113.png",
       "graph_json": "graph_json/graph_0113.json",
       "callouts": [
@@ -12751,8 +12637,8 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            585.63,
-            796.19
+            585.35,
+            796.03
           ],
           "color": [
             51,
@@ -12760,16 +12646,16 @@
             199
           ],
           "box": [
-            538.45,
-            744.24,
-            632.81,
-            848.15
+            538.4,
+            744.35,
+            632.29,
+            847.7
           ],
           "chip": [
-            687.81,
-            743.69,
-            965.81,
-            848.69
+            687.29,
+            743.53,
+            965.29,
+            848.53
           ]
         },
         {
@@ -12809,8 +12695,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0114.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0114.png",
       "graph_json": "graph_json/graph_0114.json",
       "callouts": [
@@ -12863,8 +12748,8 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            586.3,
-            797.05
+            585.97,
+            796.86
           ],
           "color": [
             51,
@@ -12872,16 +12757,16 @@
             199
           ],
           "box": [
-            538.65,
-            743.42,
-            633.95,
-            850.68
+            538.62,
+            743.45,
+            633.32,
+            850.27
           ],
           "chip": [
-            688.95,
-            744.55,
-            966.95,
-            849.55
+            688.32,
+            744.36,
+            966.32,
+            849.36
           ]
         },
         {
@@ -12921,8 +12806,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0115.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0115.png",
       "graph_json": "graph_json/graph_0115.json",
       "callouts": [
@@ -12975,7 +12859,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            586.04,
+            586.05,
             797.07
           ],
           "color": [
@@ -12984,15 +12868,15 @@
             199
           ],
           "box": [
-            538.4,
-            743.2,
-            633.67,
-            850.95
+            538.6,
+            743.23,
+            633.51,
+            850.9
           ],
           "chip": [
-            688.67,
+            688.51,
             744.57,
-            966.67,
+            966.51,
             849.57
           ]
         },
@@ -13033,8 +12917,7 @@
         "actor:sphere",
         "actor:table-workspace"
       ],
-      "n_edges": 22,
-      "frame_clean": "frames_clean/frame_0116.png",
+      "n_edges": 20,
       "graph": "graphs/graph_0116.png",
       "graph_json": "graph_json/graph_0116.json",
       "callouts": [
@@ -13087,7 +12970,7 @@
           "node_id": "actor:sphere",
           "text": "sphere",
           "anchor": [
-            586.01,
+            586.04,
             797.05
           ],
           "color": [
@@ -13096,15 +12979,15 @@
             199
           ],
           "box": [
-            538.43,
-            743.21,
-            633.6,
-            850.89
+            538.6,
+            743.24,
+            633.48,
+            850.86
           ],
           "chip": [
-            688.6,
+            688.48,
             744.55,
-            966.6,
+            966.48,
             849.55
           ]
         },

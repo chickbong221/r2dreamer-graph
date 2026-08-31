@@ -95,13 +95,13 @@
       ],
       "pixel_area": 29,
       "pose_world": [
-        -0.07139014452695847,
+        -0.07139013707637787,
         0.010775099508464336,
-        0.02000001072883606,
+        0.019999993965029716,
         1.0,
-        3.016074288098025e-07,
-        -1.699371409813466e-06,
-        1.0204575899563917e-12
+        2.4415550115008955e-07,
+        -1.6367304169762065e-06,
+        9.12827213990497e-13
       ],
       "bbox": [
         [
@@ -197,11 +197,11 @@
       "src": "ee",
       "dst": "actor:bin",
       "relation": "height-offset",
-      "label": "level",
+      "label": "above",
       "temp_label": "decrease-slow",
       "raw_value": 0.07460220693610609,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
+      "bin_key": "ee-receptacle-height-offset"
     },
     {
       "src": "ee",
@@ -209,7 +209,7 @@
       "relation": "planar-distance",
       "label": "near",
       "temp_label": "decrease-slow",
-      "raw_value": 0.00536174026558709,
+      "raw_value": 0.005361739234051421,
       "attributes": {},
       "bin_key": "ee-object-planar-distance"
     },
@@ -217,31 +217,21 @@
       "src": "ee",
       "dst": "actor:sphere",
       "relation": "height-offset",
-      "label": "level",
+      "label": "above",
       "temp_label": "decrease-slow",
-      "raw_value": 0.05710219591856003,
+      "raw_value": 0.05710221268236637,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
-    },
-    {
-      "src": "ee",
-      "dst": "actor:table-workspace",
-      "relation": "planar-distance",
-      "label": "near",
-      "temp_label": "decrease-slow",
-      "raw_value": 0.04965385164854926,
-      "attributes": {},
-      "bin_key": "ee-object-planar-distance"
+      "bin_key": "ee-manipuland-height-offset"
     },
     {
       "src": "ee",
       "dst": "actor:table-workspace",
       "relation": "height-offset",
-      "label": "far-above",
+      "label": "above",
       "temp_label": "decrease-slow",
-      "raw_value": 0.9967451319098473,
+      "raw_value": 0.07710213190984727,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
+      "bin_key": "ee-structural-surface-height-offset"
     },
     {
       "src": "ee",
@@ -289,7 +279,7 @@
       "relation": "grasp-compatibility",
       "label": "poor-match",
       "temp_label": null,
-      "raw_value": 0.7867668494350956,
+      "raw_value": 0.7867669324048786,
       "attributes": {},
       "bin_key": null
     },
@@ -299,7 +289,7 @@
       "relation": "contact-compatibility",
       "label": "partial-match",
       "temp_label": null,
-      "raw_value": 0.5735336988701911,
+      "raw_value": 0.5735338648097572,
       "attributes": {},
       "bin_key": null
     },
@@ -309,7 +299,7 @@
       "relation": "planar-distance",
       "label": "very-far",
       "temp_label": "stable",
-      "raw_value": 0.1695926726947346,
+      "raw_value": 0.16959266525700575,
       "attributes": {},
       "bin_key": "object-object-planar-distance"
     },
@@ -319,19 +309,9 @@
       "relation": "height-offset",
       "label": "level",
       "temp_label": "stable",
-      "raw_value": 0.004970988982453942,
+      "raw_value": 0.004971005746260285,
       "attributes": {},
       "bin_key": "object-object-height-offset"
-    },
-    {
-      "src": "actor:sphere",
-      "dst": "actor:table-workspace",
-      "relation": "planar-distance",
-      "label": "very-near",
-      "temp_label": "stable",
-      "raw_value": 0.014472100795225372,
-      "attributes": {},
-      "bin_key": "object-object-planar-distance"
     },
     {
       "src": "actor:sphere",
@@ -339,7 +319,7 @@
       "relation": "height-offset",
       "label": "level",
       "temp_label": "stable",
-      "raw_value": -3.0640087127567495e-06,
+      "raw_value": -3.080772519099828e-06,
       "attributes": {},
       "bin_key": "object-object-height-offset"
     },
@@ -393,7 +373,7 @@
       "relation": "contact-compatibility",
       "label": "unobserved",
       "temp_label": null,
-      "raw_value": 0.5813287154494649,
+      "raw_value": 0.5813286746965056,
       "attributes": {},
       "bin_key": null
     },
@@ -403,7 +383,7 @@
       "relation": "support-compatibility",
       "label": "unobserved",
       "temp_label": null,
-      "raw_value": 0.8338023819323873,
+      "raw_value": 0.8338021955763871,
       "attributes": {
         "support_role": "supporter"
       },

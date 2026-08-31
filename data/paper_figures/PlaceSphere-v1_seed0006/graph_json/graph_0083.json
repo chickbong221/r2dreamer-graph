@@ -15,13 +15,13 @@
       ],
       "pixel_area": 48,
       "pose_world": [
-        -0.05523299425840378,
-        0.012030914425849915,
-        0.11166518181562424,
-        -1.3297511031851172e-05,
-        0.9758270382881165,
-        -0.2185426950454712,
-        -0.0008838073117658496
+        -0.05523301661014557,
+        0.01203102059662342,
+        0.11166532337665558,
+        -1.3421813491731882e-05,
+        0.9758270978927612,
+        -0.21854260563850403,
+        -0.0008835623157210648
       ],
       "bbox": [
         [
@@ -95,13 +95,13 @@
       ],
       "pixel_area": 42,
       "pose_world": [
-        -0.05275899916887283,
-        0.011236938647925854,
-        0.11039669811725616,
-        0.9999978542327881,
-        -0.0004180871183052659,
-        -0.0020610205829143524,
-        0.0001826740917749703
+        -0.05275954678654671,
+        0.011237269267439842,
+        0.11039659380912781,
+        0.9999977350234985,
+        -0.00041300762677565217,
+        -0.0020819567143917084,
+        0.00018179623293690383
       ],
       "bbox": [
         [
@@ -189,7 +189,7 @@
       "relation": "planar-distance",
       "label": "very-far",
       "temp_label": "decrease-slow",
-      "raw_value": 0.15421352625248214,
+      "raw_value": 0.15421354196906717,
       "attributes": {},
       "bin_key": "ee-object-planar-distance"
     },
@@ -197,11 +197,11 @@
       "src": "ee",
       "dst": "actor:bin",
       "relation": "height-offset",
-      "label": "level",
+      "label": "far-above",
       "temp_label": "decrease-slow",
-      "raw_value": 0.10916518210433424,
+      "raw_value": 0.10916532366536558,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
+      "bin_key": "ee-receptacle-height-offset"
     },
     {
       "src": "ee",
@@ -209,7 +209,7 @@
       "relation": "planar-distance",
       "label": "very-near",
       "temp_label": "stable",
-      "raw_value": 0.0025982781296376538,
+      "raw_value": 0.0025977094026920873,
       "attributes": {},
       "bin_key": "ee-object-planar-distance"
     },
@@ -219,19 +219,9 @@
       "relation": "height-offset",
       "label": "level",
       "temp_label": "stable",
-      "raw_value": 0.0012684836983680725,
+      "raw_value": 0.001268729567527771,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
-    },
-    {
-      "src": "ee",
-      "dst": "actor:table-workspace",
-      "relation": "planar-distance",
-      "label": "medium",
-      "temp_label": "increase-slow",
-      "raw_value": 0.0658749389921296,
-      "attributes": {},
-      "bin_key": "ee-object-planar-distance"
+      "bin_key": "ee-manipuland-height-offset"
     },
     {
       "src": "ee",
@@ -239,9 +229,9 @@
       "relation": "height-offset",
       "label": "far-above",
       "temp_label": "decrease-slow",
-      "raw_value": 1.0313081070780754,
+      "raw_value": 0.11166524863910676,
       "attributes": {},
-      "bin_key": "ee-object-height-offset"
+      "bin_key": "ee-structural-surface-height-offset"
     },
     {
       "src": "ee",
@@ -259,7 +249,7 @@
       "relation": "contact",
       "label": "holds",
       "temp_label": null,
-      "raw_value": 54.729909272277055,
+      "raw_value": 54.72995534465025,
       "attributes": {},
       "bin_key": null
     },
@@ -289,7 +279,7 @@
       "relation": "grasp-compatibility",
       "label": "match",
       "temp_label": null,
-      "raw_value": 0.014965983821523112,
+      "raw_value": 0.014963967971715049,
       "attributes": {},
       "bin_key": null
     },
@@ -299,7 +289,7 @@
       "relation": "contact-compatibility",
       "label": "match",
       "temp_label": null,
-      "raw_value": 0.028913837745928657,
+      "raw_value": 0.02890980604631253,
       "attributes": {},
       "bin_key": null
     },
@@ -309,7 +299,7 @@
       "relation": "planar-distance",
       "label": "very-far",
       "temp_label": "decrease-slow",
-      "raw_value": 0.15096787635341555,
+      "raw_value": 0.1509684020933511,
       "attributes": {},
       "bin_key": "object-object-planar-distance"
     },
@@ -319,19 +309,9 @@
       "relation": "height-offset",
       "label": "far-below",
       "temp_label": "increase-slow",
-      "raw_value": -0.08542569840596616,
+      "raw_value": -0.0854255940978378,
       "attributes": {},
       "bin_key": "object-object-height-offset"
-    },
-    {
-      "src": "actor:sphere",
-      "dst": "actor:table-workspace",
-      "relation": "planar-distance",
-      "label": "very-near",
-      "temp_label": "increase-slow",
-      "raw_value": 0.024604778918522113,
-      "attributes": {},
-      "bin_key": "object-object-planar-distance"
     },
     {
       "src": "actor:sphere",
@@ -339,7 +319,7 @@
       "relation": "height-offset",
       "label": "far-above",
       "temp_label": "decrease-slow",
-      "raw_value": 0.09039362337970736,
+      "raw_value": 0.090393519071579,
       "attributes": {},
       "bin_key": "object-object-height-offset"
     },
@@ -393,7 +373,7 @@
       "relation": "contact-compatibility",
       "label": "unobserved",
       "temp_label": null,
-      "raw_value": 0.5826334618012257,
+      "raw_value": 0.5826468536375644,
       "attributes": {},
       "bin_key": null
     },
