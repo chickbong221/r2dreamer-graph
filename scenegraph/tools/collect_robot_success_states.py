@@ -37,6 +37,13 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 
+# What ``--skip-done`` accepts as already collected. Must track the collector
+# wrapper's ``_SCHEMA_VERSION`` and the miner's ``MIN_ROLLOUT_SCHEMA``: all
+# three describe the same evidence, and a floor left behind would let a stale
+# pickle satisfy a recollection it cannot actually satisfy.
+REQUIRED_ROLLOUT_SCHEMA = 9
+
+
 def _discover_work(
     ckpt_root: Path,
     subtask: str,
@@ -84,7 +91,15 @@ def _already_done(
 
 
 def _is_complete(pkl: Path, min_samples: int) -> bool:
-    """A schema-v4+ pickle holding at least ``min_samples`` of every array."""
+    """A current-schema pickle holding at least ``min_samples`` of every array.
+
+    The version floor is not cosmetic. An older pickle is complete by every
+    other measure -- it has its successes, its poses, its rollouts -- but it
+    was written before the collector recorded collision extents, the
+    end-effector rest calibration and the per-rollout build configuration.
+    Treating it as done is how a recollection turns into a no-op that reports
+    success, and the gap only surfaces later as a miner refusing every shard.
+    """
     if not pkl.exists():
         return False
     try:
@@ -92,7 +107,7 @@ def _is_complete(pkl: Path, min_samples: int) -> bool:
         with open(pkl, "rb") as f:
             d = pickle.load(f)
         return (
-            int(d.get("_schema_version", 0)) >= 4
+            int(d.get("_schema_version", 0)) >= REQUIRED_ROLLOUT_SCHEMA
             and len(d.get("robot_qpos", [])) >= min_samples
             and len(d.get("tcp_pose_wrt_base", [])) >= min_samples
             and len(d.get("interaction_rollouts", [])) >= min_samples
@@ -118,6 +133,73 @@ def _final_path(asset_dir: Path, task: str, subtask: str, obj_id: str) -> Path:
         asset_dir / "robot_success_states" / "fetch" / task / subtask
         / f"{obj_id}.pkl"
     )
+
+
+def build_config_names(plans) -> List[str]:
+    """Every build configuration a task-plan file can produce, sorted."""
+    return sorted({str(getattr(p, "build_config_name", "") or "") for p in plans})
+
+
+def select_build_config_plans(plans, requested: str, plan_fp) -> List:
+    """The plans belonging to one build configuration, or all of them.
+
+    Experiment B trains on one scene and evaluates on the rest, and a task
+    plan file holds plans from many. Cycling all of them across the vector
+    environments -- which is what happens without this -- puts several scenes
+    into one collection, and provenance recorded afterwards can only tell you
+    that it happened.
+
+    Unpinned collection stays legal, because a whitelist meant to cover a
+    whole split wants exactly that. It says so loudly instead.
+    """
+    available = build_config_names(plans)
+    if not requested:
+        if len(available) > 1:
+            print(
+                f"[env] NO --build-config: this collection spans "
+                f"{len(available)} build configurations and its evidence will "
+                f"mix them. Scene-pinned experiments must pass one of: "
+                f"{', '.join(available)}",
+                flush=True,
+            )
+        return list(plans)
+
+    kept = [p for p in plans
+            if str(getattr(p, "build_config_name", "") or "") == requested]
+    if not kept:
+        raise SystemExit(
+            f"[env] --build-config {requested!r} matches no plan in "
+            f"{plan_fp}. Available: {', '.join(available) or '<none>'}"
+        )
+    print(
+        f"[env] pinned build config {requested!r}: {len(kept)}/{len(plans)} "
+        f"plans, init configs "
+        f"{', '.join(sorted({str(getattr(p, 'init_config_name', '') or '?') for p in kept}))}",
+        flush=True,
+    )
+    return kept
+
+
+def assert_pinned_build_config(venv, requested: str) -> None:
+    """After reset, check the built scenes are the one that was asked for.
+
+    The filter selects plans; this checks what the environment actually
+    built. They can differ -- a plan attribute renamed upstream would make the
+    filter match nothing quietly if it were not for the empty-set check, and
+    match the wrong thing if the attribute changed meaning.
+    """
+    if not requested:
+        return
+    base = venv.unwrapped
+    built = sorted(str(bc) for bc in getattr(base, "bc_to_task_plans", {}))
+    if built != [requested]:
+        raise SystemExit(
+            f"[env] asked for build config {requested!r} but the environment "
+            f"built {built}. Refusing to collect: the evidence would not be "
+            "from the requested scene."
+        )
+    print(f"[env] verified after reset: every sub-scene is {requested!r}",
+          flush=True)
 
 
 def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
@@ -146,11 +228,16 @@ def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
     if not plan_data.plans:
         raise RuntimeError(f"{plan_fp} contained no plans")
 
+    requested = str(getattr(args, "build_config", "") or "")
+    plans = select_build_config_plans(plan_data.plans, requested, plan_fp)
+
     # Cycle plans across envs so we get init-config diversity even when a
-    # single task plan file is shorter than --num-envs.
-    n_plans = len(plan_data.plans)
+    # single task plan file is shorter than --num-envs. With a pinned build
+    # config the diversity is in the starting arrangement only, which is the
+    # point: one scene, many spawns.
+    n_plans = len(plans)
     n_envs = max(1, args.num_envs)
-    task_plans = [plan_data.plans[i % n_plans] for i in range(n_envs)]
+    task_plans = [plans[i % n_plans] for i in range(n_envs)]
 
     env = gym.make(
         f"{args.subtask.capitalize()}SubtaskTrain-v0",
@@ -181,6 +268,12 @@ def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
         split=split,
         checkpoint_path=str(ckpt_dir) if ckpt_dir else "",
         task_plan_path=str(plan_fp),
+        # Index matches the vector-environment index, so each rollout can name
+        # the plan that produced it. ``require_build_config`` makes the
+        # wrapper refuse a mixed environment outright rather than record that
+        # it was mixed after the sim-hours are spent.
+        env_plans=task_plans,
+        require_build_config=requested,
     )
     env = collect
     env = FetchDepthObservationWrapper(env, cat_state=True, cat_pixels=False)
@@ -272,6 +365,7 @@ def _collect_one(task: str, obj_id: str, ckpt_dir: Path, args) -> Tuple[int, Pat
     print(f"[env] plan={plan_fp.name} num_envs={venv.unwrapped.num_envs}")
 
     obs, _ = venv.reset(seed=args.seed, options=dict(reconfigure=True))
+    assert_pinned_build_config(venv, str(getattr(args, "build_config", "") or ""))
     policy = load_policy(str(ckpt_dir), venv, obs, device=args.device)
     if policy.kind == "random":
         print(f"[warn] {obj_id}: policy loader fell back to random actions; "
@@ -347,6 +441,17 @@ def parse_args(argv: Optional[Iterable[str]] = None):
         help="Manipulation subtask checkpoint tree to collect.",
     )
     p.add_argument(
+        "--build-config", default="",
+        help="Collect only from this ReplicaCAD build configuration. Required "
+             "for a scene-pinned experiment: without it the task plans are "
+             "cycled across the vector envs and one collection mixes scenes.",
+    )
+    p.add_argument(
+        "--list-build-configs", action="store_true",
+        help="Print the build configurations each selected task plan file "
+             "offers and exit. Reads the plan files only -- no simulator.",
+    )
+    p.add_argument(
         "--n-success", type=int, default=30,
         help="Target successful picks per object before stopping (default 30).",
     )
@@ -404,6 +509,34 @@ def parse_args(argv: Optional[Iterable[str]] = None):
     return p.parse_args(argv)
 
 
+def _list_build_configs(work, args) -> int:
+    """Report which scenes each unit could collect from, without a simulator.
+
+    The audit that has to happen before a scene-pinned collection: which build
+    configurations exist, and therefore which one ``--build-config`` should
+    name. Reads the task plan JSON only.
+    """
+    from mani_skill import ASSET_DIR
+    from mshab.envs.planner import plan_data_from_file
+
+    rd = ASSET_DIR / "scene_datasets/replica_cad_dataset/rearrange"
+    split = str(getattr(args, "split", "train") or "train")
+    for task, obj_id, _ckpt in work:
+        plan_fp = rd / "task_plans" / task / args.subtask / split / f"{obj_id}.json"
+        if not plan_fp.exists():
+            print(f"{task}/{obj_id}: MISSING {plan_fp}")
+            continue
+        plans = plan_data_from_file(plan_fp).plans
+        names = build_config_names(plans)
+        print(f"{task}/{obj_id}: {len(plans)} plans over "
+              f"{len(names)} build config(s)")
+        for name in names:
+            n = sum(1 for p in plans
+                    if str(getattr(p, "build_config_name", "") or "") == name)
+            print(f"    {name}  ({n} plan(s))")
+    return 0
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     ckpt_root = Path(args.ckpt_root).resolve()
@@ -418,6 +551,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("ERROR: no per-object checkpoints matched the filters under "
               f"{ckpt_root}", file=sys.stderr)
         return 2
+
+    if args.list_build_configs:
+        return _list_build_configs(work, args)
 
     print(f"[plan] {len(work)} (task, obj) units; n_success target={args.n_success}")
     print(

@@ -38,7 +38,9 @@ import os
 import pickle
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import (
+    Any, Deque, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING,
+)
 
 import gymnasium as gym
 import numpy as np
@@ -49,11 +51,20 @@ from mani_skill.agents.robots import Fetch
 
 from scenegraph.configs.loader import default_temporal_k
 from scenegraph.core.affordance import canonical_affordance_key
-from scenegraph.core.spatial_metrics import EE_OBJECT_SCOPE, stat_key
+from scenegraph.core.spatial_metrics import (
+    EE_OBJECT_SCOPE,
+    EE_SITE_SCOPE,
+    stat_key,
+)
 from scenegraph.core.entity_identity import (
+    _articulation,
     entity_kind,
     entity_name,
     stable_entity_key,
+)
+from scenegraph.adapters.site_providers import (
+    collision_half_extents_status,
+    ee_rest_geometry,
 )
 from scenegraph.adapters.privileged_state import (
     entity_pose_world_array,
@@ -65,7 +76,12 @@ if TYPE_CHECKING:
     from mshab.envs.sequential_task import SequentialTaskEnv
 
 
-_SCHEMA_VERSION = 8
+# v9 adds, per rollout: the build configuration and task plan it came from,
+# the collision extents of every entity that can enter ``members``, and the
+# end-effector-to-rest-site calibration. None of it can be recovered from a v8
+# pickle -- the numbers were never read -- so the miner rejects v8 rather than
+# defaulting them.
+_SCHEMA_VERSION = 9
 # Per-rollout cap on stored obj-obj contact event poses (keeps pickles small).
 _OBJ_CONTACT_SAMPLE_CAP = 1024
 _EPS_FORCE_DEFAULT = 0.05
@@ -82,6 +98,11 @@ _RESET_WARMUP_TICKS = 3
 # robust quantile across these.
 _BIN_SAMPLE_CAP = 4096
 _POSE_SAMPLE_CAP = 4096
+# Per-rollout cap on stored end-effector-to-rest-site diagnostic frames. The
+# planar and height streams feed the bins through the ordinary sample buffers;
+# these carry the exact distance, tolerance and predicate alongside, which is
+# what later checks that a successful state implies every final-phase rung.
+_EE_REST_SAMPLE_CAP = 4096
 
 
 def _to_np(x) -> np.ndarray:
@@ -112,14 +133,69 @@ def _entity_pose7(ent, env_idx: int) -> Optional[List[float]]:
 
 
 def _record(ent, *, key: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """One entity's identity: canonical key plus the raw names behind it.
+
+    ``key`` is already canonicalised -- actors lose their instance suffix,
+    links keep theirs -- and that canonicalisation is not reversible. The raw
+    names are kept beside it because a cross-scene audit has to ask whether
+    one logical counter appears as ``kitchen_counter-0`` here and
+    ``kitchen_counter-1`` in another build configuration, and the canonical
+    key alone cannot answer it.
+    """
     stable = key or stable_entity_key(ent)
     if not stable:
         return None
-    return {
+    out = {
         "key": stable,
         "name": entity_name(ent),
         "kind": entity_kind(ent),
     }
+    art = _articulation(ent)
+    if art is not None:
+        out["raw_articulation"] = entity_name(art)
+    return out
+
+
+def _plan_identity(plan, index: int) -> Dict[str, Any]:
+    """Which scene and starting arrangement one vector environment is running.
+
+    Recorded per rollout rather than once per pickle: MS-HAB fills the
+    environments from a list of plans and autoresets them independently, so
+    "which build configuration produced this evidence" is a per-environment
+    question and a payload-level answer would be an average of several.
+    """
+    return {
+        "task_plan_index": int(index),
+        "build_config_name": str(
+            getattr(plan, "build_config_name", "") or ""),
+        "init_config_name": str(getattr(plan, "init_config_name", "") or ""),
+    }
+
+
+def _live_plan(base, env_idx: int):
+    """``(plan, build_config_idx, task_plan_idx)`` the sub-scene is running now.
+
+    Read from the environment, not from the list handed to ``gym.make``. MS-HAB
+    resamples ``task_plan_idxs`` on every reset and looks the active plan up
+    through ``build_config_idx_to_task_plans``, so the plan a vector slot
+    started with stops describing it after the first episode. Recording the
+    assignment instead would attribute each rollout to whichever arrangement
+    happened to be dealt at construction -- wrong for every episode but the
+    first, and wrong silently.
+
+    Returns ``(None, None, None)`` when the environment does not expose the
+    indices, so the caller can say the provenance is unavailable rather than
+    fall back to a value it knows is stale.
+    """
+    try:
+        build_idxs = _to_np(base.build_config_idxs).reshape(-1)
+        plan_idxs = _to_np(base.task_plan_idxs).reshape(-1)
+        bci = int(build_idxs[min(env_idx, build_idxs.size - 1)])
+        tpi = int(plan_idxs[min(env_idx, plan_idxs.size - 1)])
+        plans = base.build_config_idx_to_task_plans[bci]
+        return plans[tpi], bci, tpi
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return None, None, None
 
 
 def _subtask_target_id(subtask) -> str:
@@ -155,6 +231,8 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
         split: Optional[str] = None,
         checkpoint_path: Optional[str] = None,
         task_plan_path: Optional[str] = None,
+        env_plans: Optional[Sequence[Any]] = None,
+        require_build_config: Optional[str] = None,
     ) -> None:
         super().__init__(env)
         base: "SequentialTaskEnv" = env.unwrapped
@@ -178,6 +256,30 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
         self.obj_id = next(iter(canonical_ids))
         self.subtask_type = plans[0].subtasks[0].type
         self.num_envs = int(getattr(base, "num_envs", 1))
+
+        # Which scenes this environment can actually produce. ``bc_to_task_plans``
+        # is the env's own map, so this is what was built rather than what was
+        # requested -- the two differ if the caller's filter missed a plan.
+        self.build_configs = sorted(str(bc) for bc in base.bc_to_task_plans)
+        if require_build_config:
+            wanted = str(require_build_config)
+            if self.build_configs != [wanted]:
+                # Refused at construction, not recorded and mined later. A
+                # scene-generalisation experiment whose training evidence came
+                # from several build configurations is not the experiment, and
+                # provenance would only tell us so after the sim-hours were
+                # spent.
+                raise ValueError(
+                    f"collection was pinned to build config {wanted!r} but the "
+                    f"environment holds {self.build_configs}. Filter the task "
+                    "plans before constructing the environment."
+                )
+        self.require_build_config = str(require_build_config or "")
+        # Index is the vector-environment index, matching the ``task_plans``
+        # list the caller passed to ``gym.make``.
+        self.env_plan_identity: List[Dict[str, Any]] = [
+            _plan_identity(plan, i) for i, plan in enumerate(env_plans or [])
+        ]
 
         self.eps_force = float(eps_force)
         self.min_vertical_force_ratio = float(min_vertical_force_ratio)
@@ -219,6 +321,18 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
         # Per-env raw obj-obj contact event samples. Each item is a dict with
         # ``a_key``, ``b_key``, ``a_pose``, ``b_pose``, ``force_vector``.
         self._episode_obj_contacts: List[List[Dict[str, Any]]] = []
+        # Per-env entity geometry, keyed by canonical key. Read once per
+        # entity per episode rather than per frame: collision extents are a
+        # property of the built scene, and re-reading them every tick would
+        # pay for the shape walk thousands of times for one unchanging number.
+        self._episode_extents: List[Dict[str, Dict[str, Any]]] = []
+        # Per-env end-effector-to-rest-site frames: distance, tolerance and
+        # the exact predicate, alongside the streams that feed the bins.
+        self._episode_ee_rest: List[List[Dict[str, Any]]] = []
+        # Whether active-object resolution ever fell back to the merged MS-HAB
+        # handle this episode. The protected-target path wants to make that
+        # fatal, and this is the evidence for whether it ever happens.
+        self._episode_merged_fallback: List[bool] = []
         self._reset_buffers()
 
         # The task group is part of the path, not just of the payload. The same
@@ -254,6 +368,9 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             self._episode_history = [dict() for _ in range(self.num_envs)]
             self._episode_ticks = [0 for _ in range(self.num_envs)]
             self._episode_obj_contacts = [[] for _ in range(self.num_envs)]
+            self._episode_extents = [dict() for _ in range(self.num_envs)]
+            self._episode_ee_rest = [[] for _ in range(self.num_envs)]
+            self._episode_merged_fallback = [False] * self.num_envs
         indices = range(self.num_envs) if env_indices is None else env_indices
         for idx in indices:
             i = int(idx)
@@ -265,6 +382,12 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             self._episode_history[i].clear()
             self._episode_ticks[i] = 0
             self._episode_obj_contacts[i].clear()
+            # Extents included: the robot is re-placed and the scene may be
+            # rebuilt across a boundary, so a geometry read held over is a
+            # measurement of the previous episode's scene.
+            self._episode_extents[i].clear()
+            self._episode_ee_rest[i].clear()
+            self._episode_merged_fallback[i] = False
 
     def reset(self, *args, **kwargs):
         result = super().reset(*args, **kwargs)
@@ -575,6 +698,9 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
                 if len(buf) > self.temporal_k:
                     change = abs(buf[-1] - buf[0])
                     self._push_sample(samples, f"{relation}_change", change)
+        # Independent of ``entity_by_key``: the gripper has a distance to its
+        # rest position whether or not any object was near enough to sample.
+        self._observe_ee_rest(env_idx, ee_xyz)
         if pose_entities and len(self._episode_pose_samples[env_idx]) < _POSE_SAMPLE_CAP:
             pose_sample: Dict[str, Any] = {
                 "tcp_pose": tcp_pose[:7].astype(float).tolist(),
@@ -583,6 +709,67 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             if gripper_width is not None and np.isfinite(gripper_width):
                 pose_sample["gripper_width"] = float(gripper_width)
             self._episode_pose_samples[env_idx].append(pose_sample)
+
+    def _observe_extents(
+        self, env_idx: int, entity_by_key: Dict[str, Any],
+    ) -> None:
+        """Record collision half-extents once per entity per episode.
+
+        The miner cannot derive this from anything else in the pickle, and it
+        is what separates an extended support plane from a localized
+        receptacle -- roles cannot, because a bin and a tabletop carry
+        identical ones. A failed read is stored with its reason rather than
+        omitted: "no extent" and "small" have to stay distinguishable, since
+        assuming small is how a metre-wide counter gets measured from its own
+        origin.
+        """
+        store = self._episode_extents[env_idx]
+        for key, ent in entity_by_key.items():
+            if key in store:
+                continue
+            half, status = collision_half_extents_status(ent, env_idx)
+            record = _record(ent, key=key) or {"key": key}
+            record["extent_status"] = status
+            if half is not None:
+                record["half_extents"] = [float(v) for v in half]
+            store[key] = record
+
+    def _observe_ee_rest(self, env_idx: int, ee_xyz: np.ndarray) -> None:
+        """Sample the end effector against MS-HAB's rest position.
+
+        Pick only: ``pick_cfg.ee_rest_thresh`` is that subtask's own success
+        geometry and no other subtask defines one. Read through the same
+        helper the runtime provider uses, so the mined scale and the labelled
+        distance are measurements of the same point.
+
+        The planar and height streams get dedicated keys. Pooling them into
+        ``ee-object-*`` would stretch the band a two-centimetre approach has
+        to register against with a distance to the robot's own base.
+        """
+        if self.subtask_type != "pick":
+            return
+        world, tolerance = ee_rest_geometry(self, env_idx)
+        delta = ee_xyz - world
+        planar = float(np.linalg.norm(delta[:2]))
+        height = float(delta[2])
+        euclidean = float(np.linalg.norm(delta))
+        samples = self._episode_bin_samples[env_idx]
+        self._push_sample(
+            samples, stat_key(EE_SITE_SCOPE, "planar-distance"), planar)
+        self._push_sample(
+            samples, stat_key(EE_SITE_SCOPE, "height-offset"), abs(height))
+        if len(self._episode_ee_rest[env_idx]) >= _EE_REST_SAMPLE_CAP:
+            return
+        self._episode_ee_rest[env_idx].append({
+            "rest_pos_world": [float(v) for v in world],
+            "planar_distance": planar,
+            "height_offset": height,
+            "euclidean_distance": euclidean,
+            "tolerance": float(tolerance),
+            # The environment's own predicate, recorded rather than inferred
+            # later from the distance and a remembered threshold.
+            "reached": bool(euclidean <= tolerance),
+        })
 
     @staticmethod
     def _push_sample(samples: Dict[str, List[float]], key: str, value: float) -> None:
@@ -602,6 +789,14 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             env_idx=env_idx, seg_id_map=actual_state.seg_id_map
         )
         target_ent, target_key = self._target(env_idx, actual_state)
+        # Did ``_resolve_actual_entity`` map the MS-HAB handle to this
+        # sub-scene's actor, or give the merged handle back? The protected
+        # target path wants to treat the fallback as fatal, and this records
+        # whether it ever fires rather than assuming either way.
+        resolved = getattr(actual_state, "active_obj", None)
+        if (resolved is not None
+                and resolved is getattr(actual_state, "active_obj_merged", None)):
+            self._episode_merged_fallback[env_idx] = True
         physics_target_ent = target_ent
         ee_links = list(actual_state.ee_links)
 
@@ -699,6 +894,10 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             ent = entity_by_key.get(supporter_key)
             if ent is not None:
                 subjects.setdefault(supporter_key, ent)
+        # The same subject set the bins are sampled over: the target, the
+        # interacted entities and their direct supporters -- which is exactly
+        # what can end up in ``members``.
+        self._observe_extents(env_idx, subjects)
         self._update_bin_stats(
             env_idx, subjects,
             actual_state.tcp_pose_world,
@@ -906,7 +1105,55 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
             "bin_samples": rollout_bin_samples,
             "pose_samples": rollout_pose_samples,
             "obj_contacts": list(self._episode_obj_contacts[env_idx]),
+            # Which scene this evidence came from. Per rollout because the
+            # environments are filled from a list of plans and autoreset
+            # independently, so one pickle can hold several -- and a
+            # scene-generalisation split needs to be able to prove it did not.
+            "provenance": self._rollout_provenance(env_idx),
+            # Geometry and rest-site calibration: neither is derivable from
+            # anything else stored here.
+            "extents": dict(self._episode_extents[env_idx]),
+            "ee_rest_samples": list(self._episode_ee_rest[env_idx]),
         })
+
+    def _rollout_provenance(self, env_idx: int) -> Dict[str, Any]:
+        """Where one rollout came from: the live plan, uncanonicalised.
+
+        Raw on purpose. A later audit has to be able to ask whether one
+        logical articulation is numbered differently across build
+        configurations, and a normalised record cannot answer that -- the
+        normalisation is what erases the difference.
+        """
+        plan, build_idx, plan_idx = _live_plan(self._base_env, env_idx)
+        if plan is not None:
+            identity = _plan_identity(plan, plan_idx)
+            identity["build_config_index"] = int(build_idx)
+            identity["plan_source"] = "live"
+        else:
+            # Named, not substituted. The construction-time assignment is
+            # what this slot *started* with, and after the first autoreset
+            # that is a different arrangement -- so it travels under its own
+            # key rather than posing as the plan that produced the rollout.
+            identity = {"plan_source": "unavailable"}
+            if env_idx < len(self.env_plan_identity):
+                identity["assigned_at_construction"] = dict(
+                    self.env_plan_identity[env_idx])
+        identity.update({
+            "env_idx": int(env_idx),
+            "split": self.split,
+            "task_plan_path": self.task_plan_path,
+            "task_group": self.task_group,
+            # Every configuration the environment can build, so a rollout
+            # whose own plan identity is missing is still bounded by this.
+            "env_build_configs": list(self.build_configs),
+            "requested_build_config": self.require_build_config,
+            # ``merged`` means active-object resolution never found this
+            # sub-scene's own actor and handed back the shared handle.
+            "target_resolution": (
+                "merged" if self._episode_merged_fallback[env_idx] else "actual"
+            ),
+        })
+        return identity
 
     def close(self):
         # Never overwrite an existing pkl with an empty payload. Diagnostic
@@ -937,6 +1184,10 @@ class FetchCollectContactDataWrapper(gym.Wrapper):
                 "split": self.split,
             },
             "temporal_k": self.temporal_k,
+            # Every build configuration this collection could have produced.
+            # A one-element list is the evidence a scene-pinned run needs.
+            "build_configs": list(self.build_configs),
+            "requested_build_config": self.require_build_config,
             "robot_qpos": self.success_robot_qpos,
             "obj_pose_wrt_base": self.success_obj_pose_wrt_base,
             "tcp_pose_wrt_base": self.success_tcp_pose_wrt_base,

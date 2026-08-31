@@ -66,6 +66,17 @@ OBJECT_SITE_SCOPE = "object-site"
 OBJECT_SITE_PLANAR_KEY = f"{OBJECT_SITE_SCOPE}-planar-distance"
 OBJECT_SITE_HEIGHT_KEY = f"{OBJECT_SITE_SCOPE}-height-offset"
 
+# End-effector-to-site, for a site whose subject is the gripper rather than an
+# object: MS-HAB's rest position is where the *hand* must return to, and no
+# manipuland has a destination in that task at all. Registered by hand for the
+# same reason as the two above, and kept off ``ee-object-*`` deliberately --
+# those scales are calibrated on distances to physical bodies the gripper
+# approaches and grasps, and pooling a return-to-base distance into them would
+# stretch the very band a two-centimetre approach has to register against.
+EE_SITE_SCOPE = "ee-site"
+EE_SITE_PLANAR_KEY = f"{EE_SITE_SCOPE}-planar-distance"
+EE_SITE_HEIGHT_KEY = f"{EE_SITE_SCOPE}-height-offset"
+
 
 def spatial_bin_key(scope: str, relation: str) -> str:
     """Asset key for a scoped absolute scale, e.g. ``ee-object-height-offset``."""

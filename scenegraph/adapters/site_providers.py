@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..core.sites import (
+    PROVIDER_MSHAB_EE_REST,
     PROVIDER_PEG_HOLE_MOUTH,
     PROVIDER_PICK_CUBE_GOAL,
     PROVIDER_ROBOT_BASE_REGION,
@@ -292,8 +293,10 @@ def _shape_half_size(shape) -> Optional[np.ndarray]:
     return None
 
 
-def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
-    """Half-extents of the actor's collision shapes, unioned in its own frame.
+def collision_half_extents_status(
+    actor, env_idx: int,
+) -> Tuple[Optional[List[float]], str]:
+    """``(half-extents, status)``: the measurement and why it failed if it did.
 
     The one measurement that separates an extended support plane from a
     localized receptacle. Roles cannot: in PlaceSphere the bin and the table
@@ -302,22 +305,25 @@ def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
     magnitude.
 
     Shape poses are included, so a surface built from several offset blocks
-    reports the extent of the whole thing rather than of one block. Returns
-    None when the geometry cannot be read, which the miner treats as "cannot
-    classify" rather than "small".
+    reports the extent of the whole thing rather than of one block.
+
+    The status exists for the collector. A member with no extent cannot be
+    classified, and the difference between "this entity exposes no collision
+    body" and "one of its shapes is a type we cannot measure" is what tells a
+    pilot whether the gap is the scene or this reader.
     """
     objs = getattr(actor, "_objs", None) or []
     if not objs:
-        return None
+        return None, "no-sub-scene-objects"
     shapes = _shapes_of(objs[min(env_idx, len(objs) - 1)])
     if not shapes:
-        return None
+        return None, "no-collision-shapes"
     lo = np.full(3, np.inf)
     hi = np.full(3, -np.inf)
     for shape in shapes:
         half = _shape_half_size(shape)
         if half is None:
-            return None
+            return None, f"unmeasurable-shape:{type(shape).__name__}"
         centre = np.zeros(3)
         pose = getattr(shape, "local_pose", None)
         if pose is not None:
@@ -328,8 +334,18 @@ def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
         lo = np.minimum(lo, centre - half)
         hi = np.maximum(hi, centre + half)
     if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)):
-        return None
-    return [float(v) for v in (hi - lo) / 2.0]
+        return None, "non-finite-bounds"
+    return [float(v) for v in (hi - lo) / 2.0], "ok"
+
+
+def collision_half_extents(actor, env_idx: int) -> Optional[List[float]]:
+    """Half-extents of the actor's collision shapes, or None when unreadable.
+
+    None rather than a default: the miner treats it as "cannot classify"
+    rather than "small", because a table quietly demoted to an ordinary object
+    reinstates the metre of origin error the classification exists to remove.
+    """
+    return collision_half_extents_status(actor, env_idx)[0]
 
 
 def _collision_x_half_extent(actor, env_idx: int) -> Optional[float]:
@@ -433,12 +449,117 @@ def depth_provenance(env_idx: int = 0) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
+# MS-HAB: the end-effector rest position
+# --------------------------------------------------------------------------- #
+# Where the two numbers come from. Named here rather than inlined so a rename
+# upstream fails with the attribute in the message.
+_EE_REST_OFFSET_ATTR = "ee_rest_pos_wrt_base"
+_PICK_CFG_ATTR = "pick_cfg"
+_EE_REST_THRESH_ATTR = "ee_rest_thresh"
+
+
+def _rest_offset_xyz(offset, env_idx: int) -> np.ndarray:
+    """The rest offset's translation, whichever form the env stores it in.
+
+    MS-HAB builds ``ee_rest_pos_wrt_base`` with ``Pose.create_from_pq`` and
+    composes it against the base pose, so it is a batched Pose and not the
+    XYZ array it reads as. Handing that to the numeric row reader raises a
+    bare TypeError on the first sample, which is a poor way to find out.
+
+    A plain array is still accepted: only the translation is ever used, and
+    both forms carry it.
+    """
+    raw = getattr(offset, "raw_pose", None)
+    if raw is not None:
+        return _row(raw, env_idx).reshape(-1)[:3]
+    position = getattr(offset, "p", None)
+    if position is not None:
+        # The position component on its own, never a slice of the
+        # concatenated pose: a two-component p would otherwise take the
+        # quaternion's leading 1.0 as its z and read as a valid offset.
+        return _row(position, env_idx).reshape(-1)[:3]
+    return _row(offset, env_idx).reshape(-1)[:3]
+
+
+def ee_rest_geometry(env, env_idx: int) -> Tuple[np.ndarray, float]:
+    """``(rest position in world, tolerance)`` for MS-HAB's EE rest pose.
+
+    Declaration-free on purpose. The calibration collector needs these numbers
+    before any asset declares the site, and making it fabricate a
+    ``SiteDeclaration`` to read a position would mean two code paths deciding
+    where the rest point is -- which is exactly how a mined scale comes to
+    describe a different place than the runtime measures.
+
+    Composed live from ``base_link.pose`` every time it is asked. MS-HAB
+    re-places the robot on reset, so the rest position moves with it, and a
+    pose held across an episode boundary names the previous episode's spot.
+    The tolerance is read from the task config rather than written here: 0.05
+    is its current value, not its definition.
+    """
+    base = _unwrap(env)
+    agent = getattr(base, "agent", None)
+    # ``base_link`` by name, not ``get_links()[0]`` by position: the ordering
+    # is an implementation detail of the articulation loader.
+    base_link = getattr(agent, "base_link", None)
+    if base_link is None:
+        raise SiteError(
+            "the MS-HAB end-effector rest position needs agent.base_link; "
+            f"this environment exposes agent={type(agent).__name__ if agent else None!r}"
+        )
+    offset = getattr(base, _EE_REST_OFFSET_ATTR, None)
+    if offset is None:
+        raise SiteError(
+            f"the environment exposes no {_EE_REST_OFFSET_ATTR!r}, which is "
+            "where the rest position is defined relative to the robot base"
+        )
+    cfg = getattr(base, _PICK_CFG_ATTR, None)
+    tolerance = getattr(cfg, _EE_REST_THRESH_ATTR, None) if cfg else None
+    if tolerance is None:
+        raise SiteError(
+            f"the environment exposes no {_PICK_CFG_ATTR}."
+            f"{_EE_REST_THRESH_ATTR}, which is the distance its own success "
+            "predicate calls 'at rest'"
+        )
+
+    pose = _pose7(base_link.pose, env_idx)
+    local = _rest_offset_xyz(offset, env_idx)
+    if local.size < 3:
+        raise SiteError(
+            f"{_EE_REST_OFFSET_ATTR} has {local.size} component(s) for "
+            f"sub-scene {env_idx}, not 3"
+        )
+    world = pose[:3] + _rot(pose) @ local
+    tolerance = _scalar(tolerance, env_idx)
+    if not np.all(np.isfinite(world)) or not np.isfinite(tolerance):
+        raise SiteError(
+            "the MS-HAB rest position is not finite: "
+            f"base_pose={pose.tolist()} offset={local.tolist()} "
+            f"tolerance={tolerance}"
+        )
+    return world, float(tolerance)
+
+
+def mshab_ee_rest(env, env_idx: int, decl: SiteDeclaration) -> SiteSpec:
+    """The rest position the gripper has to return to, still holding the
+    object. Its subject is the end effector, not a manipuland."""
+    world, tolerance = ee_rest_geometry(env, env_idx)
+    # Position only. The site is a point in space with no orientation of its
+    # own, and giving it the base's would imply an axis nothing measures.
+    return SiteSpec(
+        declaration=decl,
+        pose_world=np.concatenate([world, [1.0, 0.0, 0.0, 0.0]]),
+        tolerance=tolerance,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Dispatch
 # --------------------------------------------------------------------------- #
 _PROVIDERS = {
     PROVIDER_PICK_CUBE_GOAL: pick_cube_goal,
     PROVIDER_PEG_HOLE_MOUTH: peg_hole_mouth,
     PROVIDER_ROBOT_BASE_REGION: robot_base_region,
+    PROVIDER_MSHAB_EE_REST: mshab_ee_rest,
 }
 
 

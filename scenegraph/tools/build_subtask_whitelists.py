@@ -140,6 +140,13 @@ _DEFAULT_TCP_AXIS_LOCAL = [0.0, 0.0, 1.0]
 _DEFAULT_ORIENTATION_SELECTION_WEIGHT = 0.10
 
 
+# The evidence schema this miner needs. Raised from 3 with the v9 collector:
+# extents, end-effector rest calibration and per-rollout build configuration
+# are all newly *recorded*, not newly derived, so an older pickle is not a
+# degraded input -- it is the wrong input, and mining it would silently
+# produce assets missing exactly the fields the MS-HAB schedule reads.
+MIN_ROLLOUT_SCHEMA = 9
+
 log = logging.getLogger("build_subtask_whitelists")
 
 
@@ -890,11 +897,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     n_rollouts = 0
     for path, data in _iter_pickles(root):
         rollouts = data.get("interaction_rollouts") or []
-        if int(data.get("_schema_version", 0)) < 3 or not rollouts:
-            log.warning(
-                "skip %s: schema-v3+ interaction_rollouts required; recollect "
-                "with --no-skip-done",
-                path,
+        version = int(data.get("_schema_version", 0))
+        if version < MIN_ROLLOUT_SCHEMA or not rollouts:
+            log.error(
+                "skip %s: schema v%d, need v%d+. The collision extents, the "
+                "end-effector rest calibration and the per-rollout build "
+                "configuration were never recorded in this pickle, so no "
+                "amount of re-mining can produce them. Recollect with "
+                "--no-skip-done.",
+                path, version, MIN_ROLLOUT_SCHEMA,
             )
             continue
         recorded = str(

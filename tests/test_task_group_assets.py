@@ -35,6 +35,7 @@ from scenegraph.tools.build_subtask_whitelists import (
 )
 from scenegraph.tools.build_union_whitelist import merge
 from scenegraph.tools.collect_robot_success_states import (
+    REQUIRED_ROLLOUT_SCHEMA,
     _already_done,
     _discover_work,
     _final_path,
@@ -138,7 +139,7 @@ class TestCollectorDiscovery(TempTree):
             pkl.parent.mkdir(parents=True, exist_ok=True)
             with open(pkl, "wb") as stream:
                 pickle.dump({
-                    "_schema_version": 8,
+                    "_schema_version": REQUIRED_ROLLOUT_SCHEMA,
                     "robot_qpos": [[0.0]],
                     "tcp_pose_wrt_base": [[0.0]],
                     "interaction_rollouts": [{"target_key": BOWL}],
@@ -483,7 +484,7 @@ class TestPartialCollections(TempTree):
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as stream:
             pickle.dump({
-                "_schema_version": 8,
+                "_schema_version": REQUIRED_ROLLOUT_SCHEMA,
                 "robot_qpos": [[0.0]] * n,
                 "tcp_pose_wrt_base": [[0.0]] * n,
                 "interaction_rollouts": [{"target_key": BOWL}] * n,

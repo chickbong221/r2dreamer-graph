@@ -60,9 +60,10 @@ SOURCES: Tuple[str, ...] = (SOURCE_ORIGIN, SOURCE_PROVIDER)
 PROVIDER_PICK_CUBE_GOAL = "pick_cube_goal"
 PROVIDER_PEG_HOLE_MOUTH = "peg_hole_mouth"
 PROVIDER_ROBOT_BASE_REGION = "robot_base_region"
+PROVIDER_MSHAB_EE_REST = "mshab_ee_rest"
 PROVIDERS: Tuple[str, ...] = (
     PROVIDER_PICK_CUBE_GOAL, PROVIDER_PEG_HOLE_MOUTH,
-    PROVIDER_ROBOT_BASE_REGION,
+    PROVIDER_ROBOT_BASE_REGION, PROVIDER_MSHAB_EE_REST,
 )
 
 # The two virtual site keys the shipped tasks use. Named here so the
@@ -70,6 +71,11 @@ PROVIDERS: Tuple[str, ...] = (
 # spelling -- a mismatch would calibrate a scale nothing ever reads.
 SITE_HOLE = f"{SITE_PREFIX}hole_site"
 SITE_PULL_REGION = f"{SITE_PREFIX}pull_goal_region"
+# MS-HAB Pick ends with the gripper back at a rest position defined relative
+# to the robot base. Unlike the three above, its subject is the end effector
+# rather than an object: it is where the *gripper* has to be, not where a
+# manipuland has to go, and the task provides no object destination at all.
+SITE_EE_REST = f"{SITE_PREFIX}ee_rest_site"
 
 
 # How far *before* the entry plane still counts as having reached it. A
