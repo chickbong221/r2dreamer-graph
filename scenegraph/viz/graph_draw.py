@@ -232,8 +232,10 @@ def _paper_edge_fractions(
     if graph.env_id != "PlaceSphere-v1" or tuple(sorted(pair)) != sphere_bin:
         return None
     if count <= 1:
-        return np.asarray([0.5], dtype=float)
-    return np.linspace(0.28, 0.72, int(count), dtype=float)
+        return np.asarray([0.42], dtype=float)
+    # Keep the whole stack on the upper/middle portion of the long diagonal.
+    # The short EE-sphere edge owns the lower-right area near the sphere.
+    return np.linspace(0.18, 0.58, int(count), dtype=float)
 
 
 def _paper_display_edges(graph: Graph) -> List[Edge]:
@@ -265,6 +267,25 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
                     bin_id, table_id, "support", "dst-holds",
                     attributes={"support_role": "supporter"},
                 ))
+        # The paper figure explains the two schedule pairs. EE-bin and spatial
+        # relations to the structural table are valid context for the model,
+        # but their chips collide with the task relations in a narrow paper
+        # panel. Keep the exact JSON untouched and simplify only this rendered
+        # view: EE-sphere, sphere-bin, plus positive physical table supports.
+        schedule_pairs = {
+            tuple(sorted(("ee", "actor:sphere"))),
+            tuple(sorted(("actor:sphere", "actor:bin"))),
+        }
+        table_id = "actor:table-workspace"
+        edges = [
+            edge for edge in edges
+            if _unordered_pair(edge) in schedule_pairs
+            or (
+                table_id in (edge.src, edge.dst)
+                and edge.relation in _PRIMARY_PHYSICAL_RELATIONS
+                and str(edge.label) in _POSITIVE_PHYSICAL_LABELS
+            )
+        ]
     # Once a stronger physical predicate holds, positive contact is implied
     # and only repeats the same event.  Apply the same visual hierarchy to an
     # established affordance, where contact-compatibility would otherwise add

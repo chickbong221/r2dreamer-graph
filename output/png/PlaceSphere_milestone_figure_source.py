@@ -409,13 +409,17 @@ def build() -> None:
         reward_text = f"r = {rewards[step]:+.3f}"
         rounded_text_box(draw, (x + 12, image_top + 12), reward_text, (20, 27, 34, 220))
 
-    # Original paper-renderer graphs, cropped to fill each panel without white
-    # head/foot bands.  The graph renderer itself owns edge-label placement.
+    # Preserve every node label. Any aspect-ratio padding uses the graph's own
+    # peach background, so there are no white head/foot bands and no crop.
     graph_top, graph_h = 486, 390
     for index, step in enumerate(MILESTONES):
         x = content_x0 + index * (col_w + GAP)
         with Image.open(GRAPH_DIR / f"graph_{step:04d}.png") as source:
-            graph = fit_cover(source.convert("RGBA"), (col_w, graph_h))
+            graph = fit_contain(
+                source.convert("RGBA"),
+                (col_w, graph_h),
+                background=(253, 240, 233, 255),
+            )
         canvas.alpha_composite(graph, (x, graph_top))
         draw.rectangle((x, graph_top, x + col_w, graph_top + graph_h), outline=GRID, width=2)
 

@@ -142,8 +142,37 @@ class GraphDisplayFactsTest(unittest.TestCase):
             3,
         )
 
-        np.testing.assert_allclose(fractions, [0.28, 0.50, 0.72])
+        np.testing.assert_allclose(fractions, [0.18, 0.38, 0.58])
         self.assertTrue(np.all((fractions > 0.0) & (fractions < 1.0)))
+
+    def test_place_sphere_paper_view_keeps_only_schedule_and_support_pairs(self):
+        graph = Graph(
+            frame=94,
+            env_id="PlaceSphere-v1",
+            camera="base",
+            nodes=[
+                Node("ee", "ee", "ee"),
+                Node("actor:bin", "object", "bin"),
+                Node("actor:sphere", "object", "sphere"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+            ],
+            edges=[
+                Edge("ee", "actor:bin", "planar-distance", "medium"),
+                Edge("ee", "actor:sphere", "planar-distance", "very-near"),
+                Edge("actor:bin", "actor:sphere", "planar-distance", "near"),
+                Edge("ee", "actor:table-workspace", "height-offset", "above"),
+                Edge("actor:sphere", "actor:table-workspace", "support", "dst-holds"),
+            ],
+        )
+
+        shown = _paper_display_edges(graph)
+        facts = {(edge.src, edge.dst, edge.relation) for edge in shown}
+
+        self.assertNotIn(("ee", "actor:bin", "planar-distance"), facts)
+        self.assertNotIn(("ee", "actor:table-workspace", "height-offset"), facts)
+        self.assertIn(("ee", "actor:sphere", "planar-distance"), facts)
+        self.assertIn(("actor:bin", "actor:sphere", "planar-distance"), facts)
+        self.assertIn(("actor:sphere", "actor:table-workspace", "support"), facts)
 
     def test_paper_graph_is_cropped_and_has_no_title_strip(self):
         from PIL import Image
