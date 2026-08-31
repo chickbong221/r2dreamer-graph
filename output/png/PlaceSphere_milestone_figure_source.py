@@ -43,15 +43,49 @@ WHITE = (255, 255, 255, 255)
 
 
 def font(size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
-    if bold and italic:
-        path = r"C:\Windows\Fonts\arialbi.ttf"
-    elif bold:
-        path = r"C:\Windows\Fonts\arialbd.ttf"
-    elif italic:
-        path = r"C:\Windows\Fonts\ariali.ttf"
-    else:
-        path = r"C:\Windows\Fonts\arial.ttf"
-    return ImageFont.truetype(path, size)
+    """Load a paper-safe sans face on Windows or Linux."""
+    windows = {
+        (False, False): Path(r"C:\Windows\Fonts\arial.ttf"),
+        (True, False): Path(r"C:\Windows\Fonts\arialbd.ttf"),
+        (False, True): Path(r"C:\Windows\Fonts\ariali.ttf"),
+        (True, True): Path(r"C:\Windows\Fonts\arialbi.ttf"),
+    }
+    path = windows[(bold, italic)]
+    if path.is_file():
+        return ImageFont.truetype(str(path), size)
+
+    # Matplotlib ships/resolves DejaVu Sans in the Linux environment used to
+    # render the scene graphs, so use the same family for the composite.
+    try:
+        from matplotlib import font_manager
+
+        properties = font_manager.FontProperties(
+            family="DejaVu Sans",
+            weight="bold" if bold else "normal",
+            style="italic" if italic else "normal",
+        )
+        resolved = font_manager.findfont(properties, fallback_to_default=True)
+        if resolved and Path(resolved).is_file():
+            return ImageFont.truetype(resolved, size)
+    except Exception:  # pragma: no cover - last-resort environments
+        pass
+
+    # Common distro paths cover Debian/Ubuntu without requiring matplotlib's
+    # font resolver.
+    linux_name = (
+        "DejaVuSans-BoldOblique.ttf" if bold and italic
+        else "DejaVuSans-Bold.ttf" if bold
+        else "DejaVuSans-Oblique.ttf" if italic
+        else "DejaVuSans.ttf"
+    )
+    linux_path = Path("/usr/share/fonts/truetype/dejavu") / linux_name
+    if linux_path.is_file():
+        return ImageFont.truetype(str(linux_path), size)
+
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 9.2
+        return ImageFont.load_default()
 
 
 F_SECTION = font(23, bold=True)

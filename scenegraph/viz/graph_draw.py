@@ -217,26 +217,23 @@ def _unordered_pair(edge: Edge) -> Tuple[str, str]:
     return tuple(sorted((edge.src, edge.dst)))
 
 
-def _paper_fixed_push_direction(
-    graph: Graph,
-    pair: Tuple[str, str],
-    mid: np.ndarray,
-    normal: np.ndarray,
+def _paper_edge_fractions(
+    graph: Graph, pair: Tuple[str, str], count: int,
 ) -> Optional[np.ndarray]:
-    """Keep PlaceSphere's dense sphere-bin labels beside their own edge.
+    """Fixed on-edge chip positions for PlaceSphere's sphere-bin pair.
 
-    In the contact/support frames this pair carries spatial, physical, and
-    affordance chips.  Letting the first collision choose either normal can
-    push the whole stack inward across the ee-bin edge, making it look attached
-    to the wrong relation.  Pin this one pair to the outward side of the
-    triangle; every other graph retains the general collision rule.
+    This pair can carry physical, spatial, and affordance chips at once. A
+    vertical stack followed by collision nudging makes the boxes drift away
+    from the diagonal and appear to describe a different edge. Spread these
+    families *along* the bin-sphere line instead: physical nearest the bin,
+    affordance nearest the sphere, and spatial between them.
     """
     sphere_bin = tuple(sorted(("actor:sphere", "actor:bin")))
     if graph.env_id != "PlaceSphere-v1" or tuple(sorted(pair)) != sphere_bin:
         return None
-    projection = float(np.dot(mid, normal))
-    sign = 1.0 if projection >= 0.0 else -1.0
-    return normal * sign
+    if count <= 1:
+        return np.asarray([0.5], dtype=float)
+    return np.linspace(0.28, 0.72, int(count), dtype=float)
 
 
 def _paper_display_edges(graph: Graph) -> List[Edge]:
@@ -550,44 +547,54 @@ def render_graph(
                 y_offsets.append(cursor - height * 0.5)
                 cursor -= height
 
-            anchors = [
-                np.array([float(mid[0]), float(mid[1] + offset)])
-                for offset in y_offsets
-            ]
-            # Move collisions across this edge, not vertically down the page.
-            # That keeps a wide diagonal-edge label beside its own edge and
-            # prevents repeated collisions from pushing it below the graph.
-            normal = np.array([-u[1], u[0]], dtype=float)
-            push_direction = _paper_fixed_push_direction(
-                graph, pair, mid, normal,
-            )
-            nudge = max(0.35, chip["nudge_step"] * 0.5)
-            for _ in range(int(chip["max_iters"])):
-                hit = next((
-                    (anchor, width, height, box)
-                    for anchor, width, height in zip(
-                        anchors, widths, heights
-                    )
-                    for box in placed_chip_boxes
-                    if abs(anchor[0] - box[0])
-                    < width * 0.5 + box[2]
-                    and abs(anchor[1] - box[1])
-                    < height * 0.5 + box[3]
-                ), None)
-                if hit is None:
-                    break
-                anchor, _width, _height, box = hit
-                if push_direction is None:
-                    away = anchor - np.asarray(box[:2], dtype=float)
-                    projection = float(np.dot(away, normal))
-                    if abs(projection) < 1e-6:
-                        # Symmetric collision: prefer the side of the edge
-                        # already facing away from the graph centre.
-                        projection = float(np.dot(mid, normal))
-                    sign = 1.0 if projection >= 0.0 else -1.0
-                    push_direction = normal * sign
-                shift = push_direction * nudge
-                anchors = [anchor + shift for anchor in anchors]
+            edge_fractions = _paper_edge_fractions(graph, pair, n)
+            if edge_fractions is not None:
+                # Each family stays centred on the diagonal itself.  Do not
+                # feed these anchors into the global collision nudge: moving
+                # them sideways is precisely what made the pair ambiguous.
+                anchors = [
+                    a0 + (a1 - a0) * float(fraction)
+                    for fraction in edge_fractions
+                ]
+                y_offsets = [float(anchor[1] - mid[1]) for anchor in anchors]
+            else:
+                anchors = [
+                    np.array([float(mid[0]), float(mid[1] + offset)])
+                    for offset in y_offsets
+                ]
+                # Move collisions across this edge, not vertically down the
+                # page. This keeps a wide diagonal-edge label beside its own
+                # edge and prevents repeated collisions from pushing it below
+                # the graph.
+                normal = np.array([-u[1], u[0]], dtype=float)
+                push_direction = None
+                nudge = max(0.35, chip["nudge_step"] * 0.5)
+                for _ in range(int(chip["max_iters"])):
+                    hit = next((
+                        (anchor, width, height, box)
+                        for anchor, width, height in zip(
+                            anchors, widths, heights
+                        )
+                        for box in placed_chip_boxes
+                        if abs(anchor[0] - box[0])
+                        < width * 0.5 + box[2]
+                        and abs(anchor[1] - box[1])
+                        < height * 0.5 + box[3]
+                    ), None)
+                    if hit is None:
+                        break
+                    anchor, _width, _height, box = hit
+                    if push_direction is None:
+                        away = anchor - np.asarray(box[:2], dtype=float)
+                        projection = float(np.dot(away, normal))
+                        if abs(projection) < 1e-6:
+                            # Symmetric collision: prefer the side of the edge
+                            # already facing away from the graph centre.
+                            projection = float(np.dot(mid, normal))
+                        sign = 1.0 if projection >= 0.0 else -1.0
+                        push_direction = normal * sign
+                    shift = push_direction * nudge
+                    anchors = [anchor + shift for anchor in anchors]
             placed_chip_boxes.extend(
                 (float(anchor[0]), float(anchor[1]),
                  float(width * 0.5), float(height * 0.5))
