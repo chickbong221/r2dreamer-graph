@@ -296,6 +296,19 @@ def _crop_paper_graph(path: str, background: str, pad: int = 8) -> None:
         cropped.save(path, format="PNG", optimize=True, dpi=(200, 200))
 
 
+def _node_label_layout(
+    graph: Graph, node_id: str, y: float, node_r: float, paper_style: bool,
+) -> Tuple[float, str]:
+    """Return the node label anchor and vertical alignment."""
+    if (
+        paper_style
+        and graph.env_id == "PlaceSphere-v1"
+        and node_id == "actor:bin"
+    ):
+        return y + node_r + 0.18, "bottom"
+    return y - node_r - 0.18, "top"
+
+
 def render_graph(
     graph: Graph,
     out_path: Optional[str],
@@ -369,6 +382,41 @@ def render_graph(
     # for a later edge can nudge itself away from earlier chips.
     placed_chip_centers: List[Tuple[float, float]] = []
     placed_chip_boxes: List[Tuple[float, float, float, float]] = []
+    if paper_style:
+        # Relation boxes must never cover a vertex or its name.  Use the same
+        # font metrics and anchors as the node pass below, so collision layout
+        # protects what will actually be drawn rather than a coarse fixed halo.
+        renderer = fig.canvas.get_renderer()
+        node_font = FontProperties(size=12.5, weight="bold")
+        data_per_x_px = (2.0 * view_half) / max(float(ax.bbox.width), 1.0)
+        data_per_y_px = (2.0 * view_half) / max(float(ax.bbox.height), 1.0)
+        node_label_height = 12.5 * fig.dpi / 72.0 * data_per_y_px
+        for node in graph.nodes:
+            nid = node.node_id
+            if nid not in pos:
+                continue
+            x, y = pos[nid]
+            # A small halo keeps rounded chip borders off the circle outline.
+            placed_chip_boxes.append((
+                float(x), float(y), node_r + 0.08, node_r + 0.08,
+            ))
+            label = "ee" if node.node_type == "ee" else display_name(node.name)
+            label_width_px = renderer.get_text_width_height_descent(
+                label, node_font, ismath=False,
+            )[0]
+            label_y, label_va = _node_label_layout(
+                graph, nid, float(y), node_r, paper_style,
+            )
+            label_center_y = (
+                label_y + node_label_height * 0.5
+                if label_va == "bottom"
+                else label_y - node_label_height * 0.5
+            )
+            placed_chip_boxes.append((
+                float(x), float(label_center_y),
+                label_width_px * data_per_x_px * 0.5 + 0.06,
+                node_label_height * 0.5 + 0.04,
+            ))
 
     for pair, elist in by_pair.items():
         if paper_style:
@@ -473,7 +521,12 @@ def render_graph(
                 np.array([float(mid[0]), float(mid[1] + offset)])
                 for offset in y_offsets
             ]
-            push_sign = 0.0
+            # Move collisions across this edge, not vertically down the page.
+            # That keeps a wide diagonal-edge label beside its own edge and
+            # prevents repeated collisions from pushing it below the graph.
+            normal = np.array([-u[1], u[0]], dtype=float)
+            push_direction = None
+            nudge = max(0.35, chip["nudge_step"] * 0.5)
             for _ in range(int(chip["max_iters"])):
                 hit = next((
                     (anchor, width, height, box)
@@ -489,9 +542,16 @@ def render_graph(
                 if hit is None:
                     break
                 anchor, _width, _height, box = hit
-                if push_sign == 0.0:
-                    push_sign = 1.0 if anchor[1] >= box[1] else -1.0
-                shift = np.array([0.0, chip["nudge_step"] * push_sign])
+                if push_direction is None:
+                    away = anchor - np.asarray(box[:2], dtype=float)
+                    projection = float(np.dot(away, normal))
+                    if abs(projection) < 1e-6:
+                        # Symmetric collision: prefer the side of the edge
+                        # already facing away from the graph centre.
+                        projection = float(np.dot(mid, normal))
+                    sign = 1.0 if projection >= 0.0 else -1.0
+                    push_direction = normal * sign
+                shift = push_direction * nudge
                 anchors = [anchor + shift for anchor in anchors]
             placed_chip_boxes.extend(
                 (float(anchor[0]), float(anchor[1]),
@@ -581,15 +641,9 @@ def render_graph(
 
         label = "ee" if node.node_type == "ee" else display_name(node.name)
         label_color = tuple(0.45 * np.asarray(face))
-        label_y = y - node_r - 0.18
-        label_va = "top"
-        if (
-            paper_style
-            and graph.env_id == "PlaceSphere-v1"
-            and nid == "actor:bin"
-        ):
-            label_y = y + node_r + 0.18
-            label_va = "bottom"
+        label_y, label_va = _node_label_layout(
+            graph, nid, float(y), node_r, paper_style,
+        )
         ax.text(
             x, label_y, label,
             fontsize=12.5, fontweight="bold",
