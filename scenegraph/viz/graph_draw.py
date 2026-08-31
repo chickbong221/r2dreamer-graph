@@ -221,8 +221,7 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
 
     # The bin and table are both kinematic in PlaceSphere, so the runtime graph
     # intentionally omits their unchanging scene-layout pair.  It is useful in
-    # the explanatory paper diagram, however: the table supports the bin and
-    # their corresponding support affordance is already satisfied.
+    # the explanatory paper diagram, however: the table supports the bin.
     if graph.env_id == "PlaceSphere-v1":
         node_ids = set(graph.node_ids())
         bin_id = "actor:bin"
@@ -240,12 +239,6 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
                     bin_id, table_id, "support", "dst-holds",
                     attributes={"support_role": "supporter"},
                 ))
-            if "support-compatibility" not in relations:
-                edges.append(Edge(
-                    table_id, bin_id, "support-compatibility", "match",
-                    attributes={"support_role": "supporter"},
-                ))
-
     # Once a stronger physical predicate holds, positive contact is implied
     # and only repeats the same event.  Apply the same visual hierarchy to an
     # established affordance, where contact-compatibility would otherwise add
@@ -556,10 +549,19 @@ def render_graph(
 
         label = "ee" if node.node_type == "ee" else display_name(node.name)
         label_color = tuple(0.45 * np.asarray(face))
+        label_y = y - node_r - 0.18
+        label_va = "top"
+        if (
+            paper_style
+            and graph.env_id == "PlaceSphere-v1"
+            and nid == "actor:bin"
+        ):
+            label_y = y + node_r + 0.18
+            label_va = "bottom"
         ax.text(
-            x, y - node_r - 0.18, label,
+            x, label_y, label,
             fontsize=12.5, fontweight="bold",
-            ha="center", va="top",
+            ha="center", va=label_va,
             color=label_color, zorder=5,
         )
 

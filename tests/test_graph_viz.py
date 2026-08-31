@@ -62,8 +62,7 @@ class GraphDisplayFactsTest(unittest.TestCase):
         self.assertEqual(graph.edges, [])
         self.assertEqual(
             {(edge.relation, edge.label) for edge in shown},
-            {("support", "dst-holds"),
-             ("support-compatibility", "match")},
+            {("support", "dst-holds")},
         )
 
     def test_hidden_facts_leave_the_reference_background_visible(self):
