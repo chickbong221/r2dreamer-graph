@@ -476,7 +476,9 @@ def parse_args(argv: Optional[Iterable[str]] = None):
     p.add_argument(
         "--list-build-configs", action="store_true",
         help="Print the build configurations each selected task plan file "
-             "offers and exit. Reads the plan files only -- no simulator.",
+             "offers and exit. Reads the task plan JSON only -- no "
+             "simulator and no rollouts, but it still needs mshab and the "
+             "ReplicaCAD assets, so it runs on the collection server.",
     )
     p.add_argument(
         "--n-success", type=int, default=30,
@@ -571,6 +573,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     if not ckpt_root.is_dir():
         print(f"ERROR: --ckpt-root not found: {ckpt_root}", file=sys.stderr)
+        if os.name == "nt" and str(args.ckpt_root).startswith("/"):
+            # Windows reads a leading slash as drive-relative, so a POSIX
+            # server path silently resolves against the current drive. The
+            # resolved path above looks nothing like what was typed, which is
+            # a confusing way to learn the command is on the wrong machine.
+            print(f"       {args.ckpt_root!r} is a POSIX path and this is "
+                  "Windows, so it resolved against the current drive. "
+                  "Collection runs on the server.", file=sys.stderr)
         return 2
 
     work = _discover_work(ckpt_root, args.subtask, args.task, args.obj)
