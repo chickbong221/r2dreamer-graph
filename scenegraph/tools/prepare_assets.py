@@ -42,6 +42,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from scenegraph.tools import collect_robot_success_states
+
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / 'scenegraph' / 'configs'
 
@@ -142,7 +144,9 @@ def main(argv=None) -> int:
     parser.add_argument('--subtask', nargs='+', default=['pick'])
     parser.add_argument('--splits', nargs='+', default=['train', 'val'])
     parser.add_argument('--obj', default='all')
-    parser.add_argument('--ckpt-root', default='mshab_checkpoints/rl')
+    parser.add_argument(
+        '--ckpt-root',
+        default=str(collect_robot_success_states.DEFAULT_CKPT_ROOT))
     parser.add_argument('--asset-dir', default=None,
                         help='data root holding robot_success_states/; '
                              'defaults to $MS_ASSET_DIR/data then ~/.maniskill/data')

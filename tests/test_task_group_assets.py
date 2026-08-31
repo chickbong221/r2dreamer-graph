@@ -35,12 +35,14 @@ from scenegraph.tools.build_subtask_whitelists import (
 )
 from scenegraph.tools.build_union_whitelist import merge
 from scenegraph.tools.collect_robot_success_states import (
+    DEFAULT_CKPT_ROOT,
     REQUIRED_ROLLOUT_SCHEMA,
     _already_done,
     _discover_work,
     _final_path,
     _is_complete,
     _staging_root,
+    suggest_ckpt_roots,
 )
 from scenegraph.tools.prepare_assets import _report
 from scenegraph.tools.prune_whitelists import prune_payload
@@ -127,6 +129,47 @@ class TestCollectorDiscovery(TempTree):
     def test_task_filter_selects_one_group(self):
         work = _discover_work(self._ckpt_tree(), "pick", ["set_table"], [])
         self.assertEqual({task for task, _, _ in work}, {"set_table"})
+
+    def test_a_root_one_level_short_finds_nothing(self):
+        """Which is indistinguishable from an empty directory without help."""
+        nested = self.tmp / "outer"
+        (nested / "rl" / "set_table" / "pick" / "024_bowl").mkdir(parents=True)
+        (nested / "rl" / "set_table" / "pick" / "024_bowl"
+         / "policy.pt").write_text("")
+        self.assertEqual(_discover_work(nested, "pick", [], []), [])
+
+    def test_it_names_the_root_that_would_have_worked(self):
+        nested = self.tmp / "outer"
+        (nested / "rl" / "set_table" / "pick" / "024_bowl").mkdir(parents=True)
+        (nested / "rl" / "set_table" / "pick" / "024_bowl"
+         / "policy.pt").write_text("")
+        self.assertEqual(suggest_ckpt_roots(nested), [str(nested / "rl")])
+
+    def test_a_correct_root_suggests_itself(self):
+        root = self._ckpt_tree()
+        self.assertEqual(suggest_ckpt_roots(root), [str(root)])
+
+    def test_an_empty_tree_suggests_nothing(self):
+        empty = self.tmp / "nothing"
+        empty.mkdir()
+        self.assertEqual(suggest_ckpt_roots(empty), [])
+
+    def test_the_default_root_is_absolute(self):
+        """Both entry points resolve it against the repo, so a relative
+        default silently means "beside the checkout". Checked as a POSIX
+        path: it names a location on the collection server, and a Windows
+        checkout would read a leading slash as drive-relative."""
+        from pathlib import PurePosixPath
+        self.assertTrue(PurePosixPath(DEFAULT_CKPT_ROOT).is_absolute())
+
+    def test_prepare_assets_shares_the_one_default(self):
+        """Two entry points, one location. A drifted default points a
+        collection at a directory that has never held checkpoints. Source
+        level: the parser is built inside main()."""
+        source = Path("scenegraph/tools/prepare_assets.py").read_text(
+            encoding="utf-8")
+        self.assertIn("collect_robot_success_states.DEFAULT_CKPT_ROOT", source)
+        self.assertNotIn("mshab_checkpoints/rl", source)
 
     def test_rollouts_land_in_per_group_files(self):
         # The two groups' bowl rollouts must not be able to name the same

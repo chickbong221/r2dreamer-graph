@@ -17,7 +17,7 @@ Usage::
 
     export MS_ASSET_DIR=/root/.maniskill
     python -m scenegraph.tools.collect_robot_success_states \\
-        --ckpt-root mshab_checkpoints/rl \\
+        --ckpt-root /root/projects/ReLDreamer/mshab_checkpoints \\
         --n-success 30 --num-envs 8
 
 Filters::
@@ -34,8 +34,14 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
+
+# Where the released MS-HAB per-object policies live on this project's server.
+# The tree below it is ``<task>/<subtask>/<target>/policy.pt``; a release that
+# nests them under an extra level wants that level named here, and discovery
+# says which one when it finds none.
+DEFAULT_CKPT_ROOT = "/root/projects/ReLDreamer/mshab_checkpoints"
 
 # What ``--skip-done`` accepts as already collected. Must track the collector
 # wrapper's ``_SCHEMA_VERSION`` and the miner's ``MIN_ROLLOUT_SCHEMA``: all
@@ -76,6 +82,25 @@ def _discover_work(
             continue
         seen.setdefault((task, subtask, obj_id), (task, obj_id, pt.parent))
     return [seen[k] for k in sorted(seen)]
+
+
+def suggest_ckpt_roots(ckpt_root: Path, scan_cap: int = 500) -> List[str]:
+    """Roots under ``ckpt_root`` where a ``policy.pt`` sits at the right depth.
+
+    Discovery wants ``<root>/<task>/<subtask>/<target>/policy.pt``, so for any
+    policy found, the root it implies is its fourth parent. A release that
+    nests everything one level deeper -- ``.../mshab_checkpoints/rl/...`` --
+    yields nothing and reports the same "no checkpoints matched" as an empty
+    directory, which is the least useful thing it could say. This turns that
+    into the root that would have worked.
+    """
+    roots: Set[Path] = set()
+    for index, policy in enumerate(ckpt_root.glob("**/policy.pt")):
+        if index >= scan_cap:
+            break
+        if len(policy.parents) >= 4:
+            roots.add(policy.parents[3])
+    return sorted(str(path) for path in roots)
 
 
 def _already_done(
@@ -433,8 +458,10 @@ def _collect_one(task: str, obj_id: str, ckpt_dir: Path, args) -> Tuple[int, Pat
 def parse_args(argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
-        "--ckpt-root", default="mshab_checkpoints/rl",
-        help="Root containing <task>/<subtask>/<target>/policy.pt subtrees.",
+        "--ckpt-root", default=DEFAULT_CKPT_ROOT,
+        help="Root containing <task>/<subtask>/<target>/policy.pt subtrees. "
+             "If a release nests them under an extra level, name that level "
+             "-- discovery reports the roots it found on failure.",
     )
     p.add_argument(
         "--subtask", default="pick", choices=["pick", "open", "close"],
@@ -550,6 +577,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not work:
         print("ERROR: no per-object checkpoints matched the filters under "
               f"{ckpt_root}", file=sys.stderr)
+        print(f"       expected {ckpt_root}/<task>/{args.subtask}"
+              "/<target>/policy.pt", file=sys.stderr)
+        candidates = [c for c in suggest_ckpt_roots(ckpt_root)
+                      if c != str(ckpt_root)]
+        if candidates:
+            print("       policies do exist, one level in. Try --ckpt-root "
+                  + " or ".join(candidates), file=sys.stderr)
+        elif not any(ckpt_root.glob("**/policy.pt")):
+            print(f"       no policy.pt anywhere under {ckpt_root}",
+                  file=sys.stderr)
         return 2
 
     if args.list_build_configs:

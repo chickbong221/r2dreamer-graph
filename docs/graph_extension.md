@@ -510,7 +510,7 @@ A union asset that fails to calibrate an absolute relation raises at bind time.
 
 Only `pick`, `open` and `close` have collectors. `place` has none, so these are
 assets for the pick training environment, not complete long-horizon task-group
-assets -- inventory `mshab_checkpoints/rl/<group>/` before assuming otherwise.
+assets -- inventory `<ckpt-root>/<group>/` before assuming otherwise.
 
 ## MS-HAB runtime smoke
 
