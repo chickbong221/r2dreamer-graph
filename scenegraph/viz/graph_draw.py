@@ -157,7 +157,9 @@ def _family_of(relation: str) -> Optional[str]:
     return _RELATION_FAMILY.get(relation)
 
 
-def _display_text(edge: Edge) -> Optional[str]:
+def _display_text(
+    edge: Edge, *, name_affordance: bool = False,
+) -> Optional[str]:
     """Return the human-facing fact text, or ``None`` when it is noise.
 
     This only changes diagnostics.  The packed graph and its supervision keep
@@ -174,10 +176,15 @@ def _display_text(edge: Edge) -> Optional[str]:
         text = label
     if edge.temp_label and str(edge.temp_label) not in _HIDDEN_LABELS:
         text = f"{text} / {edge.temp_label}"
+    if name_affordance and family == _FAMILY_AFFORDANCE:
+        relation_type = edge.relation.removesuffix("-compatibility")
+        text = f"{relation_type} {text}"
     return text
 
 
-def _group_by_family(elist: List[Edge]) -> Dict[str, List[str]]:
+def _group_by_family(
+    elist: List[Edge], *, name_affordance: bool = False,
+) -> Dict[str, List[str]]:
     """Bucket facts by family in ``_INTRA_FAMILY_ORDER``, one chip line each.
     Negative and unobserved facts are omitted.  A positive physical predicate
     renders as its relation name (``contact``, ``support``, ...) rather than
@@ -187,7 +194,7 @@ def _group_by_family(elist: List[Edge]) -> Dict[str, List[str]]:
         family = _family_of(e.relation)
         if family is None:
             continue
-        text = _display_text(e)
+        text = _display_text(e, name_affordance=name_affordance)
         if text is None:
             continue
         order = _INTRA_FAMILY_ORDER.get(family, ())
@@ -264,6 +271,29 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
             and _unordered_pair(edge) in established_affordance
         )
     ]
+
+
+def _crop_paper_graph(path: str, background: str, pad: int = 8) -> None:
+    """Crop a saved paper diagram to its visible graph content."""
+    from PIL import Image
+
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+        pixels = np.asarray(image)
+        bg = np.asarray(tuple(bytes.fromhex(background.lstrip("#"))), dtype=int)
+        foreground = np.any(
+            np.abs(pixels.astype(int) - bg[None, None, :]) > 2,
+            axis=2,
+        )
+        ys, xs = np.nonzero(foreground)
+        if not len(xs):
+            return
+        left = max(0, int(xs.min()) - pad)
+        top = max(0, int(ys.min()) - pad)
+        right = min(image.width, int(xs.max()) + pad + 1)
+        bottom = min(image.height, int(ys.max()) + pad + 1)
+        cropped = image.crop((left, top, right, bottom))
+        cropped.save(path, format="PNG", optimize=True, dpi=(200, 200))
 
 
 def render_graph(
@@ -384,7 +414,9 @@ def render_graph(
             zorder=2,
         )
 
-        grouped = _group_by_family(elist)
+        grouped = _group_by_family(
+            elist, name_affordance=paper_style,
+        )
         if not grouped:
             continue
 
@@ -566,11 +598,12 @@ def render_graph(
         )
 
     # ----------------------------------------------------------------- frame
-    sub = graph.meta.get("active_subtask")
-    title = f"frame {graph.frame}  |  {graph.env_id}"
-    if sub:
-        title += f"  |  subtask={sub}"
-    ax.set_title(title, fontsize=14)
+    if not paper_style:
+        sub = graph.meta.get("active_subtask")
+        title = f"frame {graph.frame}  |  {graph.env_id}"
+        if sub:
+            title += f"  |  subtask={sub}"
+        ax.set_title(title, fontsize=14)
 
     ax.set_xlim(-view_half, view_half)
     ax.set_ylim(-view_half, view_half)
@@ -584,6 +617,8 @@ def render_graph(
         return rgba[..., :3].copy()
     fig.savefig(out_path, facecolor=fig.get_facecolor())
     plt.close(fig)
+    if paper_style:
+        _crop_paper_graph(out_path, bg)
     return out_path
 
 

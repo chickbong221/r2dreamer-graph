@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -7,6 +9,7 @@ from scenegraph.viz.graph_draw import (
     _group_by_family,
     _paper_display_edges,
     _radial_layout,
+    render_graph,
     render_graph_array,
 )
 
@@ -26,6 +29,17 @@ class GraphDisplayFactsTest(unittest.TestCase):
         rendered = " ".join(text for lines in grouped.values() for text in lines)
         self.assertNotIn("holds", rendered)
         self.assertNotIn("unobserved", rendered)
+
+    def test_paper_affordances_include_the_relation_type(self):
+        grouped = _group_by_family([
+            Edge("ee", "cube", "grasp-compatibility", "match"),
+            Edge("cube", "table", "support-compatibility", "partial-match"),
+        ], name_affordance=True)
+
+        self.assertEqual(
+            grouped["affordance"],
+            ["grasp match", "support partial-match"],
+        )
 
     def test_paper_view_hides_contact_after_stronger_relation_holds(self):
         graph = Graph(
@@ -105,6 +119,34 @@ class GraphDisplayFactsTest(unittest.TestCase):
         ee_offset = pos["ee"] - pos["cube"]
         cross = object_edge[0] * ee_offset[1] - object_edge[1] * ee_offset[0]
         self.assertGreater(abs(float(cross)), 1.0)
+
+    def test_paper_graph_is_cropped_and_has_no_title_strip(self):
+        from PIL import Image
+
+        graph = Graph(
+            frame=80,
+            env_id="PlaceSphere-v1",
+            camera="base",
+            nodes=[
+                Node("ee", "ee", "ee"),
+                Node("actor:bin", "object", "bin"),
+                Node("actor:sphere", "object", "sphere"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+            ],
+            edges=[
+                Edge("ee", "actor:sphere", "grasp", "holds"),
+                Edge("ee", "actor:sphere", "grasp-compatibility", "match"),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "paper.png"
+            render_graph(graph, str(path), paper_style=True)
+            with Image.open(path) as image:
+                width, height = image.size
+
+        self.assertLess(height, 1000)
+        self.assertLess(width, 1200)
+        self.assertGreater(width, height)
 
 
 if __name__ == "__main__":
