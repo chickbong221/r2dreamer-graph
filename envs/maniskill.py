@@ -152,6 +152,17 @@ def is_mshab_task(task_id: str) -> bool:
     return "SubtaskTrain" in str(task_id)
 
 
+def mshab_subtask(task_id: str) -> str:
+    """``PickSubtaskTrain-v0`` -> ``pick``; empty for ordinary ManiSkill.
+
+    MS-HAB mines its assets per subtask inside a task group, so this is half
+    of the pair that names them. Ordinary tasks have no subtask -- their gym
+    id already is the whole task.
+    """
+    text = str(task_id)
+    return text.split("SubtaskTrain", 1)[0].lower() if is_mshab_task(text) else ""
+
+
 def graph_observation_config(graph_config, camera_names,
                              task_group: str = "") -> dict:
     """Flatten the env's graph config into the dict ``build_graph_obs`` reads.
@@ -242,6 +253,12 @@ class ManiSkillVecEnv:
         task = str(config.task).split("_", 1)[1]
         self._task_id = task
         self._is_mshab = is_mshab_task(task)
+        # What names this run's mined assets. For MS-HAB that is the group and
+        # the subtask, not the gym id -- ``PickSubtaskTrain-v0`` appears in no
+        # asset path. Both stay empty for ordinary ManiSkill.
+        self._mshab_subtask = mshab_subtask(task)
+        self._mshab_task_group = (
+            str(config.mshab_task) if self._is_mshab else "")
         size = tuple(map(int, config.size))
         make_kwargs = dict(
             id=task,
@@ -281,7 +298,7 @@ class ManiSkillVecEnv:
             from mani_skill import ASSET_DIR
             from mshab.envs.planner import plan_data_from_file
 
-            subtask = task.split("SubtaskTrain", 1)[0].lower()
+            subtask = self._mshab_subtask
             # An empty eval_split evaluates on the training scenes, which
             # measures fit rather than generalisation. Left possible on
             # purpose, but it is not the default.
@@ -628,20 +645,43 @@ class ManiSkillVecEnv:
         self._env.close()
 
 
-def task_schedule_source(envs):
-    """``(env_id, whitelist_dir)`` for compiling a task schedule, or None.
+def task_schedule_source(envs, schedule_dir: str = ""):
+    """The :class:`ScheduleSource` this env compiles against, or None.
 
-    The env id is the gym id (``PickCube-v1``), never the config's
-    ``maniskill_`` form, and the whitelist directory is the one the graph
-    adapter actually resolved -- a schedule compiled against a different
-    entity vocabulary than the graph packs would resolve roles to wrong rows.
+    Two naming schemes, kept apart. An ordinary ManiSkill task is named once
+    by its gym id (``PickCube-v1``), which is also its schedule, its
+    affordance file and its whitelist directory. An MS-HAB run is named by the
+    task group and the subtask (``set_table``, ``pick``); its gym id
+    (``PickSubtaskTrain-v0``) appears in no asset path at all, and asking for
+    it by that id found nothing.
+
+    The whitelist directory is always the one the graph adapter itself
+    resolved. A schedule compiled against any other would resolve roles
+    against a different entity vocabulary than the packer writes rows with,
+    and the mismatch would show up as phases that silently never score.
     """
+    from scenegraph.core.schedule import (
+        maniskill_schedule_source,
+        mshab_schedule_source,
+    )
+
     task_id = getattr(envs, "_task_id", None)
     graph = getattr(envs, "_graph", None)
-    if task_id and graph is not None and getattr(graph, "whitelist_dir", ""):
-        return str(task_id), str(graph.whitelist_dir)
+    whitelist_dir = str(getattr(graph, "whitelist_dir", "") or "")
+    if task_id and whitelist_dir:
+        # <configs>/subtask_whitelists/<asset tree> -> <configs>
+        configs = str(Path(whitelist_dir).parent.parent)
+        if getattr(envs, "_is_mshab", False):
+            return mshab_schedule_source(
+                str(getattr(envs, "_mshab_task_group", "") or ""),
+                str(getattr(envs, "_mshab_subtask", "") or ""),
+                configs, schedule_dir, whitelist_dir,
+            )
+        return maniskill_schedule_source(
+            str(task_id), configs, schedule_dir, whitelist_dir)
     inner = getattr(envs, "env", None) or getattr(envs, "_env", None)
-    return task_schedule_source(inner) if inner is not None else None
+    return (task_schedule_source(inner, schedule_dir)
+            if inner is not None else None)
 
 
 def graph_panel_source(envs):

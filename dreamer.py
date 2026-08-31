@@ -595,29 +595,26 @@ class Dreamer(nn.Module):
         # nothing that would read the result anyway.
         if not self.progress_enabled or self.progress_mode != "task_schedule":
             return
-        import os
-
         from envs.maniskill import _repo_path, task_schedule_source
         from scenegraph.adapters.graph_vocab import build_entity_vocab
-        from scenegraph.core.schedule import compile_from_files
+        from scenegraph.core.schedule import compile_from_source
 
-        source = task_schedule_source(envs)
+        source = task_schedule_source(
+            envs, str(_repo_path(self.progress_schedule_dir)))
         if source is None:
             raise RuntimeError(
                 "progress.mode=task_schedule needs a graph-enabled ManiSkill "
-                "env to read the task id and the whitelist directory from"
+                "env to read the task identity and the whitelist directory "
+                "from"
             )
-        env_id, whitelist_dir = source
-        # <configs>/subtask_whitelists/<env_id> -> <configs>
-        configs = os.path.dirname(os.path.dirname(whitelist_dir))
-        schedule = compile_from_files(
-            env_id, str(_repo_path(self.progress_schedule_dir)), configs,
-            build_entity_vocab(whitelist_dir),
-        )
+        # The vocabulary comes from the same directory the source resolved, so
+        # the compiled roles index the rows the packer actually writes.
+        schedule = compile_from_source(
+            source, build_entity_vocab(source.whitelist_dir))
         self.progress_schedule = TaskScheduleReplayPotential(
             schedule, self._schedule_n_abs)
         print(
-            f"[progress] {env_id}: {len(schedule.phases)} phases, "
+            f"[progress] {source.label}: {len(schedule.phases)} phases, "
             f"{sum(len(p.clauses) for p in schedule.phases)} clauses, "
             f"{len(schedule.slots)} distinct facts",
             flush=True,

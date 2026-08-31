@@ -55,7 +55,8 @@ def _load(*names):
     return SimpleNamespace(**out)
 
 
-mod = _load("is_mshab_task", "task_schedule_source", "graph_observation_config",
+mod = _load("is_mshab_task", "mshab_subtask", "task_schedule_source",
+            "graph_observation_config",
             "_repo_path", "_GRAPH_CONFIG_KEYS", "_GRAPH_CONFIG_CASTS",
             "rendered_cameras", "_camera_keys", "camera_obs_key")
 
@@ -736,15 +737,29 @@ class ScheduleSourceTest(unittest.TestCase):
         envs = SimpleNamespace(
             _task_id="PickCube-v1",
             _graph=SimpleNamespace(whitelist_dir="/a/subtask_whitelists/PickCube-v1"))
-        self.assertEqual(mod.task_schedule_source(envs),
-                         ("PickCube-v1", "/a/subtask_whitelists/PickCube-v1"))
+        source = mod.task_schedule_source(envs)
+        self.assertEqual(source.label, "PickCube-v1")
+        self.assertEqual(source.whitelist_dir,
+                         "/a/subtask_whitelists/PickCube-v1")
 
     def test_it_unwraps_nested_envs(self):
         inner = SimpleNamespace(
             _task_id="StackCube-v1",
             _graph=SimpleNamespace(whitelist_dir="/a/b/StackCube-v1"))
-        self.assertEqual(mod.task_schedule_source(SimpleNamespace(env=inner))[0],
-                         "StackCube-v1")
+        self.assertEqual(
+            mod.task_schedule_source(SimpleNamespace(env=inner)).label,
+            "StackCube-v1")
+
+    def test_an_env_with_no_mshab_marks_takes_the_ordinary_arm(self):
+        """The attributes are read with getattr defaults, so an env stack that
+        predates them -- or any wrapper -- still resolves by gym id."""
+        envs = SimpleNamespace(
+            _task_id="PickCube-v1",
+            _graph=SimpleNamespace(whitelist_dir="/a/subtask_whitelists/PickCube-v1"))
+        self.assertFalse(hasattr(envs, "_is_mshab"))
+        self.assertTrue(
+            mod.task_schedule_source(envs).union_whitelist_path.endswith(
+                "task_all.json"))
 
     def test_a_graphless_env_reports_nothing(self):
         envs = SimpleNamespace(_task_id="PickCube-v1", _graph=None)
@@ -754,6 +769,91 @@ class ScheduleSourceTest(unittest.TestCase):
 def _default(key):
     cast = mod._GRAPH_CONFIG_CASTS.get(key, str)
     return {bool: False, int: 0, float: 0.0}.get(cast, "")
+
+
+class ScheduleSourceLayoutTest(unittest.TestCase):
+    """Which asset identity each arm hands the compiler.
+
+    An ordinary task is named once by its gym id. MS-HAB is named by a task
+    group and a subtask, and its gym id names no asset at all -- asking for
+    ``PickSubtaskTrain-v0`` found no schedule, no affordance file and no
+    whitelist, which is why the whole task_schedule path was unreachable for
+    it.
+    """
+
+    CONFIGS = str(Path("scenegraph") / "configs")
+    SCHEDULES = str(Path("scenegraph") / "configs" / "schedules")
+
+    def _maniskill(self, whitelist_dir=None):
+        directory = whitelist_dir or str(
+            Path(self.CONFIGS) / "subtask_whitelists" / "PickCube-v1")
+        return SimpleNamespace(
+            _task_id="PickCube-v1", _is_mshab=False,
+            _mshab_task_group="", _mshab_subtask="",
+            _graph=SimpleNamespace(whitelist_dir=directory))
+
+    def _mshab(self, whitelist_dir=None):
+        directory = whitelist_dir or str(
+            Path(self.CONFIGS) / "subtask_whitelists" / "set_table")
+        return SimpleNamespace(
+            _task_id="PickSubtaskTrain-v0", _is_mshab=True,
+            _mshab_task_group="set_table", _mshab_subtask="pick",
+            _graph=SimpleNamespace(whitelist_dir=directory))
+
+    def test_the_subtask_comes_off_the_gym_id(self):
+        self.assertEqual(mod.mshab_subtask("PickSubtaskTrain-v0"), "pick")
+        self.assertEqual(mod.mshab_subtask("PlaceSubtaskTrain-v0"), "place")
+
+    def test_an_ordinary_task_has_no_subtask(self):
+        for task in ("PickCube-v1", "PegInsertionSide-v1", "PullCubeTool-v1"):
+            with self.subTest(task=task):
+                self.assertEqual(mod.mshab_subtask(task), "")
+
+    def test_the_ordinary_arm_resolves_by_gym_id(self):
+        source = mod.task_schedule_source(self._maniskill(), self.SCHEDULES)
+        self.assertEqual(source.label, "PickCube-v1")
+        self.assertTrue(source.schedule_path.endswith("PickCube-v1.json"))
+        self.assertTrue(source.affordance_path.endswith("PickCube-v1.json"))
+        self.assertTrue(source.union_whitelist_path.endswith("task_all.json"))
+
+    def test_the_mshab_arm_resolves_by_group_and_subtask(self):
+        source = mod.task_schedule_source(self._mshab(), self.SCHEDULES)
+        self.assertEqual(source.label, "set_table/pick")
+        self.assertTrue(source.affordance_path.endswith("set_table.json"))
+        self.assertTrue(source.union_whitelist_path.endswith("pick_all.json"))
+        self.assertTrue(source.schedule_path.endswith(
+            str(Path("set_table") / "pick.json")))
+
+    def test_the_mshab_gym_id_reaches_no_path(self):
+        source = mod.task_schedule_source(self._mshab(), self.SCHEDULES)
+        for path in (source.schedule_path, source.affordance_path,
+                     source.union_whitelist_path, source.whitelist_dir):
+            self.assertNotIn("SubtaskTrain", path)
+
+    def test_both_arms_carry_the_graph_adapter_directory_verbatim(self):
+        """The compiler and the packer have to read one vocabulary."""
+        directory = str(Path("custom") / "root" / "grp")
+        for build in (self._maniskill, self._mshab):
+            with self.subTest(arm=build.__name__):
+                source = mod.task_schedule_source(
+                    build(directory), self.SCHEDULES)
+                self.assertEqual(source.whitelist_dir, directory)
+
+    def test_the_configs_root_is_derived_from_that_directory(self):
+        """Two levels up from <configs>/subtask_whitelists/<tree>, so the
+        affordance file is looked for beside the whitelists the run bound."""
+        directory = str(Path("custom") / "subtask_whitelists" / "set_table")
+        source = mod.task_schedule_source(self._mshab(directory),
+                                          self.SCHEDULES)
+        self.assertEqual(source.affordance_path,
+                         str(Path("custom") / "affordances" / "set_table.json"))
+
+    def test_the_lookup_still_unwraps_nested_envs(self):
+        for attr in ("env", "_env"):
+            with self.subTest(attr=attr):
+                outer = SimpleNamespace(**{attr: self._mshab()})
+                source = mod.task_schedule_source(outer, self.SCHEDULES)
+                self.assertEqual(source.label, "set_table/pick")
 
 
 if __name__ == "__main__":

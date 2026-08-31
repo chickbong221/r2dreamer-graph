@@ -27,13 +27,18 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..adapters.graph_vocab import build_absolute_vocab, build_relation_vocab
-from .relation_rules import SPATIAL_RELATIONS
+from .relation_rules import EE_KEY, SPATIAL_RELATIONS
 from .sites import (
     SITE_PREFIX,
     SITE_REGION,
     SiteDeclaration,
     goal_pairs,
     parse_site_declarations,
+)
+from .whitelist import (
+    TASK_LEVEL_SUBTASK,
+    TASK_LEVEL_TARGET,
+    whitelist_path,
 )
 from .spatial_metrics import (
     EE_OBJECT_SCOPE,
@@ -46,8 +51,9 @@ from .spatial_metrics import (
 )
 
 SCHEDULE_SCHEMA_VERSION = 1
-EE_ROLE = "ee"
-EE_KEY = "ee"
+# The token a schedule writes in a clause's ``src``/``dst``. Same string as
+# the runtime key, and imported from there rather than restated.
+EE_ROLE = EE_KEY
 
 # Relations whose label flips when the endpoints are swapped.
 _MIRROR: Dict[str, str] = {
@@ -273,22 +279,92 @@ def _pairing(objects, a: str, b: str, host: str, guest: str) -> bool:
 # --------------------------------------------------------------------------- #
 # compilation
 # --------------------------------------------------------------------------- #
-def load_assets(
-    env_id: str, configs: str,
+@dataclass(frozen=True)
+class ScheduleSource:
+    """The files one run compiles its progress target from.
+
+    An ordinary ManiSkill task names all of them with a single string: the gym
+    id is the schedule name, the affordance name and the whitelist directory
+    at once. MS-HAB does not. Its gym id is a subtask entry point
+    (``PickSubtaskTrain-v0``), its assets are mined per task group
+    (``set_table``), and one group holds several subtasks -- so its union
+    whitelist is ``pick_all.json``, never ``task_all.json``. Making one id
+    stand for all three is why the MS-HAB lookup resolved none of them, so the
+    paths travel together instead of being rebuilt from a name.
+
+    ``whitelist_dir`` is the directory the graph adapter itself resolved.
+    Compiling against any other would resolve roles against a different entity
+    vocabulary than the packer writes rows with.
+    """
+
+    label: str
+    schedule_path: str
+    affordance_path: str
+    union_whitelist_path: str
+    whitelist_dir: str
+
+
+def maniskill_schedule_source(
+    env_id: str, configs: str, schedule_dir: str = "",
+    whitelist_dir: str = "",
+) -> ScheduleSource:
+    """Ordinary ManiSkill: one gym id names the schedule and every asset."""
+    resolved = whitelist_dir or os.path.join(
+        configs, "subtask_whitelists", env_id)
+    return ScheduleSource(
+        label=env_id,
+        schedule_path=os.path.join(schedule_dir, f"{env_id}.json"),
+        affordance_path=os.path.join(configs, "affordances", f"{env_id}.json"),
+        union_whitelist_path=whitelist_path(
+            resolved, TASK_LEVEL_SUBTASK, TASK_LEVEL_TARGET),
+        whitelist_dir=resolved,
+    )
+
+
+def mshab_schedule_source(
+    task_group: str, subtask: str, configs: str, schedule_dir: str = "",
+    whitelist_dir: str = "",
+) -> ScheduleSource:
+    """MS-HAB: assets per task group, one schedule per subtask inside it.
+
+    The subtask is not decoration. ``set_table`` mines ``pick_all.json`` and
+    ``place_all.json`` side by side in one directory, and they describe
+    different tasks over the same objects.
+    """
+    if not task_group or not subtask:
+        raise ScheduleError(
+            "an MS-HAB schedule source needs both a task group and a "
+            f"subtask; got task_group={task_group!r} subtask={subtask!r}"
+        )
+    resolved = whitelist_dir or os.path.join(
+        configs, "subtask_whitelists", task_group)
+    return ScheduleSource(
+        label=f"{task_group}/{subtask}",
+        schedule_path=os.path.join(
+            schedule_dir, task_group, f"{subtask}.json"),
+        affordance_path=os.path.join(
+            configs, "affordances", f"{task_group}.json"),
+        union_whitelist_path=whitelist_path(
+            resolved, subtask, TASK_LEVEL_TARGET),
+        whitelist_dir=resolved,
+    )
+
+
+def load_assets_from_source(
+    source: ScheduleSource,
 ) -> Tuple[Dict, Dict, Dict, Dict[str, SiteDeclaration], set]:
     """``(objects, members, bin_edges, sites, structural_surfaces)``."""
-    aff = os.path.join(configs, "affordances", f"{env_id}.json")
-    wl = os.path.join(configs, "subtask_whitelists", env_id, "task_all.json")
-    for path in (aff, wl):
+    for path in (source.affordance_path, source.union_whitelist_path):
         if not os.path.isfile(path):
             raise ScheduleError(
-                f"{env_id}: {path} is missing. Mine the task's assets first."
+                f"{source.label}: {path} is missing. Mine the task's assets "
+                "first."
             )
-    with open(aff) as handle:
+    with open(source.affordance_path) as handle:
         objects = json.load(handle).get("objects", {})
-    with open(wl) as handle:
+    with open(source.union_whitelist_path) as handle:
         whitelist = json.load(handle)
-    sites = parse_site_declarations(whitelist.get("sites"), where=env_id)
+    sites = parse_site_declarations(whitelist.get("sites"), where=source.label)
     members = whitelist.get("members", {})
     structural = {
         key for key, entry in members.items()
@@ -298,12 +374,20 @@ def load_assets(
         for named in (key, decl.subject_key):
             if named != EE_KEY and named not in members:
                 raise ScheduleError(
-                    f"{env_id}: site {key!r} names {named!r}, which is not a "
-                    "whitelist member. A site and its subject both need "
+                    f"{source.label}: site {key!r} names {named!r}, which is "
+                    "not a whitelist member. A site and its subject both need "
                     "vocabulary rows before a frame can resolve them."
                 )
     return (objects, members, whitelist.get("bin_edges", {}), sites,
             structural)
+
+
+def load_assets(
+    env_id: str, configs: str,
+) -> Tuple[Dict, Dict, Dict, Dict[str, SiteDeclaration], set]:
+    """Ordinary ManiSkill assets, by gym id."""
+    return load_assets_from_source(
+        maniskill_schedule_source(env_id, configs))
 
 
 def _order(a_key: str, b_key: str) -> Tuple[str, str, bool]:
@@ -567,18 +651,24 @@ def _clause(raw: Dict[str, Any], key_of, scorable, relations, absolute,
     )
 
 
-def compile_from_files(env_id: str, schedule_dir: str, configs: str,
-                       entity_vocab) -> CompiledSchedule:
-    path = os.path.join(schedule_dir, f"{env_id}.json")
-    if not os.path.isfile(path):
+def compile_from_source(source: ScheduleSource, entity_vocab) -> CompiledSchedule:
+    """Compile the schedule and assets one :class:`ScheduleSource` names."""
+    if not os.path.isfile(source.schedule_path):
         raise ScheduleError(
-            f"{env_id}: no schedule at {path}. progress.mode=task_schedule "
-            "requires one per task."
+            f"{source.label}: no schedule at {source.schedule_path}. "
+            "progress.mode=task_schedule requires one per task."
         )
-    with open(path) as handle:
+    with open(source.schedule_path) as handle:
         raw = json.load(handle)
-    objects, members, bin_edges, sites, structural = load_assets(
-        env_id, configs)
+    objects, members, bin_edges, sites, structural = load_assets_from_source(
+        source)
     return compile_schedule(
         raw, objects, members, bin_edges, entity_vocab, sites=sites,
         structural=structural)
+
+
+def compile_from_files(env_id: str, schedule_dir: str, configs: str,
+                       entity_vocab) -> CompiledSchedule:
+    """Ordinary ManiSkill, by gym id. See :func:`compile_from_source`."""
+    return compile_from_source(
+        maniskill_schedule_source(env_id, configs, schedule_dir), entity_vocab)

@@ -1011,5 +1011,96 @@ class ResetFrameForcePolicyTest(unittest.TestCase):
                          ["height-offset", "planar-distance"])
 
 
+class EeSubjectResolutionTest(unittest.TestCase):
+    """A site declared against the gripper, which is what a rest position is.
+
+    Endpoints resolve through ``whitelist_key``, and the end effector has
+    none: admission skips it and the vocabulary hands it a reserved token
+    instead. So ``reached(ee, site)`` named an endpoint that could never be
+    found, and the emitter raised on every frame. It resolves by node type.
+    """
+
+    SITE = "spatial:ee_rest_site"
+
+    def _ee(self, node_id="ee", pose=None):
+        return Node(node_id=node_id, node_type="ee", name="ee",
+                    pose_world=list(pose if pose is not None else _pose()),
+                    attributes={})
+
+    def _site(self, pose=None):
+        return _node(self.SITE, self.SITE,
+                     pose if pose is not None else _pose())
+
+    def _cfg(self, tolerance=0.05):
+        return {"site_specs": [_spec(
+            _decl(key=self.SITE, subject="ee"), tolerance=tolerance)]}
+
+    def _edges(self, *nodes, tolerance=0.05):
+        return goal_edges(_graph(*nodes), None, self._cfg(tolerance))
+
+    def test_the_pair_emits_when_both_poses_exist(self):
+        edges = self._edges(self._ee(pose=_pose(x=0.4)), self._site())
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0].relation, "reached")
+
+    def test_a_gripper_away_from_rest_reads_not_holds(self):
+        edges = self._edges(self._ee(pose=_pose(x=0.4)), self._site())
+        self.assertEqual(edges[0].label, "not-holds")
+        self.assertAlmostEqual(edges[0].raw_value, 0.4)
+
+    def test_a_gripper_at_rest_reads_holds(self):
+        edges = self._edges(self._ee(pose=_pose(x=0.01)), self._site())
+        self.assertEqual(edges[0].label, "holds")
+
+    def test_the_ee_endpoint_is_stored_first(self):
+        """``_order`` puts the end effector first, so a fact stored the other
+        way round would never be found. The runtime agrees only because the
+        gripper carries no whitelist key and so sorts on an empty string."""
+        edges = self._edges(self._ee(), self._site())
+        self.assertEqual((edges[0].src, edges[0].dst), ("ee", self.SITE))
+
+    def test_a_missing_ee_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self._edges(self._site())
+        self.assertIn("ee", str(ctx.exception))
+
+    def test_two_end_effectors_raise_rather_than_picking_one(self):
+        with self.assertRaises(ValueError):
+            self._edges(self._ee("ee"), self._ee("ee-1", _pose(x=0.4)),
+                        self._site())
+
+    def test_a_missing_site_still_raises(self):
+        with self.assertRaises(ValueError):
+            self._edges(self._ee())
+
+    def test_the_gripper_is_not_matched_by_its_node_id(self):
+        """Resolution is on node type. An object that merely happens to be
+        called ``ee`` is not the end effector."""
+        impostor = _node("ee", "actor:ee", _pose(x=0.4))
+        with self.assertRaises(ValueError):
+            self._edges(impostor, self._site())
+
+    def test_an_object_subject_is_unaffected(self):
+        """The ordinary path still resolves through ``whitelist_key``."""
+        edges = goal_edges(
+            _graph(_node("actor:cube", "actor:cube", _pose(x=0.9)),
+                   _node("actor:goal_site", "actor:goal_site", _pose())),
+            None,
+            {"site_specs": [_spec(_decl(key="actor:goal_site",
+                                        subject="actor:cube"))]})
+        self.assertEqual((edges[0].src, edges[0].dst),
+                         ("actor:cube", "actor:goal_site"))
+
+    def test_the_reserved_key_has_one_definition(self):
+        """The compiler and the emitter must agree on the spelling; a
+        disagreement would show up only as a pair that never resolves."""
+        from scenegraph.core.relation_rules import EE_KEY
+        from scenegraph.core.schedule import EE_KEY as COMPILER_KEY
+        from scenegraph.core.schedule import EE_ROLE
+        self.assertEqual(EE_KEY, "ee")
+        self.assertIs(EE_KEY, COMPILER_KEY)
+        self.assertIs(EE_KEY, EE_ROLE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -416,6 +416,28 @@ def whitelist_group_dir(whitelist_root: Optional[str],
     return os.path.join(whitelist_root, str(task_group))
 
 
+# The subtask and target an ordinary ManiSkill task files its assets under.
+# It has one task and one whole-scene whitelist, so both slots are constants
+# and its union file is ``task_all.json``. MS-HAB names them for real: one
+# task group holds several subtasks, and ``pick`` mines ``pick_all.json``.
+TASK_LEVEL_SUBTASK = "task"
+TASK_LEVEL_TARGET = "all"
+
+
+def whitelist_path(
+    whitelist_dir: str, subtask_type: str, target_canonical: str,
+) -> str:
+    """``<dir>/<subtask>_<target>.json``, whether or not it exists.
+
+    The naming rule itself, split from the existence check so an error can
+    name the file it wanted. Every reader of a mined whitelist -- the runtime
+    binder, the schedule compiler, the miner -- spells the name through here,
+    so the convention has one definition.
+    """
+    target_slug = whitelist_target_slug(target_canonical)
+    return os.path.join(whitelist_dir, f"{subtask_type}_{target_slug}.json")
+
+
 def resolve_whitelist_path(
     whitelist_dir: Optional[str],
     subtask_type: Optional[str],
@@ -424,9 +446,7 @@ def resolve_whitelist_path(
     """Return the on-disk path for ``<subtask>_<target>.json`` if it exists."""
     if not whitelist_dir or not subtask_type or not target_canonical:
         return None
-    target_slug = whitelist_target_slug(target_canonical)
-    fname = f"{subtask_type}_{target_slug}.json"
-    path = os.path.join(whitelist_dir, fname)
+    path = whitelist_path(whitelist_dir, subtask_type, target_canonical)
     return path if os.path.isfile(path) else None
 
 

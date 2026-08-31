@@ -74,6 +74,14 @@ AFFORDANCE_RELATIONS: Tuple[str, ...] = (
 # last on purpose -- inserting it beside the other spatial relations would
 # shift every affordance relation id and silently invalidate trained heads.
 GOAL_RELATIONS: Tuple[str, ...] = ("reached",)
+
+# The end effector's reserved key. It is deliberately not a whitelist member
+# -- there is one gripper, it needs no admission, and mining it as an object
+# would give it a height family and an affordance set it has no use for -- so
+# every lookup that resolves a key has to know the name. The schedule compiler
+# imports this rather than spelling it again, because the two disagreeing
+# would show up only as a site pair that never resolves.
+EE_KEY = "ee"
 RELATION_TYPES: Tuple[str, ...] = (
     PHYSICAL_RELATIONS + SPATIAL_RELATIONS + AFFORDANCE_RELATIONS
     + GOAL_RELATIONS
@@ -1432,9 +1440,18 @@ def _node_for_key(graph: Graph, key: str) -> Optional[Node]:
     replay potential already refuses to guess between them; refusing here keeps
     the two refusals consistent instead of emitting an edge the scorer will
     then discard.
+
+    ``ee`` resolves by node type. The end effector carries no
+    ``whitelist_key`` -- admission skips it and the vocabulary gives it a
+    reserved token instead -- so a site declared against the gripper, which is
+    what an end-effector rest position is, would otherwise name an endpoint
+    that can never be found.
     """
-    hits = [n for n in graph.nodes
-            if (n.attributes or {}).get("whitelist_key") == key]
+    if key == EE_KEY:
+        hits = [n for n in graph.nodes if n.node_type == "ee"]
+    else:
+        hits = [n for n in graph.nodes
+                if (n.attributes or {}).get("whitelist_key") == key]
     return hits[0] if len(hits) == 1 else None
 
 

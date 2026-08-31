@@ -30,7 +30,13 @@ from .relation_rules import (
 from .temporal_buffer import TemporalBuffer
 from .mask_extractor import MaskAccumulator
 from .selector import EntityRegistry, NodeSelector
-from .whitelist import entity_match_key, load_whitelist, resolve_whitelist_path
+from .whitelist import (
+    TASK_LEVEL_SUBTASK,
+    TASK_LEVEL_TARGET,
+    entity_match_key,
+    load_whitelist,
+    resolve_whitelist_path,
+)
 from ..adapters.camera_projection import CameraCoverage
 from ..adapters.privileged_state import (
     entity_pose_world_array,
@@ -44,9 +50,9 @@ VISIBILITY_PROJECTED = "projected_camera"
 VISIBILITY_KEEP = "keep_tabletop"
 VISIBILITY_POLICIES = frozenset({VISIBILITY_PROJECTED, VISIBILITY_KEEP})
 
-# Targetless (normal ManiSkill) whitelist: <dir>/task_all.json.
-TASK_LEVEL_SUBTASK = "task"
-TASK_LEVEL_TARGET = "all"
+# Targetless (normal ManiSkill) whitelist: <dir>/task_all.json. Re-exported
+# from whitelist.py, which owns the filename convention, so the binder and the
+# schedule compiler cannot drift apart on what a union file is called.
 
 
 class GraphBuilder:
