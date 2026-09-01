@@ -8,6 +8,7 @@ from scenegraph.core.schema import Edge, Graph, Node
 from scenegraph.viz.graph_draw import (
     _group_by_family,
     _node_display_label,
+    _node_label_layout,
     _paper_display_edges,
     _paper_cluster_fraction,
     _paper_pair_offset,
@@ -54,6 +55,72 @@ class GraphDisplayFactsTest(unittest.TestCase):
         self.assertEqual(
             _node_display_label(graph, table, False), "table-workspace",
         )
+
+    def test_every_paper_figure_shortens_the_table_name(self):
+        """The workspace table is one object under one key wherever it
+        appears; which task is being drawn does not change what to call it."""
+        table = Node("actor:table-workspace", "object", "table-workspace")
+
+        for env_id in ("PegInsertionSide-v1", "PickCube-v1"):
+            graph = Graph(0, env_id, "base")
+            self.assertEqual(_node_display_label(graph, table, True), "table")
+            self.assertEqual(
+                _node_display_label(graph, table, False), "table-workspace",
+            )
+
+    def _ring(self, env_id, *object_ids):
+        """A graph whose objects sit on the ring, first one at the apex."""
+        return Graph(
+            0, env_id, "base",
+            nodes=[Node("ee", "ee", "ee")]
+            + [Node(i, "object", i.split(":")[-1]) for i in object_ids],
+        )
+
+    def test_the_apex_node_carries_its_name_above_the_vertex(self):
+        """Below the apex is where its edges fan out, so a name there is
+        crossed by all of them and by the chips riding on them."""
+        peg = self._ring("PegInsertionSide-v1", "actor:box_with_hole",
+                         "actor:peg", "actor:table-workspace")
+
+        anchor, valign = _node_label_layout(
+            peg, "actor:box_with_hole", 1.0, 0.2, True,
+        )
+        self.assertGreater(anchor, 1.0)
+        self.assertEqual(valign, "bottom")
+
+        for node_id in ("actor:peg", "actor:table-workspace", "ee"):
+            below, valign = _node_label_layout(peg, node_id, 1.0, 0.2, True)
+            self.assertLess(below, 1.0)
+            self.assertEqual(valign, "top")
+
+    def test_the_place_sphere_bin_keeps_its_name_above_the_vertex(self):
+        """It is the apex there, which is why it was special-cased by name."""
+        sphere = self._ring("PlaceSphere-v1", "actor:bin", "actor:sphere",
+                            "actor:table-workspace")
+
+        _anchor, valign = _node_label_layout(
+            sphere, "actor:bin", 1.0, 0.2, True,
+        )
+        self.assertEqual(valign, "bottom")
+
+    def test_a_layout_with_no_apex_puts_every_name_below(self):
+        """One and two objects are laid out by hand, with nothing on top."""
+        pair = self._ring("PegInsertionSide-v1", "actor:peg",
+                          "actor:box_with_hole")
+
+        for node_id in ("actor:peg", "actor:box_with_hole", "ee"):
+            _anchor, valign = _node_label_layout(pair, node_id, 1.0, 0.2, True)
+            self.assertEqual(valign, "top")
+
+    def test_the_video_places_every_name_below_its_node(self):
+        graph = self._ring("PegInsertionSide-v1", "actor:box_with_hole",
+                           "actor:peg", "actor:table-workspace")
+
+        anchor, valign = _node_label_layout(
+            graph, "actor:box_with_hole", 1.0, 0.2, False,
+        )
+        self.assertLess(anchor, 1.0)
+        self.assertEqual(valign, "top")
 
     def test_paper_view_hides_contact_after_stronger_relation_holds(self):
         graph = Graph(

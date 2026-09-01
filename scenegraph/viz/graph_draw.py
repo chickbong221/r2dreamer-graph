@@ -79,6 +79,12 @@ _PAPER_LAYOUT_SUPPORT = {
     "PegInsertionSide-v1": ("actor:box_with_hole", "actor:table-workspace"),
 }
 
+# Paper-only names, by node id rather than by task: the workspace table is the
+# same object under the same key wherever it appears, and its mined name says
+# which part of the scene it is, which a figure caption does not need.
+_PAPER_NODE_ABBREVIATIONS = {"actor:table-workspace": "table"}
+
+
 # Per-family chip styling. Affordance uses a green palette so it doesn't
 # read as the same family as the (also light+cool) spatial blue. Goal takes a
 # warm violet: it is a terminal milestone, so it should not read as either the
@@ -340,27 +346,36 @@ def _crop_paper_graph(path: str, background: str, pad: int = 8) -> None:
         cropped.save(path, format="PNG", optimize=True, dpi=(200, 200))
 
 
+def _paper_apex_node(graph: Graph) -> Optional[str]:
+    """The object drawn at the top of the ring, or None when there is no ring.
+
+    ``_radial_layout`` starts at angle pi/2, so the apex is the first object in
+    node order -- a fact about the layout rather than about the task.  The two
+    special-cased layouts for one and two objects have no apex: nothing sits
+    above everything else there, so neither gets the treatment below.
+    """
+    objects = [n.node_id for n in graph.nodes if n.node_type == "object"]
+    return objects[0] if len(objects) >= 3 else None
+
+
 def _node_label_layout(
     graph: Graph, node_id: str, y: float, node_r: float, paper_style: bool,
 ) -> Tuple[float, str]:
-    """Return the node label anchor and vertical alignment."""
-    if (
-        paper_style
-        and graph.env_id == "PlaceSphere-v1"
-        and node_id == "actor:bin"
-    ):
+    """Return the node label anchor and vertical alignment.
+
+    The apex carries its name above the vertex.  Below it is where its edges
+    fan out to every other node, so a name there is crossed by all of them and
+    by the relation chips riding on them.
+    """
+    if paper_style and node_id == _paper_apex_node(graph):
         return y + node_r + 0.18, "bottom"
     return y - node_r - 0.18, "top"
 
 
 def _node_display_label(graph: Graph, node, paper_style: bool) -> str:
-    """Human-facing node name, including paper-only task abbreviations."""
-    if (
-        paper_style
-        and graph.env_id == "PlaceSphere-v1"
-        and node.node_id == "actor:table-workspace"
-    ):
-        return "table"
+    """Human-facing node name, including paper-only abbreviations."""
+    if paper_style and node.node_id in _PAPER_NODE_ABBREVIATIONS:
+        return _PAPER_NODE_ABBREVIATIONS[node.node_id]
     return "ee" if node.node_type == "ee" else display_name(node.name)
 
 
