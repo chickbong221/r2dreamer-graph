@@ -21,14 +21,15 @@ from PIL import Image
 
 from scenegraph.core.mask_extractor import extract_camera_obs
 from scenegraph.core.schema import Edge, Graph, Node
+from scenegraph.core.sites import SITE_HOLE
 from scenegraph.figures.graph_source import FigureGraphSource
 from scenegraph.figures.multicamera_writer import (
     MulticameraEpisodeWriter, STAGING_PREFIX, episode_path,
 )
 from scenegraph.figures.writer import EpisodeWriter
 from scenegraph.tools.render_multicamera_paper_frames import (
-    DEFAULT_HEAD_CAMERA, DEFAULT_WRIST_CAMERA, MulticameraSession,
-    PAPER_SENSOR_SIZE, parse_args, preflight,
+    DEFAULT_HEAD_CAMERA, DEFAULT_HIDDEN_NODES, DEFAULT_WRIST_CAMERA,
+    MulticameraSession, PAPER_SENSOR_SIZE, parse_args, preflight, without_nodes,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -67,15 +68,35 @@ def _default_obs(height=H, width=W):
     )
 
 
-def _graph(frame=0, camera=HEAD):
-    return Graph(
+def _graph(frame=0, camera=HEAD, site=False):
+    """One frame's graph, optionally carrying the synthetic hole-site vertex.
+
+    The site is what the builder actually produces for PegInsertionSide: an
+    object-typed vertex with no pixels, plus the ``reached`` edge scored
+    against it.
+    """
+    nodes = [
+        Node("ee", "ee", "end_effector", pose_world=[0, 0, 1, 1, 0, 0, 0]),
+        Node("actor:peg", "object", "peg", pose_world=[0, 0, 1, 1, 0, 0, 0]),
+    ]
+    edges = [Edge("ee", "actor:peg", "planar-distance", "near")]
+    if site:
+        nodes.append(Node(
+            SITE_HOLE, "object", SITE_HOLE, visible=False, in_frame=True,
+            pose_world=[0, 0, 1, 1, 0, 0, 0], source="site",
+            attributes={"is_site": True, "site_type": "surface"},
+        ))
+        edges.append(Edge("actor:peg", SITE_HOLE, "reached", "not-reached"))
+    graph = Graph(
         frame=int(frame), env_id="PegInsertionSide-v1", camera=camera,
-        nodes=[
-            Node("ee", "ee", "end_effector", pose_world=[0, 0, 1, 1, 0, 0, 0]),
-            Node("actor:peg", "object", "peg", pose_world=[0, 0, 1, 1, 0, 0, 0]),
-        ],
-        edges=[Edge("ee", "actor:peg", "planar-distance", "near")],
+        nodes=nodes, edges=edges,
     )
+    graph.meta.update(
+        n_objects=sum(1 for n in nodes if n.node_type == "object"),
+        n_visible=sum(1 for n in nodes if n.visible),
+        n_in_frame=sum(1 for n in nodes if n.in_frame),
+    )
+    return graph
 
 
 class _GraphSource:
@@ -86,11 +107,13 @@ class _GraphSource:
     the read rather than by an assertion about it.
     """
 
-    def __init__(self, cameras=(HEAD,)):
+    def __init__(self, cameras=(HEAD,), site=True):
         self._cameras = [str(c) for c in cameras]
+        self.site = bool(site)
         self.frame = 0
         self.resets = 0
         self.seen = []
+        self.built = []
 
     @property
     def cameras(self):
@@ -108,7 +131,8 @@ class _GraphSource:
         for camera in self._cameras:
             self.seen.append(camera)
             extract_camera_obs(obs, camera)
-        graph = _graph(self.frame)
+        graph = _graph(self.frame, site=self.site)
+        self.built.append(graph)
         self.frame += 1
         return graph
 
@@ -361,6 +385,61 @@ class PreflightTest(unittest.TestCase):
             self._check(_default_obs(), wrist=HEAD)
 
 
+class HiddenNodeTest(unittest.TestCase):
+    """Vertices the figure drops, and the graph it must not touch to do it."""
+
+    def test_the_hole_site_is_what_the_figure_hides_by_default(self):
+        self.assertEqual(list(DEFAULT_HIDDEN_NODES), [SITE_HOLE])
+        self.assertEqual(parse_args([]).hidden_nodes, [SITE_HOLE])
+
+    def test_the_vertex_and_every_edge_touching_it_are_dropped(self):
+        graph = _graph(site=True)
+        shown = without_nodes(graph, [SITE_HOLE])
+        self.assertNotIn(SITE_HOLE, shown.node_ids())
+        self.assertEqual(
+            [(e.src, e.dst) for e in shown.edges], [("ee", "actor:peg")]
+        )
+
+    def test_the_builders_own_graph_keeps_the_vertex(self):
+        """The filter is a copy on the way out. The builder differences the
+        next frame's temporal labels against its graph, so removing a vertex
+        there would change the relations the following frame reports."""
+        graph = _graph(site=True)
+        without_nodes(graph, [SITE_HOLE])
+        self.assertIn(SITE_HOLE, graph.node_ids())
+        self.assertEqual(len(graph.edges), 2)
+
+    def test_the_frame_and_camera_survive_the_filter(self):
+        shown = without_nodes(_graph(frame=7, site=True), [SITE_HOLE])
+        self.assertEqual(shown.frame, 7)
+        self.assertEqual(shown.camera, HEAD)
+        self.assertEqual(shown.env_id, "PegInsertionSide-v1")
+
+    def test_the_derived_counts_describe_the_graph_that_was_written(self):
+        """``n_objects`` left alone would count a vertex the file does not
+        hold, and a reader comparing the two would find one missing."""
+        graph = _graph(site=True)
+        self.assertEqual(graph.meta["n_objects"], 2)
+        shown = without_nodes(graph, [SITE_HOLE])
+        self.assertEqual(shown.meta["n_objects"], 1)
+        self.assertEqual(shown.meta["n_in_frame"], 2)
+        self.assertEqual(shown.meta["hidden_nodes"], [SITE_HOLE])
+
+    def test_a_graph_with_nothing_to_hide_is_passed_through_untouched(self):
+        graph = _graph(site=False)
+        self.assertIs(without_nodes(graph, [SITE_HOLE]), graph)
+        self.assertNotIn("hidden_nodes", graph.meta)
+
+    def test_an_empty_hide_list_keeps_every_vertex(self):
+        graph = _graph(site=True)
+        self.assertIs(without_nodes(graph, []), graph)
+        self.assertEqual(parse_args(["--hide-node", ""]).hidden_nodes, [])
+
+    def test_a_run_naming_its_own_vertices_replaces_the_default(self):
+        args = parse_args(["--hide-node", "actor:peg", "--hide-node", "ee"])
+        self.assertEqual(args.hidden_nodes, ["actor:peg", "ee"])
+
+
 class GraphCameraTest(unittest.TestCase):
     def test_an_explicit_camera_list_pins_the_graph_to_one_sensor(self):
         """The exporter passes ``cameras=[graph_camera]`` for this reason: the
@@ -424,6 +503,37 @@ class SessionTest(unittest.TestCase):
         )
         self.assertIs(manifest["frame_annotations"], False)
         self.assertTrue((path / "frames" / "wrist" / "frame_0000.png").exists())
+
+    def test_the_exported_graph_holds_no_hole_site(self):
+        """Both artifacts of a step, and the manifest, agree on what is there."""
+        session = self._session()
+        session.prepare(0)
+        session.on_reset(_default_obs())
+        session.on_step(_default_obs(), {})
+        path = session.close(commit=True)
+
+        manifest = json.loads((path / "episode.json").read_text())
+        self.assertEqual(manifest["hidden_nodes"], [SITE_HOLE])
+        for record in manifest["steps"]:
+            data = json.loads((path / record["graph_json"]).read_text())
+            ids = [n["node_id"] for n in data["nodes"]]
+            self.assertNotIn(SITE_HOLE, ids)
+            self.assertEqual(record["n_nodes"], len(ids))
+            for edge in data["edges"]:
+                self.assertNotIn(SITE_HOLE, (edge["src"], edge["dst"]))
+        # And the source graphs still carry it: only the export dropped it.
+        self.assertTrue(
+            all(SITE_HOLE in g.node_ids() for g in self.graphs.built)
+        )
+
+    def test_naming_no_hidden_vertex_exports_the_graph_as_built(self):
+        session = self._session("--hide-node", "")
+        session.prepare(0)
+        session.on_reset(_default_obs())
+        path = session.close(commit=True)
+
+        data = json.loads((path / "graph_json" / "graph_0000.json").read_text())
+        self.assertIn(SITE_HOLE, [n["node_id"] for n in data["nodes"]])
 
     def test_the_three_artifacts_of_an_index_carry_one_step_number(self):
         session = self._session()

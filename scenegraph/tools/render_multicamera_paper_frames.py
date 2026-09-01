@@ -12,6 +12,12 @@ the same instant, not a second source of nodes: it swings with the gripper and
 sees the peg from a hand's width away, so admitting it would add and drop nodes
 on arm motion alone and the diagram would stop describing the scene.
 
+The exported diagram also drops the hole site, for the same reason the figure
+exists at all: every other vertex is something the reader can find in the frame
+beside it, and that one is a pose with nothing to look at. It is dropped from
+what this tool writes and nowhere else -- the builder still emits it, and the
+graph the model reads is unchanged.
+
     python -m scenegraph.tools.render_multicamera_paper_frames \
         --env-id PegInsertionSide-v1 --robot-uids panda_wristcam \
         --out data/paper_figures --episodes 1
@@ -26,10 +32,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from scenegraph.core.mask_extractor import extract_camera_obs
+from scenegraph.core.schema import Graph
+from scenegraph.core.sites import SITE_HOLE
 from scenegraph.figures.graph_source import FigureGraphSource
 from scenegraph.figures.multicamera_writer import (
     MulticameraEpisodeWriter, episode_path,
@@ -50,6 +59,12 @@ DEFAULT_ROBOT_UIDS = "panda_wristcam"
 # The scripted solutions read ``pose.sp``, which only exists unbatched, so the
 # env is single-environment on CPU and there is exactly one row to unwrap.
 ENV_IDX = 0
+# Dropped from the figure by default. The hole site is a synthetic vertex --
+# no pixels, no collision body, nothing in either camera to point at -- and it
+# earns its place in the graph the model reads, where the insertion milestone
+# is scored against it. In a printed diagram it is a vertex the reader cannot
+# find in the picture beside it.
+DEFAULT_HIDDEN_NODES = (SITE_HOLE,)
 
 
 def make_multicamera_env(
@@ -176,6 +191,42 @@ def preflight(
         )
 
 
+def without_nodes(graph: Graph, hidden: Sequence[str]) -> Graph:
+    """A copy of ``graph`` without these vertices, or the graph itself.
+
+    A copy, never an edit in place: the builder keeps its own graph and the next
+    frame's temporal labels difference against it, so removing a vertex there
+    would change the relations the *following* graph reports. Only what this
+    exporter writes loses the vertex -- extraction, and everything downstream of
+    it, sees the graph the builder built.
+
+    Every edge touching a dropped vertex goes with it, and the three node counts
+    in ``meta`` are recomputed, because they are derived: left alone they would
+    describe a graph one vertex larger than the one in the file.
+    """
+    drop = {str(node_id) for node_id in hidden if node_id}
+    present = drop & set(graph.node_ids())
+    if not present:
+        return graph
+    nodes = [n for n in graph.nodes if n.node_id not in present]
+    edges = [
+        e for e in graph.edges
+        if e.src not in present and e.dst not in present
+    ]
+    meta = dict(graph.meta)
+    meta.update(
+        # The same three sums ``GraphBuilder`` takes over its own node list.
+        n_objects=sum(1 for n in nodes if n.node_type == "object"),
+        n_visible=sum(1 for n in nodes if n.visible),
+        n_in_frame=sum(1 for n in nodes if n.in_frame),
+        # What is missing, recorded in the artifact itself: a reader comparing
+        # this dump against a graph from the training path has to be able to
+        # see that the difference was asked for.
+        hidden_nodes=sorted(present),
+    )
+    return replace(graph, nodes=nodes, edges=edges, meta=meta)
+
+
 class MulticameraSession:
     """Per-episode capture state, wired into the runner's two hooks.
 
@@ -262,8 +313,12 @@ class MulticameraSession:
         wrist, _wseg, _wdepth = extract_camera_obs(
             obs, self.roles["wrist"], ENV_IDX
         )
+        # Filtered once, so the diagram and the JSON beside it hold the same
+        # vertices; a caption written from one would otherwise describe a node
+        # missing from the other.
         self.writer.write_step(
-            step=graph.frame, head=head, wrist=wrist, graph=graph,
+            step=graph.frame, head=head, wrist=wrist,
+            graph=without_nodes(graph, self.args.hidden_nodes),
             colormap=self.colormap,
         )
 
@@ -285,6 +340,7 @@ class MulticameraSession:
             # pipeline, so a reader of the manifest knows the frames are raw
             # sensor pixels and not the labelled stills the other figure writes.
             "frame_annotations": False,
+            "hidden_nodes": list(self.args.hidden_nodes),
             "attempt": None if attempt is None else attempt.to_dict(),
             "control_mode": self.args.control_mode,
             "stride": self.args.stride,
@@ -411,12 +467,26 @@ def parse_args(argv=None):
     p.add_argument("--no-graph-image", action="store_true",
                    help="skip the node-link PNG; the JSON is still written")
     p.add_argument("--no-graph-json", action="store_true")
+    p.add_argument("--hide-node", action="append", metavar="NODE_ID",
+                   help="drop this vertex and its edges from the exported "
+                        f"graph (repeatable); defaults to {SITE_HOLE}, which "
+                        "no camera can show. Pass an empty --hide-node '' to "
+                        "export every vertex the builder produced")
 
     p.add_argument("--thresholds", default="",
                    help="thresholds.yaml override; empty uses the packaged one")
     p.add_argument("--whitelist-dir", default="",
                    help="mined whitelist dir override")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # Resolved here rather than in ``main`` so every caller gets a namespace
+    # that already says what the export hides. Replaces the default rather than
+    # extending it: a run naming its own vertices is choosing the whole list,
+    # and ``--hide-node ''`` is how that list is emptied.
+    args.hidden_nodes = (
+        list(DEFAULT_HIDDEN_NODES) if args.hide_node is None
+        else [n.strip() for n in args.hide_node if n.strip()]
+    )
+    return args
 
 
 def main(argv=None) -> int:
