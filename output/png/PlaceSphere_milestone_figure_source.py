@@ -25,7 +25,7 @@ OUT = Path(__file__).with_name("PlaceSphere_milestone_figure.png")
 # columns, following the supplied figure specification.
 MILESTONES = [1, 11, 36, 43, 44, 94, 112]
 
-WIDTH, HEIGHT = 3000, 1210
+WIDTH, HEIGHT = 3000, 890
 MARGIN = 28
 SIDE_LABEL = 0
 GAP = 10
@@ -406,7 +406,7 @@ def build() -> None:
             frame = fit_cover(source.convert("RGBA"), (col_w, image_h))
         canvas.alpha_composite(frame, (x, image_top))
         draw.rectangle((x, image_top, x + col_w, image_top + image_h), outline=WHITE, width=3)
-        reward_text = f"r = {rewards[step]:+.3f}"
+        reward_text = f"r_prog = {rewards[step]:+.3f}"
         rounded_text_box(draw, (x + 12, image_top + 12), reward_text, (20, 27, 34, 220))
 
     # Preserve every node label. Any aspect-ratio padding uses the graph's own
@@ -428,30 +428,6 @@ def build() -> None:
         graph_panel.alpha_composite(graph, (graph_inset, graph_inset))
         canvas.alpha_composite(graph_panel, (x, graph_top))
         draw.rectangle((x, graph_top, x + col_w, graph_top + graph_h), outline=GRID, width=2)
-
-    # Complete subject-relation-object phrases; no relation-category prefix.
-    draw_schedule_row(
-        draw,
-        900,
-        [
-            (1, 10, "ee is medium-distance from sphere", "reward"),
-            (11, 35, "ee is near sphere\nee has poor grasp fit with sphere", "reward"),
-            (36, 42, "ee has partial grasp fit with sphere", "reward"),
-            (43, 43, "ee contacts sphere", "reward"),
-            (44, 110, "ee grasps sphere", "reward"),
-            (111, 116, "ee is near sphere", "neutral"),
-        ],
-    )
-    draw_schedule_row(
-        draw,
-        1032,
-        [
-            (1, 83, "sphere is very-far from bin", "neutral"),
-            (84, 93, "sphere approaches bin", "reward"),
-            (94, 111, "sphere is near to very-near bin\nsphere has poor support fit with bin", "reward"),
-            (112, 116, "bin supports sphere", "reward"),
-        ],
-    )
 
     canvas.convert("RGB").save(OUT, format="PNG", optimize=True, dpi=(300, 300))
     print(f"wrote {OUT}")

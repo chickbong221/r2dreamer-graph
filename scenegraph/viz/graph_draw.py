@@ -217,25 +217,19 @@ def _unordered_pair(edge: Edge) -> Tuple[str, str]:
     return tuple(sorted((edge.src, edge.dst)))
 
 
-def _paper_edge_fractions(
-    graph: Graph, pair: Tuple[str, str], count: int,
-) -> Optional[np.ndarray]:
-    """Fixed on-edge chip positions for PlaceSphere's sphere-bin pair.
+def _paper_cluster_fraction(
+    graph: Graph, pair: Tuple[str, str],
+) -> Optional[float]:
+    """Anchor PlaceSphere's sphere-bin facts as one connected cluster.
 
-    This pair can carry physical, spatial, and affordance chips at once. A
-    vertical stack followed by collision nudging makes the boxes drift away
-    from the diagonal and appear to describe a different edge. Spread these
-    families *along* the bin-sphere line instead: physical nearest the bin,
-    affordance nearest the sphere, and spatial between them.
+    Physical, spatial, and affordance chips describe the same node pair, so
+    they must stay together.  The anchor sits on the upper-right diagonal,
+    away from the separate EE-sphere cluster below it.
     """
     sphere_bin = tuple(sorted(("actor:sphere", "actor:bin")))
     if graph.env_id != "PlaceSphere-v1" or tuple(sorted(pair)) != sphere_bin:
         return None
-    if count <= 1:
-        return np.asarray([0.42], dtype=float)
-    # Keep the whole stack on the upper/middle portion of the long diagonal.
-    # The short EE-sphere edge owns the lower-right area near the sphere.
-    return np.linspace(0.18, 0.58, int(count), dtype=float)
+    return 0.48
 
 
 def _paper_pair_offset(
@@ -243,13 +237,13 @@ def _paper_pair_offset(
 ) -> Optional[np.ndarray]:
     """Give crowded PlaceSphere pairs a stable label lane.
 
-    The EE-bin edge is vertical and sits immediately beside the bin-sphere
-    diagonal.  Keeping its chips just to the left of the vertical edge makes
-    it clear which line they describe without hiding any valid relations.
+    The EE-bin edge is vertical and sits between two diagonals.  Keep its chips
+    centred on that vertical edge and move them upward, where they cannot be
+    mistaken for either bin-table or bin-sphere relations.
     """
     ee_bin = tuple(sorted(("ee", "actor:bin")))
     if graph.env_id == "PlaceSphere-v1" and tuple(sorted(pair)) == ee_bin:
-        return np.asarray([-1.60, -0.45], dtype=float)
+        return np.asarray([0.0, 0.80], dtype=float)
     return None
 
 
@@ -564,16 +558,19 @@ def render_graph(
                 y_offsets.append(cursor - height * 0.5)
                 cursor -= height
 
-            edge_fractions = _paper_edge_fractions(graph, pair, n)
-            if edge_fractions is not None:
-                # Each family stays centred on the diagonal itself.  Do not
-                # feed these anchors into the global collision nudge: moving
-                # them sideways is precisely what made the pair ambiguous.
+            cluster_fraction = _paper_cluster_fraction(graph, pair)
+            if cluster_fraction is not None:
+                # Keep every family for this node pair in one vertical stack.
+                # The common x coordinate and touching boxes communicate that
+                # all of the facts belong to the same bin-sphere edge.
+                cluster_mid = a0 + (a1 - a0) * float(cluster_fraction)
                 anchors = [
-                    a0 + (a1 - a0) * float(fraction)
-                    for fraction in edge_fractions
+                    np.array([
+                        float(cluster_mid[0]),
+                        float(cluster_mid[1] + offset),
+                    ])
+                    for offset in y_offsets
                 ]
-                y_offsets = [float(anchor[1] - mid[1]) for anchor in anchors]
             else:
                 fixed_offset = _paper_pair_offset(graph, pair)
                 anchors = [

@@ -9,7 +9,7 @@ from scenegraph.viz.graph_draw import (
     _group_by_family,
     _node_display_label,
     _paper_display_edges,
-    _paper_edge_fractions,
+    _paper_cluster_fraction,
     _paper_pair_offset,
     _radial_layout,
     render_graph,
@@ -134,17 +134,17 @@ class GraphDisplayFactsTest(unittest.TestCase):
         cross = object_edge[0] * ee_offset[1] - object_edge[1] * ee_offset[0]
         self.assertGreater(abs(float(cross)), 1.0)
 
-    def test_place_sphere_bin_labels_are_spread_along_their_edge(self):
+    def test_place_sphere_bin_relations_share_one_cluster_anchor(self):
         graph = Graph(frame=94, env_id="PlaceSphere-v1", camera="base")
 
-        fractions = _paper_edge_fractions(
+        fraction = _paper_cluster_fraction(
             graph,
             ("actor:bin", "actor:sphere"),
-            3,
         )
 
-        np.testing.assert_allclose(fractions, [0.18, 0.38, 0.58])
-        self.assertTrue(np.all((fractions > 0.0) & (fractions < 1.0)))
+        self.assertAlmostEqual(fraction, 0.48)
+        self.assertGreater(fraction, 0.0)
+        self.assertLess(fraction, 1.0)
 
     def test_place_sphere_paper_view_preserves_context_relations(self):
         graph = Graph(
@@ -175,12 +175,12 @@ class GraphDisplayFactsTest(unittest.TestCase):
         self.assertIn(("actor:bin", "actor:sphere", "planar-distance"), facts)
         self.assertIn(("actor:sphere", "actor:table-workspace", "support"), facts)
 
-    def test_place_sphere_ee_bin_labels_use_left_lane(self):
+    def test_place_sphere_ee_bin_labels_stay_on_vertical_edge(self):
         graph = Graph(frame=94, env_id="PlaceSphere-v1", camera="base")
 
         offset = _paper_pair_offset(graph, ("actor:bin", "ee"))
 
-        np.testing.assert_allclose(offset, [-1.60, -0.45])
+        np.testing.assert_allclose(offset, [0.0, 0.80])
 
     def test_paper_graph_is_cropped_and_has_no_title_strip(self):
         from PIL import Image
