@@ -93,6 +93,60 @@ class GraphDisplayFactsTest(unittest.TestCase):
             {("support", "dst-holds")},
         )
 
+    def test_peg_insertion_paper_view_adds_static_table_box_support(self):
+        """The box with the hole is kinematic, like PlaceSphere's bin: nothing
+        ever pushes it, so the runtime graph has no pair to report."""
+        graph = Graph(
+            frame=0,
+            env_id="PegInsertionSide-v1",
+            camera="base",
+            nodes=[
+                Node("actor:box_with_hole", "object", "box_with_hole"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+                Node("actor:peg", "object", "peg"),
+            ],
+        )
+
+        shown = _paper_display_edges(graph)
+
+        self.assertEqual(graph.edges, [])
+        self.assertEqual(
+            [(e.src, e.dst, e.relation, e.label) for e in shown],
+            [("actor:box_with_hole", "actor:table-workspace",
+              "support", "dst-holds")],
+        )
+
+    def test_layout_support_is_not_drawn_twice_when_the_builder_emits_it(self):
+        """The pair is added only where the runtime is silent about it."""
+        graph = Graph(
+            frame=0,
+            env_id="PegInsertionSide-v1",
+            camera="base",
+            nodes=[
+                Node("actor:box_with_hole", "object", "box_with_hole"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+            ],
+            edges=[Edge("actor:box_with_hole", "actor:table-workspace",
+                        "support", "dst-holds")],
+        )
+
+        shown = _paper_display_edges(graph)
+
+        self.assertEqual(len(shown), 1)
+
+    def test_a_task_with_no_layout_pair_gains_no_edge(self):
+        graph = Graph(
+            frame=0,
+            env_id="PickCube-v1",
+            camera="base",
+            nodes=[
+                Node("actor:cube", "object", "cube"),
+                Node("actor:table-workspace", "object", "table-workspace"),
+            ],
+        )
+
+        self.assertEqual(_paper_display_edges(graph), [])
+
     def test_hidden_facts_leave_the_reference_background_visible(self):
         graph = Graph(
             frame=0,

@@ -67,6 +67,18 @@ _PRIMARY_AFFORDANCE_RELATIONS = {
     "grasp-compatibility", "support-compatibility", "contain-compatibility",
 }
 
+# Scene-layout support the runtime graph never emits, per task, as
+# ``env_id -> (supported, supporter)``.  Both actors are kinematic in each
+# pair, so no contact impulse is ever generated between them and the physical
+# pair capture cannot see them -- correctly, since an unchanging fact tells a
+# policy nothing.  An explanatory diagram is the one reader that does want it:
+# it is what says the receptacle stands on the table rather than floating
+# beside it.  Only pairs whose fixedness is a property of the task belong here.
+_PAPER_LAYOUT_SUPPORT = {
+    "PlaceSphere-v1": ("actor:bin", "actor:table-workspace"),
+    "PegInsertionSide-v1": ("actor:box_with_hole", "actor:table-workspace"),
+}
+
 # Per-family chip styling. Affordance uses a green palette so it doesn't
 # read as the same family as the (also light+cool) spatial blue. Goal takes a
 # warm violet: it is a terminal milestone, so it should not read as either the
@@ -256,24 +268,26 @@ def _paper_display_edges(graph: Graph) -> List[Edge]:
     """
     edges = list(graph.edges)
 
-    # The bin and table are both kinematic in PlaceSphere, so the runtime graph
+    # The receptacle and the table are both kinematic, so the runtime graph
     # intentionally omits their unchanging scene-layout pair.  It is useful in
-    # the explanatory paper diagram, however: the table supports the bin.
-    if graph.env_id == "PlaceSphere-v1":
-        node_ids = set(graph.node_ids())
-        bin_id = "actor:bin"
-        table_id = "actor:table-workspace"
-        if {bin_id, table_id}.issubset(node_ids):
-            pair = tuple(sorted((bin_id, table_id)))
+    # the explanatory paper diagram, however: the table supports the receptacle.
+    layout_pair = _PAPER_LAYOUT_SUPPORT.get(graph.env_id)
+    if layout_pair is not None:
+        supported, supporter = layout_pair
+        if {supported, supporter}.issubset(set(graph.node_ids())):
+            pair = tuple(sorted((supported, supporter)))
             relations = {
                 edge.relation for edge in edges
                 if _unordered_pair(edge) == pair
             }
+            # Only when the builder emitted nothing for the pair.  A task whose
+            # receptacle is dynamic reports the same support itself, and a
+            # second copy would draw one fact twice.
             if "support" not in relations:
-                # Stable physical-pair ordering is bin -> table; dst is the
-                # supporter, matching the schema's directional label.
+                # Stable physical-pair ordering is supported -> supporter; dst
+                # is the supporter, matching the schema's directional label.
                 edges.append(Edge(
-                    bin_id, table_id, "support", "dst-holds",
+                    supported, supporter, "support", "dst-holds",
                     attributes={"support_role": "supporter"},
                 ))
     # Once a stronger physical predicate holds, positive contact is implied
