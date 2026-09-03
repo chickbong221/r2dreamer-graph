@@ -78,6 +78,64 @@ SITE_PULL_REGION = f"{SITE_PREFIX}pull_goal_region"
 SITE_EE_REST = f"{SITE_PREFIX}ee_rest_site"
 
 
+def declared_sites(env_id: str, sites_dir, subtask: str = "") -> Dict[str, Any]:
+    """The reviewed site declarations for one task, or one subtask of a group.
+
+    ManiSkill names a task once, so its file is ``<dir>/<env id>.json``.
+    MS-HAB has to route by ``(task group, subtask)``: a task group holds
+    several subtasks over the same objects, and the end-effector rest position
+    belongs to pick alone -- no other subtask defines an ``ee_rest_thresh``.
+    Indexing by group would inject a pick site into a place or open mine.
+
+    Sites are task semantics, not something a pose stream reveals. The
+    calibration collector records region pairs against *every* movable actor,
+    because it cannot know which one a task drags into its goal -- so letting
+    a miner turn that into a declaration invented a goal region for
+    PlaceSphere, a task with no goal region at all.
+
+    So the declaration is written and reviewed, like a schedule, and the miner
+    only checks the evidence agrees with it. An absent file means no sites.
+    """
+    import json
+    import os
+
+    path = (os.path.join(str(sites_dir), str(env_id), f"{subtask}.json")
+            if subtask
+            else os.path.join(str(sites_dir), f"{env_id}.json"))
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as handle:
+        raw = json.load(handle)
+    return dict(raw.get("sites") or {})
+
+
+def admit_site_members(members: Dict[str, Any],
+                       sites: Dict[str, Any]) -> Dict[str, Any]:
+    """Give every virtual site the vocabulary row its runtime node needs.
+
+    A declaration licenses goal geometry, but the graph encoder resolves node
+    identity only through whitelist ``members``. A real goal marker such as
+    PickCube's ``actor:goal_site`` is already a member and keeps its mined
+    family. A provider-backed site has no simulator actor, so the row has to
+    be added explicitly; otherwise schedule compilation fails before training
+    -- or, without that guard, the site encodes as padding.
+
+    No family, deliberately. A virtual site has no body for the gripper to be
+    near or above, and giving it one would label a distance to nothing on a
+    real object's scale.
+    """
+    out = dict(members)
+    for key in sorted(sites):
+        if key in out:
+            continue
+        out[key] = {
+            "roles": ["spatial"],
+            "interaction_types": [],
+            "kind": "spatial",
+        }
+    return out
+
+
 # How far *before* the entry plane still counts as having reached it. A
 # millimetre: enough that a head resting exactly on the plane is not decided by
 # floating-point noise, small enough that it is not a second aperture.

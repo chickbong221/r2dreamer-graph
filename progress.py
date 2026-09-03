@@ -37,6 +37,10 @@ from scenegraph.adapters.graph_vocab import (
     build_absolute_vocab,
     build_relation_vocab,
 )
+from scenegraph.core.schedule import (
+    ACTIVE_TARGET_ENTITY_ID,
+    ACTIVE_TARGET_ROW,
+)
 
 # Relation and label ids come from the shared vocabularies, never from literals.
 # They are positions in a table the graph contract owns: adding the directional
@@ -382,6 +386,17 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         self.n_slots, self.n_phases = len(slots), len(schedule.phases)
 
         ent_row = {ent: i for i, ent in enumerate(entities)}
+        # Which scheduled entities are the dynamic target rather than a fixed
+        # vocabulary id. A bool per column of ``resolve_rows``' output.
+        self.register_buffer(
+            "dynamic_target",
+            torch.tensor([ent == ACTIVE_TARGET_ENTITY_ID for ent in entities],
+                         dtype=torch.bool),
+            persistent=False)
+        self.register_buffer(
+            "active_target_row", torch.tensor(ACTIVE_TARGET_ROW,
+                                              dtype=torch.long),
+            persistent=False)
         long_buf = lambda values: torch.tensor(values, dtype=torch.long)
         self.register_buffer("entities", long_buf(entities), persistent=False)
         self.register_buffer("slot_rel", long_buf([s[0] for s in slots]),
@@ -460,11 +475,34 @@ class TaskScheduleReplayPotential(torch.nn.Module):
         Exactly one row must carry the entity id. None means the object has not
         been admitted yet; several means the scene holds indistinguishable
         instances, and picking one would be a guess.
+
+        The active-target sentinel is the exception, and it exists because of
+        that last case: one schedule serves nine MS-HAB objects, and a scene
+        can hold two instances of one category which share a whitelist key and
+        therefore an entity id. Scanning would find two rows and give up on
+        every frame. It resolves to the packer's reserved target row instead,
+        and ``verify_protected_rows`` refuses to write a frame whose row 1 is
+        not the flagged, non-padding target -- so the position is a checked
+        fact rather than a guess.
+
+        Padding there is still read as unresolved. Not because the packer
+        permits it, but because reading padding as the target would be a
+        silent wrong answer if a frame ever reached the scorer by some other
+        path.
         """
         match = node_ent[..., None].eq(self.entities)
         count = match.sum(1)
         rows = match.float().argmax(1)
-        return rows, count.eq(1)
+        resolved = count.eq(1)
+        if self.dynamic_target.any():
+            row = int(self.active_target_row)
+            occupied = node_ent[:, row].ne(0)
+            rows = torch.where(self.dynamic_target, torch.full_like(rows, row),
+                               rows)
+            resolved = torch.where(
+                self.dynamic_target, occupied[:, None].expand_as(resolved),
+                resolved)
+        return rows, resolved
 
     def observe(self, node_ent, edge_rel, edge_abs, edge_src_local,
                 edge_dst_local, edge_graph, graph_count: int):

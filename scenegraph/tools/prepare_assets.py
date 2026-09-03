@@ -79,6 +79,35 @@ def _checkpointed_objects(ckpt_root: Path, mshab_task: str,
     return found
 
 
+def _unreadable_supporters(runtime_dir: Path) -> List[str]:
+    """``<file>: <key>`` for every admitted supporter with no extent.
+
+    A supporter is admitted on interaction evidence alone, but whether it is
+    an extended surface is decided by its collision extent. A member the
+    classification could not reach carries no family, and the runtime then
+    measures it from its actor origin -- ~0.9m below a counter's own top,
+    which is the error the classification exists to remove. A warning is fine
+    while iterating; a finished asset is not.
+    """
+    import json as _json
+
+    out: List[str] = []
+    for path in sorted(Path(runtime_dir).glob('*.json')):
+        try:
+            members = _json.loads(path.read_text()).get('members') or {}
+        except (OSError, ValueError):
+            continue
+        for key, entry in sorted(members.items()):
+            if not isinstance(entry, dict):
+                continue
+            if 'support' not in (entry.get('interaction_types') or ()):
+                continue
+            if entry.get('family'):
+                continue
+            out.append(f'{path.name}: {key}')
+    return out
+
+
 def _report(needed: Dict[str, Set[Tuple[str, str]]], ckpt_objects: Set[str],
             whitelist_dir: Path, table: Path) -> List[Tuple[str, str]]:
     """Print what the plans want against what exists. Returns uncollectable."""
@@ -333,6 +362,21 @@ def main(argv=None) -> int:
 
     print('\n[prep] verify')
     _report(needed, ckpt_objects, runtime_dir, table)
+    unreadable = _unreadable_supporters(runtime_dir)
+    if unreadable:
+        print(f'[prep] FAILED: {len(unreadable)} admitted supporter(s) '
+              'carry no height family, so their collision extent was '
+              'unreadable and they cannot be tested for being an '
+              'extended surface:', file=sys.stderr)
+        for line in unreadable[:20]:
+            print(f'          {line}', file=sys.stderr)
+        if len(unreadable) > 20:
+            print(f'          ... and {len(unreadable) - 20} more',
+                  file=sys.stderr)
+        print('       Extents are read from the simulator at collection '
+              'time and cannot be mined later; re-collect these targets.',
+              file=sys.stderr)
+        return 1
     from scenegraph.core.whitelist import resolve_whitelist_path
     pairs = sorted(set().union(*needed.values())) if needed else []
     gaps = [

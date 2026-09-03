@@ -75,6 +75,8 @@ from .spatial_metrics import (
     EE_HEIGHT_FAMILIES,
     ee_family_bin_key,
     OBJECT_REGION_PLANAR_KEY,
+    EE_SITE_HEIGHT_KEY,
+    EE_SITE_PLANAR_KEY,
     OBJECT_SITE_HEIGHT_KEY,
     OBJECT_SITE_PLANAR_KEY,
     SPATIAL_SCOPES,
@@ -358,9 +360,15 @@ for _family in EE_HEIGHT_FAMILIES:
         "signed5-sensitive", f"{_fstat}_change")
 del _family, _fkey, _fstat
 
-# Object-to-site takes both, on its own scale.
+# Object-to-site and end-effector-to-site each take both, on their own
+# scales. Registered by hand rather than through SPATIAL_SCOPES for the reason
+# that tuple's comment gives, and kept apart from each other because a peg
+# head reaching a hole and a gripper returning to its rest position are
+# distances of different magnitudes over different bodies.
 for _site_key, _site_kind in ((OBJECT_SITE_PLANAR_KEY, "unsigned5"),
-                              (OBJECT_SITE_HEIGHT_KEY, "signed5")):
+                              (OBJECT_SITE_HEIGHT_KEY, "signed5"),
+                              (EE_SITE_PLANAR_KEY, "unsigned5"),
+                              (EE_SITE_HEIGHT_KEY, "signed5")):
     _site_stat = _site_key.replace("-", "_")
     _BIN_DERIVATION[_site_key] = (_site_kind, _site_stat)
     _BIN_DERIVATION[change_bin_key(_site_key)] = (

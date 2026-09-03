@@ -31,6 +31,7 @@ from scenegraph.core.affordance import transform_dir
 from scenegraph.adapters.interaction_events import (
     EE_KEY, KIND_EE_OBJECT, KIND_OBJECT_REGION, KIND_OBJECT_SITE,
 )
+from scenegraph.core import families as families_rules
 from scenegraph.core import spatial_metrics
 from scenegraph.core.spatial_metrics import (
     EE_OBJECT_SCOPE,
@@ -40,6 +41,7 @@ from scenegraph.core.spatial_metrics import (
     stat_key,
 )
 from scenegraph.core.relation_rules import required_bin_keys
+from scenegraph.core import sites as sites_core
 from scenegraph.core.sites import parse_site_declarations
 from scenegraph.core.whitelist import WHITELIST_SCHEMA_VERSION, derive_bin_edges
 
@@ -112,7 +114,9 @@ TASK_TARGET = "all"
 # Flatness deliberately plays no part: the tabletop's vertical half-extent is
 # 0.46 m because the actor includes its legs, so an aspect-ratio test would
 # reject the one object this exists to find.
-STRUCTURAL_SURFACE_MIN_HALF_EXTENT = 0.30
+# Re-exported from the shared rule, which owns the threshold.
+STRUCTURAL_SURFACE_MIN_HALF_EXTENT = (
+    families_rules.STRUCTURAL_SURFACE_MIN_HALF_EXTENT)
 
 # A pair whose two support/contain orientations differ by less than this factor
 # is genuinely ambiguous; anything above it is one real orientation plus force
@@ -572,7 +576,12 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
             f"v{SHARD_SCHEMA_KEYED}) before mining."
         )
 
-    families = object_families(plain_members, buckets, set(surfaces))
+    # Resolved before the families, not after: a reviewed declaration is what
+    # licenses an actor-backed marker with no interactions to be a goal
+    # marker, and without it that member is ambiguous and stops the mine.
+    sites = site_declarations(merged, plain_members, env_id, sites_dir)
+    families = object_families(plain_members, buckets, set(surfaces),
+                               declared=set(sites))
     ambiguous = ambiguous_families(families)
     if ambiguous:
         raise SystemExit(
@@ -598,7 +607,6 @@ def build_assets(merged: Dict[str, Any], buckets: Dict[str, List[Dict]],
     for key, family in families.items():
         plain_members[key]["family"] = family
 
-    sites = site_declarations(merged, plain_members, env_id, sites_dir)
     plain_members = admit_site_members(plain_members, sites)
 
     affordances = {
@@ -726,69 +734,24 @@ def _object_pair_stats(merged, objects):
 def structural_surfaces(merged, members) -> Dict[str, str]:
     """Which members are extended support planes, and why.
 
-    Two conditions, both necessary. It has to actually support something --
-    a large object nothing ever rests on is scenery, not a surface -- and its
-    smaller horizontal half-extent has to reach
-    ``STRUCTURAL_SURFACE_MIN_HALF_EXTENT``.
-
-    Size is the only available discriminator. Roles cannot do it: in
-    PlaceSphere the bin and the table carry byte-identical ``roles`` and
-    ``interaction_types``, because both are kinematic and both support the
-    sphere. An actor whose collision geometry could not be read is left
-    unclassified rather than assumed small -- a missing measurement is not
-    evidence of absence, and a table quietly demoted to an ordinary object
-    reinstates the ~0.9m origin error this is here to remove.
+    Delegates to the shared rule so the ManiSkill and MS-HAB miners cannot
+    drift into two definitions of a surface. ``merged["extents"]`` is this
+    miner's evidence shape; the rule reads either.
     """
-    extents = merged.get("extents") or {}
-    out: Dict[str, str] = {}
-    for key, entry in sorted(members.items()):
-        if "support" not in (entry.get("interaction_types") or ()):
-            continue
-        half = extents.get(key)
-        if not half or len(half) < 3:
-            continue
-        horizontal = min(float(half[0]), float(half[1]))
-        if horizontal >= STRUCTURAL_SURFACE_MIN_HALF_EXTENT:
-            out[key] = (
-                f"collision half-extent {horizontal:.3f}m horizontal >= "
-                f"{STRUCTURAL_SURFACE_MIN_HALF_EXTENT}m"
-            )
-    return out
+    return families_rules.structural_surfaces(
+        merged.get("extents") or {}, members)
 
 
 def unclassified_supporters(merged, members) -> List[str]:
-    """Supporters whose collision geometry the shard never recorded.
-
-    Reported rather than defaulted. Every one of them is a member the runtime
-    will measure from its actor origin, and if one of them is a tabletop that
-    is exactly the failure this change exists to remove.
-    """
-    extents = merged.get("extents") or {}
-    return sorted(
-        key for key, entry in members.items()
-        if "support" in (entry.get("interaction_types") or ())
-        and not extents.get(key)
-    )
+    """Supporters whose collision geometry the shard never recorded."""
+    return families_rules.unclassified_supporters(
+        merged.get("extents") or {}, members)
 
 
 def declared_sites(env_id: str, sites_dir: Path) -> Dict[str, Any]:
-    """The reviewed site declarations for one task, or none.
+    """Reviewed declarations for one task. See :func:`sites_core.declared_sites`."""
+    return sites_core.declared_sites(env_id, sites_dir)
 
-    Sites are task semantics, not something a pose stream reveals. The
-    collector records region pairs against *every* movable actor, because it
-    cannot know which one a task drags into its goal -- so letting the miner
-    turn that into a declaration invented a goal region for PlaceSphere, a
-    task with no goal region at all.
-
-    So the declaration is written and reviewed, like a schedule, and the miner
-    only checks the evidence agrees with it. Absent file means no sites.
-    """
-    path = Path(sites_dir) / f"{env_id}.json"
-    if not path.is_file():
-        return {}
-    with open(path) as handle:
-        raw = json.load(handle)
-    return dict(raw.get("sites") or {})
 
 
 def keyed_pair_kinds(merged) -> Dict[str, set]:
@@ -855,116 +818,33 @@ def site_declarations(merged, members, env_id, sites_dir) -> Dict[str, Any]:
 def admit_site_members(members, sites) -> Dict[str, Any]:
     """Give every virtual site the vocabulary row its runtime node needs.
 
-    A declaration licenses goal geometry, but the graph encoder resolves node
-    identity only through whitelist ``members``.  Real goal markers such as
-    PickCube's ``actor:goal_site`` are already members and keep their mined
-    family.  Provider-backed sites have no simulator actor, so the miner must
-    add a spatial-only row explicitly; otherwise schedule compilation fails
-    before training (or, without that guard, the site would encode as pad).
+    Delegates to the shared rule; both miners admit sites identically.
     """
-    out = dict(members)
-    for key in sorted(sites):
-        if key in out:
-            continue
-        out[key] = {
-            "roles": ["spatial"],
-            "interaction_types": [],
-            "kind": "spatial",
-        }
-    return out
+    return sites_core.admit_site_members(members, sites)
 
 
-def object_families(members, buckets, structural) -> Dict[str, Optional[str]]:
+def object_families(members, buckets, structural,
+                    declared=None) -> Dict[str, Optional[str]]:
     """The end-effector height family for every member, in strict precedence.
 
-    1. A structural surface is one, whatever else it does. A tabletop is also
-       grasped by nothing and supports everything, so the later rules would
-       reach it too -- and give it the wrong answer.
-    2. Anything the demos grasped is a manipuland. This is what the gripper
-       approaches and lifts, and its heights are the ones the deadband has to
-       resolve.
-    3. Anything that held something else -- the supporter of a support bucket
-       or the container of a contain bucket -- is a receptacle. Read from the
-       directed buckets, not from ``interaction_types``, which is a flat set
-       per member and says only that the object took part.
-    4. Anything that rests on something else and holds nothing is also a
-       manipuland. PullCubeTool grasps the *tool*, never the cube -- the cube
-       is dragged by it -- so rule 2 misses the one object the task is about.
-       Being supported while supporting nothing is what a scene's movable
-       objects have in common, however they are moved.
-    5. A member with no interactions at all is a goal marker: PickCube's
-       ``goal_site`` has no collision geometry, so it appears in no bucket and
-       exists purely to be measured against.
-
-    Anything else is left ``None``. That is not a family and must not be
-    treated as one -- see ``ambiguous_families``.
+    Delegates to the shared rule. This miner keys its directed evidence by
+    ``<kind>/<holder>/<held>`` bucket names, so those are split into the two
+    sets the rule takes. ``declared`` names the reviewed sites, which is what
+    licenses an actor-backed marker with no interactions to be a goal marker.
     """
-    holders: set = set()
-    supported: set = set()
-    for bucket in buckets:
-        parts = [p.strip() for p in str(bucket).split("/")]
-        if len(parts) == 3 and parts[0] in ("support", "contain"):
-            holders.add(parts[1])
-            supported.add(parts[2])
-
-    out: Dict[str, Optional[str]] = {}
-    for key, entry in members.items():
-        types = set((entry or {}).get("interaction_types") or ())
-        if key in structural:
-            out[key] = spatial_metrics.FAMILY_STRUCTURAL
-        elif "grasp" in types:
-            out[key] = spatial_metrics.FAMILY_MANIPULAND
-        elif key in holders:
-            out[key] = spatial_metrics.FAMILY_RECEPTACLE
-        elif key in supported:
-            out[key] = spatial_metrics.FAMILY_MANIPULAND
-        elif not types:
-            out[key] = spatial_metrics.FAMILY_GOAL_MARKER
-        else:
-            out[key] = None
-    return out
+    holders, supported = families_rules.directed_pairs(buckets)
+    return families_rules.object_families(
+        members, holders, supported, structural, declared)
 
 
 def ambiguous_families(families) -> List[str]:
-    """Members no rule classified.
-
-    A member that took part in interactions but is neither grasped, nor a
-    holder, nor structural. Falling back to a family would give it another
-    family's deadband, which is how one token comes to mean two heights; the
-    miner refuses to write the asset instead.
-    """
-    return sorted(key for key, family in families.items() if not family)
+    """Members no rule classified."""
+    return families_rules.ambiguous_families(families)
 
 
 def _reference_surface(merged, key, objects) -> Optional[Dict[str, Any]]:
-    """The top face of a structural surface, in its own object frame.
-
-    Derived from the support anchors already mined against it -- those points
-    lie on the face things rest on, which is the plane by definition. The
-    normal is forced upward here rather than at read time as well, so the
-    stored asset means what it says.
-    """
-    supports = (objects.get(key) or {}).get("support_components") or []
-    anchors = [np.asarray(c["surface_anchor"], dtype=float)
-               for c in supports if c.get("surface_anchor") is not None]
-    if not anchors:
-        return None
-    normals = [np.asarray(c["surface_normal"], dtype=float)
-               for c in supports if c.get("surface_normal") is not None]
-    normal = np.array([0.0, 0.0, 1.0])
-    if normals:
-        mean = np.mean(np.vstack(normals), axis=0)
-        oriented = spatial_metrics.oriented_normal(mean)
-        if oriented is not None:
-            normal = oriented
-    return {
-        "anchor": _round(np.mean(np.vstack(anchors), axis=0)),
-        "outward_normal": _round(normal),
-        "n_samples": len(anchors),
-        "provenance": "mean of mined support-surface anchors, normal forced "
-                      "outward (support normals are mined from contact "
-                      "forces and point into the supporter)",
-    }
+    """The top face of a structural surface. See the shared rule."""
+    return families_rules.reference_surface_from_supports(objects.get(key) or {})
 
 
 def _ee_structural_height(src, dst_pose, surface) -> Optional[float]:

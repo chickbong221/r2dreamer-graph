@@ -147,6 +147,8 @@ EE_HEIGHT_FAMILIES = spatial_metrics.EE_HEIGHT_FAMILIES
 ee_family_bin_key = spatial_metrics.ee_family_bin_key
 OBJECT_SITE_PLANAR_KEY = spatial_metrics.OBJECT_SITE_PLANAR_KEY
 OBJECT_SITE_HEIGHT_KEY = spatial_metrics.OBJECT_SITE_HEIGHT_KEY
+EE_SITE_PLANAR_KEY = spatial_metrics.EE_SITE_PLANAR_KEY
+EE_SITE_HEIGHT_KEY = spatial_metrics.EE_SITE_HEIGHT_KEY
 spatial_bin_key = spatial_metrics.spatial_bin_key
 change_bin_key = spatial_metrics.change_bin_key
 
@@ -195,6 +197,10 @@ _BIN_LABELS: Dict[str, List[str]] = {
     change_bin_key(OBJECT_REGION_PLANAR_KEY): CHANGE_LABELS,
     OBJECT_SITE_PLANAR_KEY: SPATIAL_LABELS["planar-distance"],
     change_bin_key(OBJECT_SITE_PLANAR_KEY): CHANGE_LABELS,
+    EE_SITE_PLANAR_KEY: SPATIAL_LABELS["planar-distance"],
+    change_bin_key(EE_SITE_PLANAR_KEY): CHANGE_LABELS,
+    EE_SITE_HEIGHT_KEY: SPATIAL_LABELS["height-offset"],
+    change_bin_key(EE_SITE_HEIGHT_KEY): CHANGE_LABELS,
     OBJECT_SITE_HEIGHT_KEY: SPATIAL_LABELS["height-offset"],
     change_bin_key(OBJECT_SITE_HEIGHT_KEY): CHANGE_LABELS,
     **{ee_family_bin_key(f): SPATIAL_LABELS["height-offset"]
@@ -469,6 +475,24 @@ def ladder_site_keys(cfg: dict) -> Set[str]:
 def is_ladder_site(node: Node, cfg: dict) -> bool:
     key = _whitelist_key(node)
     return bool(key) and key in ladder_site_keys(cfg)
+
+
+def ee_site_key(node: Node, cfg: dict) -> Optional[str]:
+    """The site key when this node is a site declared against the gripper.
+
+    The one exception to "no end-effector edges to a virtual site". A rest
+    position is where the *hand* must go, so a declaration naming ``ee`` as
+    its subject is asking for exactly that pair -- and only that pair. Every
+    other virtual site stays excluded: a hole and a goal region are measured
+    against an object, and an end-effector distance to one would be a number
+    with no meaning in the task.
+    """
+    if not is_virtual_site(node):
+        return None
+    decl = (cfg.get("site_declarations") or {}).get(_whitelist_key(node))
+    if decl is None or getattr(decl, "subject_key", None) != EE_KEY:
+        return None
+    return _whitelist_key(node)
 
 
 def is_declared_site_pair(cfg: dict, site: Node, other: Node) -> bool:
@@ -775,12 +799,33 @@ def ee_object_spatial_edges(
 
     aff_set = cfg.get("affordance_set")
     edges: List[Edge] = []
+    ee_site_pd = _get_bin_spec(cfg, EE_SITE_PLANAR_KEY)
+    ee_site_ho = _get_bin_spec(cfg, EE_SITE_HEIGHT_KEY)
     for node in _ee_object_nodes(graph):
-        # A virtual site has no body for the gripper to be near or above. It
-        # is also, deliberately, given no height family by the miner, so
-        # asking for one raises -- correctly, since inventing a family would
-        # label a distance to nothing on a real object's scale.
+        # A virtual site has no body for the gripper to be near or above, and
+        # the miner gives it no height family, so asking for one raises --
+        # correctly, since inventing a family would label a distance to
+        # nothing on a real object's scale. The single exception is a site
+        # declared against the gripper itself: that pair is the task, and it
+        # carries its own scale rather than borrowing an object's.
         if is_virtual_site(node):
+            if ee_site_key(node, cfg) is None:
+                continue
+            site_xyz = _xyz(node)
+            if ee_site_pd is not None:
+                d = planar_distance_xyz(ee_xyz, site_xyz)
+                edges.append(Edge(
+                    "ee", node.node_id, "planar-distance",
+                    bin_label(d, ee_site_pd[0], ee_site_pd[1]), raw_value=d,
+                    bin_key=EE_SITE_PLANAR_KEY,
+                ))
+            if ee_site_ho is not None:
+                dz = height_offset_xyz(ee_xyz, site_xyz)
+                edges.append(Edge(
+                    "ee", node.node_id, "height-offset",
+                    bin_label(dz, ee_site_ho[0], ee_site_ho[1]), raw_value=dz,
+                    bin_key=EE_SITE_HEIGHT_KEY,
+                ))
             continue
         obj_xyz = _xyz(node)
         structural = is_structural_surface(node, cfg)

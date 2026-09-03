@@ -41,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from scenegraph.core import families as families_rules
 from scenegraph.core.entity_identity import normalize_asset_key
 
 
@@ -715,6 +716,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             log.error("failed to merge existing affordance asset %s: %r", args.out, exc)
             return 2
 
+    # The one extended support plane each supporter presents, derived from the
+    # per-partner anchors already mined against it. Emitted for every object
+    # with support components, not only for the ones a whitelist later calls
+    # structural: classification needs collision extents the whitelist miner
+    # reads, and it runs after this. The runtime consults the plane only for
+    # members marked structural -- but if one is marked and the plane is
+    # absent, ``reference_plane_world`` raises and the height edge disappears.
+    n_surfaces = 0
+    for key, entry in by_object.items():
+        surface = families_rules.reference_surface_from_supports(entry)
+        if surface is not None:
+            entry["reference_surface"] = surface
+            n_surfaces += 1
+    log.info("reference_surface derived for %d/%d object(s)",
+             n_surfaces, len(by_object))
+
     payload = {
         "_README": (
             "Per canonical object key, up to six per-relation component lists "
@@ -724,7 +741,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             "support_components: supporter surface anchors + normal + "
             "footprint radius. bottom_components: supported bottom anchors. "
             "contain_components / key_components: PegInsertionSide-style "
-            "container entry + containee key descriptors (empty for MS-HAB)."
+            "container entry + containee key descriptors (empty for MS-HAB). "
+            "reference_surface: the single partner-independent support plane, "
+            "read only for members a whitelist marks structural_surface."
         ),
         "_schema_version": 4,
         "objects": by_object,

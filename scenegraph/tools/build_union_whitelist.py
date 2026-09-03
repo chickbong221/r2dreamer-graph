@@ -46,6 +46,10 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
     """Union of every per-target whitelist for ``subtask`` in one task group."""
     members: Dict[str, Dict] = {}
     robust: Dict[str, float] = {}
+    # Site declarations are reviewed task semantics, identical in every
+    # per-target file of one group, so the union carries them through rather
+    # than deriving anything.
+    sites: Dict[str, Dict] = {}
     rollouts = 0
     groups: Dict[str, str] = {}
     policies = set()
@@ -67,6 +71,28 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
             merged['roles'] |= set(entry.get('roles') or ())
             merged['interaction_types'] |= set(entry.get('interaction_types') or ())
             merged['supports'] |= set(entry.get('supports') or ())
+            # Classification travels with the member. Dropping it here is
+            # what leaves the runtime demanding a shared height scale the
+            # per-target files deliberately no longer carry.
+            for field in ('family', 'structural_surface',
+                          'structural_surface_reason', 'name'):
+                if entry.get(field) is not None:
+                    previous = merged.get(field)
+                    if previous is not None and previous != entry[field]:
+                        raise ValueError(
+                            f'{key!r} is {field}={previous!r} in one target '
+                            f'whitelist and {entry[field]!r} in another. One '
+                            'member cannot carry two classifications; re-mine '
+                            'the group.')
+                    merged[field] = entry[field]
+        for key, entry in (raw.get('sites') or {}).items():
+            previous = sites.get(key)
+            if previous is not None and previous != entry:
+                raise ValueError(
+                    f'site {key!r} is declared differently in two target '
+                    f'whitelists of this group. Declarations are reviewed '
+                    'task semantics and must be identical.')
+            sites[key] = entry
         for stat, value in (raw.get('bin_stats_robust') or {}).items():
             try:
                 value = float(value)
@@ -93,6 +119,10 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         }
         if entry['supports']:
             out['supports'] = sorted(entry['supports'])
+        for field in ('family', 'structural_surface',
+                      'structural_surface_reason', 'name'):
+            if entry.get(field) is not None:
+                out[field] = entry[field]
         out_members[key] = out
 
     return {
@@ -102,6 +132,7 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         'membership_policy': sorted(policies)[0] if len(policies) == 1 else 'mixed',
         'target': UNION_TARGET,
         'members': out_members,
+        'sites': sites,
         'bin_edges': derive_bin_edges(robust),
         'bin_stats_robust': robust,
         '_n_successful_rollouts': rollouts,

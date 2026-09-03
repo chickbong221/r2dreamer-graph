@@ -50,9 +50,11 @@ from scenegraph.core.affordance import (
     lookup_contact_components,
     lookup_contain_components,
     lookup_key_components,
+    lookup_reference_surface,
     lookup_support_components,
     select_active_component,
     transform_anchors,
+    transform_dir,
 )
 from scenegraph.core.containment import (
     contain_compatibility,
@@ -60,7 +62,14 @@ from scenegraph.core.containment import (
     support_compatibility,
 )
 from scenegraph.configs.loader import default_temporal_k
+from scenegraph.core import families as families_rules
 from scenegraph.core import spatial_metrics
+from scenegraph.core.sites import (
+    SITE_PREFIX,
+    admit_site_members,
+    declared_sites,
+    parse_site_declarations,
+)
 from scenegraph.core.affordance import components_for_partner
 from scenegraph.core.entity_identity import normalize_asset_key
 from scenegraph.core.relation_rules import (
@@ -172,6 +181,7 @@ class _WhitelistBuilder:
         membership_policy: str = MEMBERSHIP_TARGET_SUPPORTERS,
         affordance_set: Optional[AffordanceSet] = None,
         temporal_k: Optional[int] = None,
+        sites: Optional[Dict[str, Any]] = None,
     ):
         if membership_policy not in MEMBERSHIP_POLICIES:
             raise ValueError(
@@ -201,6 +211,15 @@ class _WhitelistBuilder:
         # Per-rollout pose traces used to mine compatibility-change bins once
         # affordance components are available.
         self.pose_rollouts: List[List[Dict[str, Any]]] = []
+        # Collision geometry per member, first reading wins. It is a property
+        # of the built scene rather than of a rollout, and the classification
+        # it feeds -- surface or receptacle -- cannot be recovered from roles:
+        # a bin and a tabletop carry identical ones.
+        self.extents: Dict[str, Dict[str, Any]] = {}
+        # Reviewed site declarations for this task group, injected by the
+        # caller. The miner never invents one: letting it derive a site from
+        # evidence is how PlaceSphere acquired a goal region it does not have.
+        self.sites: Dict[str, Any] = dict(sites or {})
 
     def absorb(self, rollout: Dict[str, Any]) -> None:
         self.rollout_count += 1
@@ -322,6 +341,15 @@ class _WhitelistBuilder:
                     if np.isfinite(fv):
                         bucket.append(fv)
 
+        raw_extents = rollout.get("extents")
+        if isinstance(raw_extents, dict):
+            for raw_key, entry in raw_extents.items():
+                if not isinstance(entry, dict):
+                    continue
+                key = normalize_asset_key(raw_key, entry.get("kind"))
+                if key and key not in self.extents:
+                    self.extents[key] = dict(entry)
+
         raw_pose_samples = rollout.get("pose_samples")
         if isinstance(raw_pose_samples, list):
             self.pose_rollouts.append(raw_pose_samples)
@@ -346,6 +374,93 @@ class _WhitelistBuilder:
                 return s_anchor, None, b_anchor, radial
             return b_anchor, radial, s_anchor, None
         return None
+
+    def _mine_family_height_samples(
+        self, families: Dict[str, Optional[str]],
+    ) -> Dict[str, List[float]]:
+        """One end-effector height scale per family, from the pose trace.
+
+        The collector pools every end-effector height into one
+        ``ee_object_height_offset`` stream -- the target and the counter it
+        sits on alike -- so that stream cannot calibrate a family. It does not
+        have to: ``pose_samples`` already carries ``tcp_pose`` and each
+        member's pose keyed by canonical key, which is enough to reproject
+        every sample onto the scale of the member it was measured against.
+        Reprojection has to happen here rather than at collection because
+        nothing knows which members are surfaces until the extents have been
+        read and classified.
+
+        A structural surface is measured against its mined plane, exactly as
+        ``surface_relative_height`` will at runtime. Everything else uses the
+        signed offset from the member's own origin. Calibrating the table on
+        the metre to its origin while the runtime labels the 15cm to its top
+        is the deadband error this exists to remove.
+        """
+        samples: Dict[str, List[float]] = defaultdict(list)
+        if not self.pose_rollouts or not families:
+            return samples
+        for rollout in self.pose_rollouts:
+            history: Dict[str, Deque[float]] = {}
+            for snap in rollout:
+                if not isinstance(snap, dict):
+                    continue
+                tcp = snap.get("tcp_pose")
+                raw_entities = snap.get("entities")
+                if not isinstance(raw_entities, dict) or tcp is None:
+                    continue
+                try:
+                    tcp_xyz = np.asarray(tcp, dtype=float).reshape(-1)[:3]
+                except (TypeError, ValueError):
+                    continue
+                if tcp_xyz.size < 3 or not np.all(np.isfinite(tcp_xyz)):
+                    continue
+                for raw_key, raw in raw_entities.items():
+                    key = normalize_asset_key(str(raw_key))
+                    family = families.get(key) if key else None
+                    if not family:
+                        continue
+                    node = self._trace_node(str(raw_key), raw)
+                    if node is None or node.pose_world is None:
+                        continue
+                    dz = self._family_height(family, tcp_xyz, node)
+                    if dz is None or not np.isfinite(dz):
+                        continue
+                    stat = spatial_metrics.ee_family_bin_key(family).replace(
+                        "-", "_")
+                    # Magnitude, not the signed value. ``derive_bin_edges``
+                    # builds a symmetric band from a positive half-width, so a
+                    # negative robust value yields no edges at all -- and a
+                    # gripper that spends the episode *below* a member's
+                    # reference height produces only negative offsets. The
+                    # collector's own ee-object stream stores abs() for the
+                    # same reason. Sign is kept in the history below, where
+                    # the change sample needs it.
+                    samples[stat].append(abs(float(dz)))
+                    buf = history.get(key)
+                    if buf is None:
+                        buf = deque(maxlen=self.temporal_k + 1)
+                        history[key] = buf
+                    buf.append(float(dz))
+                    if len(buf) > self.temporal_k:
+                        samples[f"{stat}_change"].append(abs(buf[-1] - buf[0]))
+        return samples
+
+    def _family_height(self, family: str, tcp_xyz, node) -> Optional[float]:
+        """Signed end-effector height on that family's scale, or None."""
+        if family != spatial_metrics.FAMILY_STRUCTURAL:
+            return float(tcp_xyz[2]) - float(node.pose_world[2])
+        surface = lookup_reference_surface(self.affordance_set, node)
+        if surface is None:
+            # Reported by the caller, which knows the member key. Silently
+            # falling back to the origin is the metre of error itself.
+            return None
+        anchor = spatial_metrics.anchor_world(
+            node.pose_world, surface.anchor_obj_frame)
+        normal = transform_dir(
+            node.pose_world, surface.outward_normal_obj_frame)
+        if anchor is None or normal is None:
+            return None
+        return spatial_metrics.surface_height(tcp_xyz, anchor, normal)
 
     def _mine_object_pair_samples(self) -> Dict[str, List[float]]:
         """Object-object scales, measured the way the runtime will measure them.
@@ -810,7 +925,81 @@ class _WhitelistBuilder:
                 self.interaction_count.get(self.target, 0),
             )
 
+        # Classification, before the bins: what a member is decides which
+        # height scale labels it, and an unclassified one would be labelled on
+        # another family's deadband -- which is how one token comes to mean
+        # two heights.
+        structural = families_rules.structural_surfaces(self.extents, members)
+        unclassified = families_rules.unclassified_supporters(
+            self.extents, members)
+        if unclassified:
+            # Raised here, before classification, because the holder rule
+            # would otherwise call this member a receptacle -- a real family,
+            # which then hides it from every later check that looks for a
+            # missing one. Whether it is an extended surface is undecidable
+            # without the extent, and guessing "not a surface" is the ~0.9m
+            # origin error the classification exists to remove.
+            raise ValueError(
+                f"subtask={self.subtask} target={self.target}: "
+                f"{unclassified} support something but have no readable "
+                "collision extent, so they cannot be told apart from a "
+                "tabletop. Extents are read from the simulator at collection "
+                "time and cannot be mined later; re-collect these targets."
+            )
+        holders = {k for k, v in self.supports.items() if v}
+        supported = {s for values in self.supports.values() for s in values}
+        members = admit_site_members(members, self.sites)
+        # Virtual sites are excluded, not merely unclassified. They carry no
+        # interaction types, so rule 5 would call a rest position a goal
+        # marker and hand it that family's height scale -- silently, because
+        # rule 5 returns a family rather than None.
+        families = families_rules.object_families(
+            {k: v for k, v in members.items() if not k.startswith(SITE_PREFIX)},
+            holders, supported, structural,
+        )
+        ambiguous = families_rules.ambiguous_families(families)
+        if ambiguous:
+            # Refused rather than defaulted. See ``ambiguous_families``.
+            raise ValueError(
+                f"subtask={self.subtask} target={self.target}: "
+                f"{len(ambiguous)} member(s) fit no height-family rule: "
+                f"{ambiguous}. They took part in interactions but are neither "
+                "grasped, nor holders, nor extended surfaces, so labelling "
+                "them would borrow another family's deadband."
+            )
+        for key, entry in members.items():
+            if key in structural:
+                entry["structural_surface"] = True
+                entry["structural_surface_reason"] = structural[key]
+            family = families.get(key)
+            if family:
+                entry["family"] = family
+
         object_samples = self._mine_object_pair_samples()
+        # After classification, because which scale a sample belongs on is
+        # exactly what the classification decides.
+        family_samples = self._mine_family_height_samples(families)
+        for key, values in family_samples.items():
+            object_samples[key].extend(values)
+        missing_plane = sorted(
+            key for key, family in families.items()
+            if family == spatial_metrics.FAMILY_STRUCTURAL
+            and lookup_reference_surface(
+                self.affordance_set,
+                Node(node_id=key, node_type="object", name=key,
+                     pose_world=[0.0] * 3 + [1.0, 0.0, 0.0, 0.0],
+                     attributes={"whitelist_key": key})) is None
+        )
+        if missing_plane:
+            raise ValueError(
+                f"subtask={self.subtask} target={self.target}: "
+                f"{missing_plane} are structural surfaces with no "
+                "'reference_surface' in the affordance asset. The runtime "
+                "measures their height against that plane and raises without "
+                "it, and calibrating against the actor origin instead is the "
+                "~0.9m error the classification exists to remove. Re-run "
+                "build_affordances for this task group first."
+            )
         robust, _observed = self._aggregate_bins(object_samples)
         compatibility_samples = self._mine_compatibility_samples(
             derive_bin_edges(robust)
@@ -826,6 +1015,7 @@ class _WhitelistBuilder:
             "membership_policy": self.membership_policy,
             "target": self.target,
             "members": members,
+            "sites": dict(self.sites),
             "bin_edges": bin_edges,
             "bin_stats_robust": robust,
             "bin_stats_observed": observed,
@@ -862,6 +1052,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument(
+        "--sites-dir",
+        default=str(Path(__file__).resolve().parents[1] / "configs" / "sites"),
+        help="Reviewed site declarations, read as <dir>/<task group>.json. "
+             "The miner never derives a site from evidence: letting it do so "
+             "invented a goal region for a task that has none.",
+    )
+    parser.add_argument(
         "--affordance-json",
         default=None,
         help=(
@@ -892,6 +1089,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         else out_dir.parent / "affordances.json"
     )
     affordance_set = load_affordance_set(str(affordance_path))
+
+    # One declaration set per subtask of the group, because a site belongs to
+    # the subtask whose success predicate defines it. The end-effector rest
+    # position is pick's: no other subtask defines an ``ee_rest_thresh``, and
+    # routing by group alone would inject it into a place or open mine.
+    # The subtask is a property of each pickle, so this resolves lazily.
+    declared_cache: Dict[str, Dict[str, Any]] = {}
+
+    def declared_for(subtask: str) -> Dict[str, Any]:
+        if subtask not in declared_cache:
+            found = declared_sites(
+                args.task_group, Path(args.sites_dir), subtask)
+            if found:
+                # Parsed here rather than at first use: a malformed
+                # declaration should stop the mine, not surface as an
+                # unresolvable pair at frame one.
+                parse_site_declarations(
+                    found, where=f"{args.task_group}/{subtask}")
+                log.info("site declarations for %s/%s: %s",
+                         args.task_group, subtask, sorted(found))
+            declared_cache[subtask] = found
+        return declared_cache[subtask]
 
     builders: Dict[Tuple[str, str], _WhitelistBuilder] = {}
     n_rollouts = 0
@@ -947,6 +1166,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     task_group=args.task_group,
                     membership_policy=args.membership_policy,
                     affordance_set=affordance_set,
+                    sites=declared_for(subtask),
                 ),
             )
             builder.absorb(rollout)

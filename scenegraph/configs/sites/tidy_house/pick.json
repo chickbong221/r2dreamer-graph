@@ -1,0 +1,14 @@
+{
+  "task_group": "tidy_house",
+  "subtask": "pick",
+  "sites": {
+    "spatial:ee_rest_site": {
+      "site_type": "point",
+      "subject": "ee",
+      "metric": "euclidean",
+      "source": "origin",
+      "provider": "mshab_ee_rest",
+      "provenance": "MS-HAB PickSubtask success requires the end effector back at rest while still holding the object: norm(tcp - base_link.pose * ee_rest_pos_wrt_base) <= pick_cfg.ee_rest_thresh, both read live. The robot-static and object-static halves of success are separate conditions and are not expressed by this site. Scoped to pick: no other subtask defines an ee_rest_thresh."
+    }
+  }
+}

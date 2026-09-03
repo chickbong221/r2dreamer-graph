@@ -40,8 +40,11 @@ from .whitelist import (
     TASK_LEVEL_TARGET,
     whitelist_path,
 )
+from . import spatial_metrics
 from .spatial_metrics import (
     EE_OBJECT_SCOPE,
+    EE_SITE_HEIGHT_KEY,
+    EE_SITE_PLANAR_KEY,
     OBJECT_OBJECT_SCOPE,
     OBJECT_REGION_PLANAR_KEY,
     OBJECT_SITE_HEIGHT_KEY,
@@ -51,6 +54,23 @@ from .spatial_metrics import (
 )
 
 SCHEDULE_SCHEMA_VERSION = 1
+# A role that names whichever object the subtask is acting on this episode,
+# rather than one fixed member. MS-HAB Pick needs it: one schedule serves
+# nine objects, and a scene can hold two instances of one category, which
+# share a whitelist key and so cannot be told apart by entity id at all.
+#
+# It resolves to the packer's reserved target row instead. That row is a
+# checked contract: ``verify_protected_rows`` refuses to pack a graph whose
+# row 1 is not the flagged, non-padding target, and refuses one that names no
+# target at all while a protected site exists. That is what makes resolving by
+# position sound rather than a guess.
+ACTIVE_TARGET_ROLE = "$active_target"
+# Outside the entity vocabulary on purpose: a real id would be looked up in
+# ``node_ent`` and match some row by accident.
+ACTIVE_TARGET_ENTITY_ID = -1
+# The row it always resolves to. Shared with the packer through the tests
+# rather than through an import, because the packer is an adapter.
+ACTIVE_TARGET_ROW = 1
 # The token a schedule writes in a clause's ``src``/``dst``. Same string as
 # the runtime key, and imported from there rather than restated.
 EE_ROLE = EE_KEY
@@ -219,6 +239,10 @@ def scorable_relations(
         family = families.get(key)
         return bool(family) and bool(bin_edges.get(ee_family_bin_key(family)))
 
+    # Sites whose subject is the gripper. Only these get end-effector spatial
+    # relations; every other virtual site stays excluded.
+    ee_sites = {key for key, decl in (sites or {}).items()
+                if decl.subject_key == EE_KEY}
     ee_planar = bool(bin_edges.get(
         spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")))
     obj_spatial = {r: bool(bin_edges.get(
@@ -231,14 +255,39 @@ def scorable_relations(
             "grasp-compatibility": _has(objects, key, "grasp_components"),
             "contact-compatibility": _has(objects, key, "contact_components"),
             "reached": reached_on(EE_KEY, key),
-            # A virtual site has no body: the end effector is never near it or
-            # above it in any sense the runtime emits, so a clause naming one
-            # would score a fact that is never produced.
-            "planar-distance": (ee_planar and key not in surfaces
-                                and not key.startswith(SITE_PREFIX)),
-            "height-offset": (_ee_height(key)
-                              and not key.startswith(SITE_PREFIX)),
+            # A virtual site has no body: the end effector is never near it
+            # or above it in any sense the runtime emits, so a clause naming
+            # one would score a fact that is never produced. The exception is
+            # a site declared against the gripper -- a rest position is where
+            # the hand goes -- and it is scored on its own scale, never on an
+            # object's.
+            "planar-distance": (
+                bool(bin_edges.get(EE_SITE_PLANAR_KEY))
+                if key in ee_sites
+                else (ee_planar and key not in surfaces
+                      and not key.startswith(SITE_PREFIX))),
+            "height-offset": (
+                bool(bin_edges.get(EE_SITE_HEIGHT_KEY))
+                if key in ee_sites
+                else (_ee_height(key) and not key.startswith(SITE_PREFIX))),
         }
+    # The dynamic target is scorable on a relation only where *every* object
+    # it could resolve to is. One schedule serves nine objects, so a clause
+    # that works for eight and silently scores zero for the ninth is worse
+    # than one that refuses to compile. Candidates are the manipulands: what
+    # the gripper picks up is exactly what a Pick target can be.
+    manipulands = sorted(
+        key for key, entry in members.items()
+        if isinstance(entry, dict)
+        and entry.get("family") == spatial_metrics.FAMILY_MANIPULAND
+    )
+    if manipulands:
+        out[f"{EE_KEY} / {ACTIVE_TARGET_ROLE}"] = {
+            relation: all(out[f"{EE_KEY} / {key}"].get(relation)
+                          for key in manipulands)
+            for relation in out[f"{EE_KEY} / {manipulands[0]}"]
+        }
+
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):
             a, b = keys[i], keys[j]
@@ -400,6 +449,12 @@ def _order(a_key: str, b_key: str) -> Tuple[str, str, bool]:
         return a_key, b_key, False
     if b_key == EE_KEY:
         return b_key, a_key, True
+    if a_key == ACTIVE_TARGET_ROLE or b_key == ACTIVE_TARGET_ROLE:
+        raise ScheduleError(
+            "the active-target role can only be paired with the end effector "
+            "in this schedule: an object-object clause against it would need "
+            "a stored edge order, and the sentinel sorts against nothing"
+        )
     if b_key < a_key:
         return b_key, a_key, True
     return a_key, b_key, False
@@ -445,6 +500,9 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
         )
     role_ids: Dict[str, int] = {}
     for role, key in roles.items():
+        if key == ACTIVE_TARGET_ROLE:
+            role_ids[role] = ACTIVE_TARGET_ENTITY_ID
+            continue
         if key not in members:
             raise ScheduleError(
                 f"{env_id}: role {role!r} names {key!r}, which is not a "
@@ -463,6 +521,8 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
     relations, absolute = build_relation_vocab(), build_absolute_vocab()
 
     def entity_id(key: str) -> int:
+        if key == ACTIVE_TARGET_ROLE:
+            return ACTIVE_TARGET_ENTITY_ID
         return entity_vocab.ee_id if key == EE_KEY else entity_vocab.encode(key)
 
     def key_of(token: str, where: str) -> str:

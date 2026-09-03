@@ -19,7 +19,7 @@ import numpy as np
 from .affordance import canonical_affordance_key
 from .entity_identity import stable_entity_key, stable_node_id
 from .schema import Edge, Graph, Node
-from .node_builder import build_nodes
+from .node_builder import build_nodes, make_object_node
 from .relation_rules import (
     DST_HOLDS,
     HOLDS,
@@ -88,6 +88,10 @@ class GraphBuilder:
         # False: no subtask target exists, so no whitelist is
         # bound per target and no row is reserved.
         self.use_target_flag = bool(use_target_flag)
+        # How many frames the target existed only because it was seeded. A
+        # diagnostic, not a gate: a high count under projected_camera means
+        # the cameras rarely cover the target, which is worth knowing.
+        self._seeded_target_frames = 0
 
         self.temporal = TemporalBuffer(K=cfg["temporal"]["K"])
         self.selector = NodeSelector(cfg)
@@ -371,6 +375,58 @@ class GraphBuilder:
             return None
         return self._entity_admitted
 
+    def _seed_active_target(self, nodes, state, target_id) -> bool:
+        """Give the active target a vertex before any camera has seen it.
+
+        Segmentation is the only way an entity becomes a vertex, so under
+        ``projected_camera`` the target is not in the graph until it is
+        covered by a camera -- and MS-HAB starts the arm facing away from it
+        often enough that the first frames carry no target at all. Every
+        scheduled fact reads that node, so those frames score nothing and the
+        reserved target row sits empty.
+
+        Only the one exact actor. Seeding every whitelisted apartment actor
+        would put furniture the robot never approaches into a graph with eight
+        rows, which is a different failure. ``seed_scene_nodes`` stays
+        tabletop-only for that reason; this is the targeted exception.
+
+        Returns whether a node was added, for the diagnostic counter.
+        """
+        entity = getattr(state, "active_obj", None)
+        if not target_id or entity is None or target_id in nodes:
+            return False
+        node = make_object_node(entity, state)
+        if node.node_id != target_id:
+            # The resolver and the node factory disagree on identity, which
+            # would put an unflagged duplicate of the target in the graph.
+            raise ValueError(
+                f"active target resolves to {target_id!r} but its node builds "
+                f"as {node.node_id!r}; the target flag would name a vertex "
+                "that does not exist"
+            )
+        node.visible = False
+        node.source = "target-seed"
+        nodes[node.node_id] = node
+        return True
+
+    @staticmethod
+    def _protected_site_id(specs) -> Optional[str]:
+        """The declared site whose subject is the end effector, if any.
+
+        At most one: two rest positions would both want row 2, and the
+        schedule has no way to say which. Raises rather than picking.
+        """
+        from .relation_rules import EE_KEY
+
+        keys = sorted(spec.key for spec in (specs or ())
+                      if spec.subject_key == EE_KEY)
+        if len(keys) > 1:
+            raise ValueError(
+                f"{keys} are all declared against the end effector, but only "
+                "one site can hold the reserved row. Declare one."
+            )
+        return keys[0] if keys else None
+
     def _site_specs(self, state):
         """Live geometry for every site the bound asset declares.
 
@@ -593,6 +649,11 @@ class GraphBuilder:
                     active_target_node_id = stable_node_id(state.active_obj)
                 except Exception:
                     active_target_node_id = None
+        # Before admission, so the seeded target passes the same whitelist
+        # gate as a target a camera did see -- a target the asset does not
+        # name is a mining error, not something to smuggle in.
+        if self._seed_active_target(nodes, state, active_target_node_id):
+            self._seeded_target_frames += 1
         built = {k: n for k, n in nodes.items() if n.node_type != "ee"}
         nodes = self.selector.apply_whitelist(nodes)
         self._check_admission(built, nodes)
@@ -626,6 +687,12 @@ class GraphBuilder:
                 active_subtask=state.active_subtask_type,
                 active_obj_id=state.active_obj_id,
                 active_target_node_id=active_target_node_id,
+                # The site whose subject is the gripper gets a reserved row:
+                # it is where the hand must return to, read every frame from
+                # the robot, and the schedule's terminal fact names it. A
+                # site measured against an object (a hole, a goal region) is
+                # an ordinary vertex and keeps arrival order.
+                protected_site_node_id=self._protected_site_id(specs),
                 n_objects=sum(1 for n in ordered if n.node_type == "object"),
                 n_visible=sum(1 for n in ordered if n.visible),
                 n_in_frame=sum(1 for n in ordered if n.in_frame),
