@@ -35,6 +35,7 @@ from scenegraph.core.whitelist import derive_bin_edges
 from scenegraph.tools.build_subtask_whitelists import _WhitelistBuilder
 
 BOWL = "actor:024_bowl"
+CAN = "actor:002_master_chef_can"
 COUNTER = "link:kitchen_counter-0/body"
 TABLE = "actor:frl_apartment_table_01"
 SITES_DIR = Path("scenegraph/configs/sites")
@@ -584,6 +585,75 @@ class UnionPreservationTest(unittest.TestCase):
                 {BOWL: dict(_member(["grasp"]), family=FAMILY_RECEPTACLE)},
             )
         self.assertIn("family", str(ctx.exception))
+
+    def test_two_recorded_names_are_provenance_not_a_conflict(self):
+        """MS-HAB calls the same object ``obj_0`` in the episodes where it is
+        the subtask's target and ``env-7_002_master_chef_can-0`` where it is
+        scenery in another target's. Both describe one canonical member, and
+        treating the pair as contradictory classifications is what stopped
+        the nine-target union from building at all."""
+        merged = self._merge(
+            {CAN: dict(_member(["grasp"]), name="obj_0",
+                       family=FAMILY_MANIPULAND)},
+            {CAN: dict(_member(["contact"]),
+                       name="env-7_002_master_chef_can-0",
+                       family=FAMILY_MANIPULAND)},
+        )
+        entry = merged["members"][CAN]
+        self.assertEqual(entry["names"],
+                         ["env-7_002_master_chef_can-0", "obj_0"])
+
+    def test_the_singular_name_does_not_depend_on_the_read_order(self):
+        """Sorted, not first-seen: the union is regenerated on every prune and
+        must not change because a filename sorted differently."""
+        forward = self._merge(
+            {CAN: dict(_member(["grasp"]), name="obj_0")},
+            {CAN: dict(_member(["contact"]),
+                       name="env-7_002_master_chef_can-0")},
+        )
+        backward = self._merge(
+            {CAN: dict(_member(["contact"]),
+                       name="env-7_002_master_chef_can-0")},
+            {CAN: dict(_member(["grasp"]), name="obj_0")},
+        )
+        self.assertEqual(forward["members"][CAN]["name"],
+                         backward["members"][CAN]["name"])
+        self.assertEqual(forward["members"][CAN]["name"],
+                         "env-7_002_master_chef_can-0")
+
+    def test_one_name_stays_a_bare_name(self):
+        """Nothing gains a plural field it does not need."""
+        merged = self._merge({CAN: dict(_member(["grasp"]), name="obj_0")},
+                             {CAN: dict(_member(["contact"]), name="obj_0")})
+        self.assertEqual(merged["members"][CAN]["name"], "obj_0")
+        self.assertNotIn("names", merged["members"][CAN])
+
+    def test_the_classification_is_still_conflict_checked(self):
+        """Loosening ``name`` must not loosen what it sat next to."""
+        cases = (("family", (FAMILY_MANIPULAND, FAMILY_RECEPTACLE)),
+                 ("structural_surface", (True, False)),
+                 ("structural_surface_reason", ("0.95m", "0.31m")))
+        for field, values in cases:
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as ctx:
+                    self._merge(
+                        {CAN: dict(_member(["grasp"]), name="obj_0",
+                                   **{field: values[0]})},
+                        {CAN: dict(_member(["grasp"]), name="other",
+                                   **{field: values[1]})},
+                    )
+                self.assertIn(field, str(ctx.exception))
+
+    def test_the_nine_target_group_merges(self):
+        """The regression in one line: the shipped raw assets, as mined."""
+        from scenegraph.tools.build_union_whitelist import merge
+        raw = Path("scenegraph/configs/subtask_whitelists_raw/tidy_house")
+        merged = merge(raw, "pick")
+        self.assertEqual(len(merged["_merged_from"]), 9)
+        self.assertEqual(merged["members"][CAN]["names"],
+                         ["env-0_002_master_chef_can-0",
+                          "env-3_002_master_chef_can-0",
+                          "env-7_002_master_chef_can-0", "obj_0"])
 
     def test_a_site_declared_two_ways_is_refused(self):
         from scenegraph.tools.build_union_whitelist import merge

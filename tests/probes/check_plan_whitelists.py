@@ -76,7 +76,13 @@ def main():
     parser.add_argument("--mshab-obj", default="all")
     parser.add_argument("--subtask", default="pick")
     parser.add_argument("--split", default="train")
-    parser.add_argument("--num-build-configs", type=int, default=10)
+    parser.add_argument("--num-build-configs", type=int, default=10,
+                        help="Sorted prefix, as the unpinned env takes. 0 "
+                             "means every configuration.")
+    parser.add_argument("--build-config", nargs="+", default=[],
+                        help="Select these configurations by name instead, "
+                             "the way a pinned experiment does. Fails if one "
+                             "is not in the plan.")
     parser.add_argument(
         "--whitelist-root",
         default=str(ROOT / "scenegraph/configs/subtask_whitelists"),
@@ -105,14 +111,28 @@ def main():
 
     plans = list(plan_data_from_file(plan_path).plans)
     names = sorted({p.build_config_name for p in plans})
-    keep = set(names[: args.num_build_configs]) if args.num_build_configs > 0 else set(names)
+    if args.build_config:
+        # The experiment pins its scene by name. A sorted prefix is a
+        # different selection that happens to coincide when the wanted scene
+        # sorts first, which is exactly when the distinction does not show.
+        missing = sorted(set(args.build_config) - set(names))
+        if missing:
+            print("ERROR: no such build configuration in this plan: "
+                  f"{missing}", file=sys.stderr)
+            print(f"       first few available: {names[:5]}", file=sys.stderr)
+            return 1
+        keep = set(args.build_config)
+        how = f"named: {sorted(keep)}"
+    elif args.num_build_configs > 0:
+        keep = set(names[: args.num_build_configs])
+        how = "the env keeps a prefix of sorted names"
+    else:
+        keep = set(names)
+        how = "every configuration in the plan"
     selected = [p for p in plans if p.build_config_name in keep]
     print(f"plans     : {len(plans)} total, {len(names)} build configs")
-    print(
-        f"selected  : {len(selected)} plans over "
-        f"{min(args.num_build_configs, len(names)) if args.num_build_configs > 0 else len(names)}"
-        " build configs (the env keeps a prefix of sorted names)"
-    )
+    print(f"selected  : {len(selected)} plans over {len(keep)} "
+          f"build configs ({how})")
     print()
 
     # (subtask type, canonical target) -> how many plans name it.

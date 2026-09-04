@@ -13,19 +13,29 @@ already drives the policy to success, so this borrows that stack and adds a
 passive observation cache. Nothing about collection changes, and no
 production path is made to capture graphs.
 
-Asset paths are explicit so the same probe runs against a provisional pilot
-tree now and the final server assets later::
+**The frames are packed the way training packs them.** Scoring reads row
+indices out of ``pack_graph``, not entity ids off the graph: the schedule
+names the target by the ``$active_target`` sentinel, which is not any real
+entity id, so comparing the two directly matched nothing and silently dropped
+every fact about the target -- the facts the schedule is almost entirely made
+of. ``pack_graph`` also runs ``verify_protected_rows``, so a frame whose row 0
+is not the end effector, or whose row 1 is not the flagged target, refuses to
+be scored rather than being scored wrongly.
+
+Asset paths are explicit so the same probe runs against a provisional tree now
+and the final server assets later::
 
     python tests/probes/probe_policy_potential.py \\
-        --whitelist-dir /tmp/mshab_pick_pilot/subtask_whitelists/tidy_house \\
-        --affordance   /tmp/mshab_pick_pilot/affordances/tidy_house.json \\
-        --schedule-dir scenegraph/configs/schedules \\
-        --thresholds   /tmp/mshab_pick_pilot/thresholds.yaml \\
+        --whitelist-dir scenegraph/configs/subtask_whitelists/tidy_house \\
+        --affordance   scenegraph/configs/affordances/tidy_house.json \\
+        --thresholds   scenegraph/configs/thresholds.yaml \\
         --task tidy_house --obj 004_sugar_box --algo rl \\
         --build-config v3_sc0_staging_00.scene_instance.json
 
-LIVE EXECUTION IS PENDING: it needs the simulator, the released checkpoints
-and a re-mined asset. The plumbing below is unit-tested; the rollout is not.
+LIVE EXECUTION IS PENDING: it needs the simulator and the released
+checkpoints. Everything that can be exercised without them -- the packing
+contract, the scoring, the trace report -- is unit-tested in
+``tests/test_potential_probe.py``.
 """
 
 from __future__ import annotations
@@ -34,7 +44,7 @@ import argparse
 import json
 import pathlib
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -47,7 +57,7 @@ class Report:
     def check(self, name, ok, detail=""):
         self.rows.append((bool(ok), name, detail))
 
-    def note(self, name, detail):
+    def note(self, name, detail=""):
         self.rows.append((None, name, detail))
 
     def render(self) -> int:
@@ -60,52 +70,59 @@ class Report:
         return failed
 
 
-def score_frames(graphs, schedule, n_abs, entity, relation, absolute):
-    """``(potentials, valids)`` for recorded graphs, packed as training does.
+def capacity_for(graphs, n_max: int = 0,
+                 e_max: int = 0) -> Tuple[int, int, Dict]:
+    """``(n_max, e_max, occupancy)`` -- measured when not supplied.
+
+    A probe that had to be told the capacity in advance could not answer the
+    capacity question, and packing at exactly the observed peak is what makes
+    an overflow here mean the same thing it would mean in training.
+    """
+    from scenegraph.tools.audit_graph_capacity import (
+        frames_from_graphs, occupancy_report,
+    )
+
+    occupancy = occupancy_report(frames_from_graphs(graphs), None, None)
+    # Three rows are reserved by contract -- end effector, target, site --
+    # so a trace that never showed three nodes still needs room for them.
+    return (int(n_max or max(occupancy["peak_nodes"], 3)),
+            int(e_max or max(occupancy["peak_edges"], 1)),
+            occupancy)
+
+
+def score_frames(graphs, schedule, vocab, *, n_max: int, e_max: int,
+                 n_cams: int = 2):
+    """``(potentials, valids)`` for recorded graphs, packed as training packs.
 
     Separated from the rollout so the arithmetic can be exercised without a
-    simulator: it turns graph objects into the tensors the scorer reads and
-    returns one potential per frame.
+    simulator. Every tensor here is read straight out of ``pack_graph``: node
+    rows, not entity ids, and edge endpoints as row indices, which is the only
+    form the scorer's ``resolve_rows`` is written against.
     """
     import torch
 
     from progress import TaskScheduleReplayPotential
+    from scenegraph.adapters.graph_pack import pack_graph
 
-    scorer = TaskScheduleReplayPotential(schedule, n_abs)
-    entities = list(schedule.entity_ids)
-    row = {ent: i for i, ent in enumerate(entities)}
-    slots = set(schedule.slots)
-
+    scorer = TaskScheduleReplayPotential(
+        schedule, len(vocab.absolute.token_to_id))
     potentials, valids = [], []
     for graph in graphs:
-        node_ent, position = [], {}
-        for node in graph.nodes:
-            key = ("<ee>" if node.node_type == "ee"
-                   else (node.attributes or {}).get("whitelist_key"))
-            position[node.node_id] = len(node_ent)
-            node_ent.append(entity.encode(key) if key else entity.pad_id)
-
-        rel, abs_, src, dst = [], [], [], []
-        for edge in graph.edges:
-            if edge.src not in position or edge.dst not in position:
-                continue
-            slot = (relation.encode(edge.relation),
-                    node_ent[position[edge.src]],
-                    node_ent[position[edge.dst]])
-            if slot not in slots:
-                continue
-            rel.append(slot[0])
-            abs_.append(absolute.encode(edge.label))
-            src.append(row[slot[1]])
-            dst.append(row[slot[2]])
-
+        packed = pack_graph(graph, vocab, n_max=n_max, e_max=e_max,
+                            n_cams=n_cams, use_target_flag=True)
+        node_ent = torch.as_tensor(
+            packed["graph_node_ent"], dtype=torch.long)[None]
+        rel = torch.as_tensor(packed["graph_edge_rel"], dtype=torch.long)
+        # A packed edge slot is real exactly when its relation is not the pad
+        # id -- the same test the encoder and the world model apply.
+        real = rel.ne(vocab.relation.pad_id)
         value, valid = scorer(
-            torch.tensor([entities]),
-            torch.tensor(rel, dtype=torch.long),
-            torch.tensor(abs_, dtype=torch.long),
-            torch.tensor(src, dtype=torch.long),
-            torch.tensor(dst, dtype=torch.long),
-            torch.zeros(len(rel), dtype=torch.long), 1,
+            node_ent,
+            rel[real],
+            torch.as_tensor(packed["graph_edge_abs"], dtype=torch.long)[real],
+            torch.as_tensor(packed["graph_edge_src"], dtype=torch.long)[real],
+            torch.as_tensor(packed["graph_edge_dst"], dtype=torch.long)[real],
+            torch.zeros(int(real.sum()), dtype=torch.long), 1,
         )
         potentials.append(float(value.item()))
         valids.append(bool(valid.item()))
@@ -113,14 +130,11 @@ def score_frames(graphs, schedule, n_abs, entity, relation, absolute):
 
 
 def report_trace(rep, graphs, potentials, valids, discount: float,
-                 n_max=None, e_max=None) -> None:
+                 occupancy=None, n_max=None, e_max=None) -> None:
     """Every acceptance criterion the trace can answer."""
     import torch
 
     from progress import potential_shaping
-    from scenegraph.tools.audit_graph_capacity import (
-        frames_from_graphs, occupancy_report,
-    )
 
     rep.note("frames", f"{len(graphs)}")
     invalid = [i for i, v in enumerate(valids) if not v]
@@ -149,20 +163,14 @@ def report_trace(rep, graphs, potentials, valids, discount: float,
                  f"{total:+.6f} at discount {discount:g} (telescoping is only "
                  "the endpoint difference undiscounted)")
 
-    occupancy = occupancy_report(frames_from_graphs(graphs), n_max, e_max)
-    rep.note("peak occupancy (LOWER bound)",
+    if occupancy is None:
+        return
+    rep.note("peak occupancy (LOWER bound: one episode, one scene)",
              f"{occupancy['peak_nodes']} node(s), "
              f"{occupancy['peak_edges']} edge(s)")
-    rep.note("entity keys seen", f"{occupancy['distinct_entity_keys']}")
-    for frame in occupancy["frames_over_n_max"][:3]:
-        rep.check("within the node budget", False,
-                  f"frame {frame['frame']}: {frame['entity_keys']}")
-    for frame in occupancy["frames_over_e_max"][:3]:
-        rep.check("within the edge budget", False,
-                  f"frame {frame['frame']}: {frame['n_edges']} edges")
-    if not occupancy["frames_over_n_max"] and not occupancy["frames_over_e_max"]:
-        rep.check("within the budgets given", True,
-                  "" if n_max else "(no budget supplied)")
+    rep.note("distinct entity keys in the trace",
+             f"{occupancy['distinct_entity_keys']}")
+    rep.note("packed at", f"n_max={n_max}, e_max={e_max}")
 
 
 def compile_schedule_from(args, entity):
@@ -172,6 +180,58 @@ def compile_schedule_from(args, entity):
         args.task, args.subtask, args.configs, args.schedule_dir,
         args.whitelist_dir)
     return compile_from_source(source, entity)
+
+
+def load_vocabs(args):
+    """The three vocabularies, all from the explicitly named asset tree."""
+    from scenegraph.adapters.graph_vocab import (
+        GraphVocab, build_absolute_vocab, build_entity_vocab,
+        build_relation_vocab, build_temporal_vocab,
+    )
+
+    return GraphVocab(
+        entity=build_entity_vocab(args.whitelist_dir),
+        relation=build_relation_vocab(),
+        absolute=build_absolute_vocab(),
+        temporal=build_temporal_vocab(),
+    )
+
+
+def build_config(args, rep):
+    """``cfg`` for the graph builder, from the paths this run was given.
+
+    ``load_config`` resolves both mined assets from the thresholds file's own
+    directory and the task group. That is right for a training run and wrong
+    for a probe pointed at a tree somewhere else, so both are overridden here
+    and the override is reported -- a probe that silently scored the packaged
+    assets while claiming to score the server's would be worse than one that
+    failed.
+    """
+    from scenegraph.configs.loader import load_config
+    from scenegraph.core.affordance import load_affordance_set
+
+    cfg = load_config(args.thresholds, task_group=args.task,
+                      require_assets=False)
+    affordance = pathlib.Path(args.affordance)
+    if not affordance.is_file():
+        rep.check("the affordance asset exists", False, str(affordance))
+        return None
+    aff = load_affordance_set(str(affordance))
+    if aff.is_empty():
+        rep.check("the affordance asset carries objects", False,
+                  str(affordance))
+        return None
+    cfg["affordance_set"] = aff
+    cfg["affordances"] = dict(cfg.get("affordances") or {},
+                              asset_path_abs=str(affordance))
+    cfg["whitelist_dir"] = args.whitelist_dir
+    cfg["use_target_flag"] = True
+    rep.note("affordance asset", str(affordance))
+    rep.note("whitelist dir", args.whitelist_dir)
+    rep.check("the configured assets are the ones named on the command line",
+              cfg["whitelist_dir"] == args.whitelist_dir
+              and cfg["affordances"]["asset_path_abs"] == str(affordance))
+    return cfg
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -188,34 +248,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--algo", default="rl")
     p.add_argument("--build-config", default="")
     p.add_argument("--ckpt-root", default="")
+    p.add_argument("--asset-dir", default="",
+                   help="ManiSkill data root. The collector wrapper stages "
+                        "under it; pointing it at the config tree would write "
+                        "rollout files into the repository.")
     p.add_argument("--num-envs", type=int, default=4)
+    p.add_argument("--max-episode-steps", type=int, default=200)
     p.add_argument("--max-total-steps", type=int, default=4000)
     p.add_argument("--discount", type=float, default=1.0)
     p.add_argument("--n-max", type=int, default=0)
     p.add_argument("--e-max", type=int, default=0)
+    p.add_argument("--n-cams", type=int, default=2)
     p.add_argument("--out", default="", help="Write the trace as JSON.")
     args = p.parse_args(argv)
 
-    from scenegraph.adapters.graph_vocab import (
-        build_absolute_vocab, build_entity_vocab, build_relation_vocab,
-    )
-
-    entity = build_entity_vocab(args.whitelist_dir)
-    schedule = compile_schedule_from(args, entity)
     rep = Report()
-    rep.note("entity vocabulary", f"{len(entity.token_to_id)} tokens")
+    vocab = load_vocabs(args)
+    schedule = compile_schedule_from(args, vocab.entity)
+    rep.note("entity vocabulary", f"{len(vocab.entity.token_to_id)} tokens")
     rep.note("schedule", f"{len(schedule.phases)} phases, "
                          f"{len(schedule.slots)} distinct facts")
 
-    graphs = rollout_graphs(args, rep)
-    if graphs is None:
+    cfg = build_config(args, rep)
+    if cfg is None:
         rep.render()
         return 1
-    potentials, valids = score_frames(
-        graphs, schedule, len(build_absolute_vocab()), entity,
-        build_relation_vocab(), build_absolute_vocab())
+
+    graphs = rollout_graphs(args, cfg, rep)
+    if not graphs:
+        rep.render()
+        return 1
+
+    n_max, e_max, occupancy = capacity_for(graphs, args.n_max, args.e_max)
+    try:
+        potentials, valids = score_frames(
+            graphs, schedule, vocab, n_max=n_max, e_max=e_max,
+            n_cams=args.n_cams)
+    except (ValueError, RuntimeError) as exc:
+        # ``pack_graph`` raises on a broken protected row and on edge overflow.
+        # Both are results, not crashes: report and stop.
+        rep.check("the frames pack the way training packs them", False,
+                  f"{type(exc).__name__}: {exc}")
+        rep.render()
+        return 1
+    rep.check("the frames pack the way training packs them", True,
+              f"n_max={n_max}, e_max={e_max}, protected rows verified")
     report_trace(rep, graphs, potentials, valids, args.discount,
-                 args.n_max or None, args.e_max or None)
+                 occupancy, n_max, e_max)
 
     if args.out:
         with open(args.out, "w") as handle:
@@ -227,17 +306,39 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 1 if failed else 0
 
 
-def rollout_graphs(args, rep) -> Optional[List[Any]]:
-    """Drive the released policy to one success, recording a graph per step.
-
-    Returns the frames of the first environment that succeeded, or None with a
-    reason already reported.
-    """
+def _env_zero_flag(info, key: str) -> bool:
     import numpy as np
 
-    from scenegraph.adapters.policy_loader import load_policy
-    from scenegraph.configs.loader import load_config
+    value = info.get(key) if isinstance(info, dict) else None
+    if value is None:
+        return False
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    return bool(np.asarray(value).reshape(-1)[0])
+
+
+def rollout_graphs(args, cfg, rep) -> Optional[List[Any]]:
+    """Drive the released policy to one success, recording a graph per step.
+
+    Three things this has to get right, none of which the frames themselves
+    would reveal:
+
+    * **The reset frame.** The graph at reset is a real frame of the episode
+      and the one every temporal delta is differenced from. Building the first
+      graph after the first action skipped it and dated every later frame by
+      one step.
+    * **The raw observation.** The builder reads segmentation, which the
+      policy-side wrappers flatten away. It comes from the cache installed
+      inside the stack, and a probe that read ``None`` there would build
+      frames from nothing and report them as valid.
+    * **Episode boundaries.** ``ignore_terminations=True``, so success does
+      not end the episode and the successful state is observable after the
+      step returns. Truncation still auto-resets, and the frame after one
+      belongs to a different episode -- so the trace restarts there rather
+      than splicing two episodes into one potential curve.
+    """
     from scenegraph.core.graph_builder import GraphBuilder
+    from scenegraph.adapters.policy_loader import load_policy
     from scenegraph.tools.collect_robot_success_states import (
         DEFAULT_CKPT_ALGO, DEFAULT_CKPT_ROOT, _build_env,
     )
@@ -248,41 +349,61 @@ def rollout_graphs(args, rep) -> Optional[List[Any]]:
     if not ckpt_dir.is_dir():
         rep.check("the policy checkpoint exists", False, str(ckpt_dir))
         return None
+    if not args.asset_dir:
+        rep.check("--asset-dir was given", False,
+                  "the collector wrapper stages under it; without it the "
+                  "probe would write rollout files beside the configs")
+        return None
 
     env_args = argparse.Namespace(
         subtask=args.subtask, num_envs=args.num_envs, split="train",
-        build_config=args.build_config, max_episode_steps=200,
+        build_config=args.build_config,
+        max_episode_steps=args.max_episode_steps,
         sensor_width=128, sensor_height=128, frame_stack=3,
-        asset_dir=str(pathlib.Path(args.thresholds).parent))
-    venv, collect, _plan = _build_env(
+        asset_dir=args.asset_dir)
+    venv, _collect, _plan = _build_env(
         args.task, args.obj, env_args, ckpt_dir=ckpt_dir,
         capture_raw_obs=True)
     try:
         obs, _ = venv.reset(seed=0, options=dict(reconfigure=True))
+        cache = getattr(venv.unwrapped, "raw_obs_cache", None)
+        if cache is None or cache.raw_obs is None:
+            rep.check("the raw observation is reachable", False,
+                      "env.unwrapped.raw_obs_cache is unset, so every graph "
+                      "would be built from no observation")
+            return None
+        rep.check("the raw observation is reachable", True,
+                  f"{len(cache.raw_obs)} top-level key(s)")
+
         policy = load_policy(str(ckpt_dir), venv, obs, device="cuda")
-        cfg = load_config(args.thresholds, task_group=args.task,
-                          require_assets=True)
-        cfg["whitelist_dir"] = args.whitelist_dir
-        cfg["use_target_flag"] = True
         builder = GraphBuilder(venv.unwrapped, cfg, env_idx=0,
                                env_id=f"{args.task}/{args.subtask}",
                                use_target_flag=True)
         frames: List[Any] = []
+        boundary, succeeded, restarts = True, False, 0
         for step in range(args.max_total_steps):
-            action = policy.act(obs)
-            obs, _reward, _term, _trunc, info = venv.step(action)
-            raw = getattr(type(venv), "raw_obs", None)
             graph, _m, _c, _r = builder.step(
-                raw, step, episode_boundary=(step == 0), need_masks=False)
+                cache.raw_obs, step, episode_boundary=boundary,
+                need_masks=False)
             frames.append(graph)
-            success = info.get("success")
-            if success is not None and bool(np.asarray(
-                    success.detach().cpu() if hasattr(success, "detach")
-                    else success).reshape(-1)[0]):
-                rep.note("success at step", str(step))
+            if succeeded:
+                rep.note("success at frame",
+                         f"{len(frames) - 1} of {step + 1}")
+                rep.note("episode restarts before it", f"{restarts}")
                 return frames
+            obs, _reward, _term, truncated, info = venv.step(policy.act(obs))
+            succeeded = _env_zero_flag(info, "success")
+            import numpy as np
+            boundary = bool(np.asarray(
+                truncated.detach().cpu() if hasattr(truncated, "detach")
+                else truncated).reshape(-1)[0])
+            if boundary and not succeeded:
+                # Auto-reset: the next observation opens a different episode,
+                # and a potential curve spanning two of them means nothing.
+                frames, restarts = [], restarts + 1
         rep.check("the policy reached a success", False,
-                  f"none in {args.max_total_steps} steps")
+                  f"none in {args.max_total_steps} steps, "
+                  f"{restarts} episode(s)")
         return None
     finally:
         venv.close()

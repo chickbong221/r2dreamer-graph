@@ -65,11 +65,17 @@ def vocabulary_report(whitelist_dir: str) -> Dict[str, Any]:
 
 def static_bound(union_path: str,
                  reserved_rows: int = DEFAULT_RESERVED_ROWS) -> Dict[str, Any]:
-    """The most rows a scene admitting every union member could need.
+    """One row per canonical member, plus the end effector.
 
-    Loose on purpose: it assumes every member coexists, which no single build
-    configuration need do. It is an upper bound, so a capacity at or above it
-    cannot overflow -- and one below it is not thereby wrong, only unproven.
+    Loose in one direction and **not a bound at all** in another. Loose,
+    because it assumes every member coexists, which no single build
+    configuration need do. Not a bound, because a row is an *instance* and a
+    member is a *key*: a scene holding two bowls packs two rows against one
+    whitelist key, and ``_row_assignment`` is written for exactly that case.
+
+    So a capacity at or above this number can still overflow, and the only
+    thing that settles it is counting simultaneous instances in real frames --
+    see ``occupancy_report``'s ``peak_instances_per_key``.
     """
     with open(union_path) as handle:
         payload = json.load(handle)
@@ -84,9 +90,12 @@ def static_bound(union_path: str,
         # (target and site), so they are not added again -- but a reserved row
         # standing empty still costs a slot, which is what ``reserved_rows``
         # accounts for.
-        "nodes_upper_bound": 1 + len(members),
+        "nodes_one_row_per_key": 1 + len(members),
         "reserved_rows": int(reserved_rows),
         "ordinary_rows_needed": max(0, len(physical) - 1),
+        # Stated rather than assumed. Nothing in the assets says how many
+        # instances of one key a scene spawns, so nothing here can bound it.
+        "assumes_one_instance_per_key": True,
     }
 
 
@@ -101,6 +110,11 @@ def occupancy_report(frames: Iterable[Dict[str, Any]],
     the scene never admitted what is in it.
     """
     peak_nodes = peak_edges = 0
+    # A row is an instance and an entity key is a category: two bowls in one
+    # scene are two rows sharing one key. Nothing in the assets says how many
+    # a scene spawns, so this is the only place the question is answerable.
+    peak_instances = 1
+    peak_duplicate = ""
     peak_frame: Dict[str, Any] = {}
     over_node: List[Dict[str, Any]] = []
     over_edge: List[Dict[str, Any]] = []
@@ -113,6 +127,11 @@ def occupancy_report(frames: Iterable[Dict[str, Any]],
         keys = list(frame.get("entity_keys") or ())
         edges = int(frame.get("n_edges") or 0)
         seen.update(keys)
+        within = Counter(keys)
+        if within:
+            key, count = within.most_common(1)[0]
+            if count > peak_instances:
+                peak_instances, peak_duplicate = count, key
         if len(node_ids) > peak_nodes:
             peak_nodes = len(node_ids)
             peak_frame = {"frame": frame.get("frame"),
@@ -132,6 +151,8 @@ def occupancy_report(frames: Iterable[Dict[str, Any]],
         "n_frames": n_frames,
         "peak_nodes": peak_nodes,
         "peak_edges": peak_edges,
+        "peak_instances_per_key": peak_instances,
+        "peak_duplicate_key": peak_duplicate,
         "peak_frame": peak_frame,
         "distinct_entity_keys": sorted(seen),
         "entity_key_frequency": dict(seen.most_common()),
@@ -183,7 +204,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     union = os.path.join(args.whitelist_dir, f"{args.subtask}_all.json")
     if os.path.isfile(union):
         bound = static_bound(union, args.reserved_rows)
-        print(f"  static UPPER bound on rows: {bound['nodes_upper_bound']} "
+        print(f"  rows at one instance per key: "
+              f"{bound['nodes_one_row_per_key']} "
               f"(ee + {len(bound['physical_members'])} physical + "
               f"{len(bound['site_members'])} site)")
         print(f"  physical members: {bound['physical_members']}")
@@ -196,11 +218,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         report = occupancy_report(frames)
         print(f"  observed peak (LOWER bound): {report['peak_nodes']} node(s), "
               f"{report['peak_edges']} edge(s) over {report['n_frames']} frame(s)")
+        print(f"  most simultaneous instances of one key: "
+              f"{report['peak_instances_per_key']} "
+              f"({report['peak_duplicate_key'] or 'none duplicated'})")
         print(f"  distinct entity keys seen: {report['distinct_entity_keys']}")
+    else:
+        print("  no --occupancy-json: simultaneous instances unmeasured, so "
+              "no row count here is an upper bound")
 
-    print("\n  Neither number is a capacity. The upper bound is safe and "
-          "loose; the observed peak is a floor. Setting n_max and e_max is a "
-          "decision against the final assets and a per-configuration audit.")
+    print("\n  Neither number is a capacity. A key is not a row -- a scene "
+          "holding two bowls packs two rows against one key -- so the static "
+          "count bounds nothing until live frames say how many instances "
+          "coexist. The observed peak is a floor. Setting n_max and e_max is "
+          "a decision against the final assets and a per-configuration audit.")
     return 0
 
 

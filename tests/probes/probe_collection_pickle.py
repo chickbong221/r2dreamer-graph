@@ -45,7 +45,20 @@ class Report:
         return failed
 
 
-def analyse(path, wanted_config=""):
+def _members(whitelist_path):
+    """``{canonical key: family or None}`` from a mined whitelist, or {}."""
+    if not whitelist_path:
+        return {}
+    import json
+    with open(whitelist_path) as handle:
+        raw = json.load(handle)
+    return {k: (e or {}).get("family")
+            for k, e in (raw.get("members") or {}).items()
+            if not k.startswith("spatial:")}
+
+
+def analyse(path, wanted_config="", members=None):
+    members = members or {}
     with open(path, "rb") as handle:
         payload = pickle.load(handle)
     rollouts = payload.get("interaction_rollouts") or []
@@ -144,6 +157,42 @@ def analyse(path, wanted_config=""):
                      for s in samples)
         rep.check("reached agrees with distance vs tolerance", agrees, "")
 
+    # ---- pose trace ------------------------------------------------------ #
+    # The per-family end-effector height scales are reprojected from this
+    # trace at mining time, not recorded by the collector, so a member absent
+    # from it silently calibrates no scale -- and the graph builder then
+    # refuses the whole asset for a bin it cannot find. That is exactly how
+    # tidy_house ended up classifying six structural surfaces and calibrating
+    # none of them.
+    snaps = [s for r in rollouts for s in (r.get("pose_samples") or [])]
+    rep.check("pose snapshots were recorded", bool(snaps), f"{len(snaps)}")
+    if snaps:
+        seen = Counter(
+            key for s in snaps for key in (s.get("entities") or {}))
+        rep.note("entities in the pose trace",
+                 ", ".join(f"{k} x{n}" for k, n in sorted(seen.items())))
+        posed = Counter(
+            key for s in snaps
+            for key, e in (s.get("entities") or {}).items()
+            if isinstance(e, dict) and e.get("pose"))
+        no_pose = sorted(set(seen) - set(posed))
+        rep.check("every traced entity carries a pose", not no_pose,
+                  f"missing: {no_pose}" if no_pose else "")
+        if members:
+            absent = sorted(set(members) - set(seen))
+            rep.check(
+                "every whitelist member appears in the pose trace",
+                not absent,
+                f"absent: {absent}" if absent else f"{len(members)} member(s)")
+            for key in sorted(members):
+                if members[key] and key in seen:
+                    rep.note(f"  {key}", f"family={members[key]} "
+                                         f"x{seen[key]} snapshot(s)")
+                elif members[key]:
+                    rep.note(f"  {key}",
+                             f"family={members[key]} -- NOT TRACED, so its "
+                             "family scale calibrates from nothing")
+
     keys = Counter(
         key for r in rollouts for key in (r.get("bin_samples") or {})
     )
@@ -159,8 +208,16 @@ def main():
     p.add_argument("pickles", nargs="+")
     p.add_argument("--build-config", default="",
                    help="Assert every rollout came from this configuration.")
+    p.add_argument("--whitelist", default="",
+                   help="A mined whitelist whose members the pose trace must "
+                        "cover. Each family scale is reprojected from that "
+                        "trace, so a member missing from it calibrates "
+                        "nothing and the asset is refused at graph-builder "
+                        "startup.")
     args = p.parse_args()
-    failed = sum(analyse(path, args.build_config) for path in args.pickles)
+    members = _members(args.whitelist)
+    failed = sum(analyse(path, args.build_config, members)
+                 for path in args.pickles)
     print(f"\n{'all checks passed' if not failed else str(failed) + ' CHECK(S) FAILED'}")
     return 1 if failed else 0
 

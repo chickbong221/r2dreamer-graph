@@ -68,15 +68,23 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         for key, entry in (raw.get('members') or {}).items():
             merged = members.setdefault(
                 key, {'roles': set(), 'interaction_types': set(),
-                      'supports': set(), 'kind': entry.get('kind')})
+                      'supports': set(), 'names': set(),
+                      'kind': entry.get('kind')})
             merged['roles'] |= set(entry.get('roles') or ())
             merged['interaction_types'] |= set(entry.get('interaction_types') or ())
             merged['supports'] |= set(entry.get('supports') or ())
+            # The simulator's instance label, which is provenance rather than
+            # classification: the same canonical member is ``obj_0`` in the
+            # episodes where it is the subtask's target and
+            # ``env-7_002_master_chef_can-0`` where it is scenery in another
+            # target's. Both are true of the same object, so both are kept.
+            if entry.get('name'):
+                merged['names'].add(str(entry['name']))
             # Classification travels with the member. Dropping it here is
             # what leaves the runtime demanding a shared height scale the
             # per-target files deliberately no longer carry.
             for field in ('family', 'structural_surface',
-                          'structural_surface_reason', 'name'):
+                          'structural_surface_reason'):
                 if entry.get(field) is not None:
                     previous = merged.get(field)
                     if previous is not None and previous != entry[field]:
@@ -128,8 +136,15 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         }
         if entry['supports']:
             out['supports'] = sorted(entry['supports'])
+        if entry['names']:
+            # Sorted rather than first-seen, so the union does not depend on
+            # which per-target file happened to be read first. Every observed
+            # label is kept beside it when they disagree.
+            out['name'] = sorted(entry['names'])[0]
+            if len(entry['names']) > 1:
+                out['names'] = sorted(entry['names'])
         for field in ('family', 'structural_surface',
-                      'structural_surface_reason', 'name',
+                      'structural_surface_reason',
                       families.UNRESOLVED_FIELD):
             if entry.get(field) is not None:
                 out[field] = entry[field]

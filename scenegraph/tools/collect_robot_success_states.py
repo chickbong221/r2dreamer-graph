@@ -265,8 +265,6 @@ def assert_pinned_build_config(venv, requested: str) -> None:
         )
     print(f"[env] verified after reset: every sub-scene is {requested!r}",
           flush=True)
-
-
 class RawObsCache:
     """Keep the last raw observation without altering it.
 
@@ -275,24 +273,33 @@ class RawObsCache:
     thing it must not do is change what the policy sees -- so this returns the
     observation unmodified and only remembers it. Opt-in: no collection run
     builds it, and graph capture is never mandatory here.
+
+    The cached observation is reachable as ``env.unwrapped.raw_obs_cache``.
+    It used to live on the wrapper class, which meant a caller holding the
+    outermost vector env read that env's own class attribute -- absent, so
+    ``None`` -- and every frame it built came from no observation at all,
+    silently. Naming it on the base env gives one place to look that does not
+    depend on where in the wrapper stack the caller is standing.
     """
-
-    def __init__(self, env):
-        import gymnasium as gym
-
-        self._cls = gym.ObservationWrapper
-        self.raw_obs = None
 
     @staticmethod
     def wrap(env):
         import gymnasium as gym
 
         class _Cache(gym.ObservationWrapper):
-            raw_obs = None
+            def __init__(self, inner):
+                super().__init__(inner)
+                # Per instance, not per class: two envs in one process would
+                # otherwise overwrite each other's last observation.
+                self.raw_obs = None
 
             def observation(self, obs):
-                type(self).raw_obs = obs
+                self.raw_obs = obs
                 return obs
+
+        cache = _Cache(env)
+        env.unwrapped.raw_obs_cache = cache
+        return cache
 
         return _Cache(env)
 
