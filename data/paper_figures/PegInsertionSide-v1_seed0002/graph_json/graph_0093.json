@@ -1,0 +1,431 @@
+{
+  "frame": 93,
+  "env_id": "PegInsertionSide-v1",
+  "camera": "base_camera",
+  "nodes": [
+    {
+      "node_id": "ee",
+      "node_type": "ee",
+      "name": "end_effector",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        12,
+        13
+      ],
+      "pixel_area": 1584,
+      "pose_world": [
+        -0.05298799276351929,
+        -0.12460390478372574,
+        0.053569495677948,
+        -0.0019095854368060827,
+        0.6873010396957397,
+        0.7263698577880859,
+        -0.0007716563413850963
+      ],
+      "bbox": [
+        [
+          0.25999999046325684,
+          0.4659999907016754,
+          0.6380000114440918,
+          0.7260000109672546
+        ]
+      ],
+      "appearance": null,
+      "index": 0,
+      "source": "segmentation",
+      "attributes": {}
+    },
+    {
+      "node_id": "actor:box_with_hole",
+      "node_type": "object",
+      "name": "box_with_hole",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        19
+      ],
+      "pixel_area": 929,
+      "pose_world": [
+        0.011903636157512665,
+        0.28850653767585754,
+        0.10243979841470718,
+        0.818752646446228,
+        0.0,
+        -3.725290298461914e-09,
+        0.5741463899612427
+      ],
+      "bbox": [
+        [
+          0.4779999852180481,
+          0.6159999966621399,
+          0.328000009059906,
+          0.4620000123977661
+        ]
+      ],
+      "appearance": null,
+      "index": 1,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:box_with_hole",
+        "body_type": "kinematic",
+        "whitelist_key": "actor:box_with_hole",
+        "whitelist_roles": [
+          "interacted",
+          "support"
+        ],
+        "interaction_types": [
+          "contact",
+          "contain",
+          "support"
+        ]
+      }
+    },
+    {
+      "node_id": "actor:peg",
+      "node_type": "object",
+      "name": "peg",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        18
+      ],
+      "pixel_area": 3916,
+      "pose_world": [
+        -0.05499552935361862,
+        -0.06305232644081116,
+        0.05389856919646263,
+        0.6947629451751709,
+        -0.0009989137761294842,
+        0.0020833234302699566,
+        0.7192351222038269
+      ],
+      "bbox": [
+        [
+          0.3019999861717224,
+          0.42800000309944153,
+          0.6380000114440918,
+          0.8100000023841858
+        ]
+      ],
+      "appearance": null,
+      "index": 2,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:peg",
+        "body_type": "dynamic",
+        "whitelist_key": "actor:peg",
+        "whitelist_roles": [
+          "interacted"
+        ],
+        "interaction_types": [
+          "contact",
+          "contain",
+          "grasp",
+          "support"
+        ],
+        "affordance_a_star": 151
+      }
+    },
+    {
+      "node_id": "actor:table-workspace",
+      "node_type": "object",
+      "name": "table-workspace",
+      "visible": true,
+      "in_frame": true,
+      "segmentation_ids": [
+        16
+      ],
+      "pixel_area": 102588,
+      "pose_world": [
+        -0.11999999731779099,
+        0.0,
+        -0.9196429252624512,
+        0.7071068286895752,
+        0.0,
+        0.0,
+        0.7071068286895752
+      ],
+      "bbox": [
+        [
+          0.0,
+          1.0,
+          0.40400001406669617,
+          1.0
+        ]
+      ],
+      "appearance": null,
+      "index": 3,
+      "source": "segmentation",
+      "attributes": {
+        "is_actor": true,
+        "is_link": false,
+        "is_articulation_link": false,
+        "entity_kind": "actor",
+        "entity_key": "actor:table-workspace",
+        "body_type": "kinematic",
+        "whitelist_key": "actor:table-workspace",
+        "whitelist_roles": [
+          "interacted",
+          "support"
+        ],
+        "interaction_types": [
+          "contact",
+          "support"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "src": "ee",
+      "dst": "actor:box_with_hole",
+      "relation": "planar-distance",
+      "label": "very-far",
+      "temp_label": "decrease-slow",
+      "raw_value": 0.4181759930617462,
+      "attributes": {},
+      "bin_key": "ee-object-planar-distance"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:box_with_hole",
+      "relation": "height-offset",
+      "label": "far-below",
+      "temp_label": "increase-slow",
+      "raw_value": -0.048870302736759186,
+      "attributes": {},
+      "bin_key": "ee-receptacle-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "planar-distance",
+      "label": "very-near",
+      "temp_label": "stable",
+      "raw_value": 0.06158430806353628,
+      "attributes": {},
+      "bin_key": "ee-object-planar-distance"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "height-offset",
+      "label": "level",
+      "temp_label": "stable",
+      "raw_value": -0.0003290735185146332,
+      "attributes": {},
+      "bin_key": "ee-manipuland-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "relation": "height-offset",
+      "label": "above",
+      "temp_label": "increase-slow",
+      "raw_value": 0.05356942094039918,
+      "attributes": {},
+      "bin_key": "ee-structural-surface-height-offset"
+    },
+    {
+      "src": "ee",
+      "dst": "actor:box_with_hole",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "contact",
+      "label": "holds",
+      "temp_label": null,
+      "raw_value": 47.18899555102346,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "grasp",
+      "label": "holds",
+      "temp_label": null,
+      "raw_value": 1.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:table-workspace",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "grasp-compatibility",
+      "label": "match",
+      "temp_label": null,
+      "raw_value": 0.09142847627917898,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "ee",
+      "dst": "actor:peg",
+      "relation": "contact-compatibility",
+      "label": "match",
+      "temp_label": null,
+      "raw_value": 0.06182152557104787,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "planar-distance",
+      "label": "far",
+      "temp_label": "decrease-slow",
+      "raw_value": 0.24630723441549926,
+      "attributes": {},
+      "bin_key": "object-object-planar-distance"
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "height-offset",
+      "label": "above",
+      "temp_label": "decrease-slow",
+      "raw_value": 0.042822851481939074,
+      "attributes": {},
+      "bin_key": "object-object-height-offset"
+    },
+    {
+      "src": "actor:peg",
+      "dst": "actor:table-workspace",
+      "relation": "height-offset",
+      "label": "above",
+      "temp_label": "increase-slow",
+      "raw_value": 0.03470542377545477,
+      "attributes": {},
+      "bin_key": "object-object-height-offset"
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "contain",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {
+        "contain_role": "container"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "support",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:peg",
+      "dst": "actor:table-workspace",
+      "relation": "contact",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:peg",
+      "dst": "actor:table-workspace",
+      "relation": "support",
+      "label": "not-holds",
+      "temp_label": null,
+      "raw_value": 0.0,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "contact-compatibility",
+      "label": "unobserved",
+      "temp_label": null,
+      "raw_value": 0.5660466436161687,
+      "attributes": {},
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "support-compatibility",
+      "label": "unobserved",
+      "temp_label": null,
+      "raw_value": 0.6973872815792165,
+      "attributes": {
+        "support_role": "supporter"
+      },
+      "bin_key": null
+    },
+    {
+      "src": "actor:box_with_hole",
+      "dst": "actor:peg",
+      "relation": "contain-compatibility",
+      "label": "unobserved",
+      "temp_label": null,
+      "raw_value": 0.7477956749205142,
+      "attributes": {
+        "contain_role": "container"
+      },
+      "bin_key": null
+    }
+  ],
+  "meta": {
+    "is_mshab": false,
+    "active_subtask": null,
+    "active_obj_id": null,
+    "active_target_node_id": null,
+    "n_objects": 3,
+    "n_visible": 4,
+    "n_in_frame": 4,
+    "hidden_nodes": [
+      "spatial:hole_site"
+    ]
+  }
+}

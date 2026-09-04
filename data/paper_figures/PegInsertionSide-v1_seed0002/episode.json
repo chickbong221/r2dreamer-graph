@@ -1,0 +1,1822 @@
+{
+  "env_id": "PegInsertionSide-v1",
+  "robot_uids": "panda_wristcam",
+  "sensor_size": [
+    500,
+    500
+  ],
+  "frame_cameras": {
+    "head": "base_camera",
+    "wrist": "hand_camera"
+  },
+  "graph_cameras": [
+    "base_camera"
+  ],
+  "frame_annotations": false,
+  "hidden_nodes": [
+    "spatial:hole_site"
+  ],
+  "attempt": {
+    "seed": 2,
+    "success": true,
+    "steps": 178,
+    "error": null
+  },
+  "control_mode": "pd_joint_pos",
+  "stride": 1,
+  "whitelist_dir": "/root/projects/r2dreamer-graph/scenegraph/configs/subtask_whitelists/PegInsertionSide-v1",
+  "name": "PegInsertionSide-v1_seed0002",
+  "exported_frames": 179,
+  "steps": [
+    {
+      "index": 0,
+      "step": 0,
+      "head": "frames/head/frame_0000.png",
+      "wrist": "frames/wrist/frame_0000.png",
+      "n_nodes": 4,
+      "n_edges": 24,
+      "graph": "graphs/graph_0000.png",
+      "graph_json": "graph_json/graph_0000.json"
+    },
+    {
+      "index": 1,
+      "step": 1,
+      "head": "frames/head/frame_0001.png",
+      "wrist": "frames/wrist/frame_0001.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0001.png",
+      "graph_json": "graph_json/graph_0001.json"
+    },
+    {
+      "index": 2,
+      "step": 2,
+      "head": "frames/head/frame_0002.png",
+      "wrist": "frames/wrist/frame_0002.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0002.png",
+      "graph_json": "graph_json/graph_0002.json"
+    },
+    {
+      "index": 3,
+      "step": 3,
+      "head": "frames/head/frame_0003.png",
+      "wrist": "frames/wrist/frame_0003.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0003.png",
+      "graph_json": "graph_json/graph_0003.json"
+    },
+    {
+      "index": 4,
+      "step": 4,
+      "head": "frames/head/frame_0004.png",
+      "wrist": "frames/wrist/frame_0004.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0004.png",
+      "graph_json": "graph_json/graph_0004.json"
+    },
+    {
+      "index": 5,
+      "step": 5,
+      "head": "frames/head/frame_0005.png",
+      "wrist": "frames/wrist/frame_0005.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0005.png",
+      "graph_json": "graph_json/graph_0005.json"
+    },
+    {
+      "index": 6,
+      "step": 6,
+      "head": "frames/head/frame_0006.png",
+      "wrist": "frames/wrist/frame_0006.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0006.png",
+      "graph_json": "graph_json/graph_0006.json"
+    },
+    {
+      "index": 7,
+      "step": 7,
+      "head": "frames/head/frame_0007.png",
+      "wrist": "frames/wrist/frame_0007.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0007.png",
+      "graph_json": "graph_json/graph_0007.json"
+    },
+    {
+      "index": 8,
+      "step": 8,
+      "head": "frames/head/frame_0008.png",
+      "wrist": "frames/wrist/frame_0008.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0008.png",
+      "graph_json": "graph_json/graph_0008.json"
+    },
+    {
+      "index": 9,
+      "step": 9,
+      "head": "frames/head/frame_0009.png",
+      "wrist": "frames/wrist/frame_0009.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0009.png",
+      "graph_json": "graph_json/graph_0009.json"
+    },
+    {
+      "index": 10,
+      "step": 10,
+      "head": "frames/head/frame_0010.png",
+      "wrist": "frames/wrist/frame_0010.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0010.png",
+      "graph_json": "graph_json/graph_0010.json"
+    },
+    {
+      "index": 11,
+      "step": 11,
+      "head": "frames/head/frame_0011.png",
+      "wrist": "frames/wrist/frame_0011.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0011.png",
+      "graph_json": "graph_json/graph_0011.json"
+    },
+    {
+      "index": 12,
+      "step": 12,
+      "head": "frames/head/frame_0012.png",
+      "wrist": "frames/wrist/frame_0012.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0012.png",
+      "graph_json": "graph_json/graph_0012.json"
+    },
+    {
+      "index": 13,
+      "step": 13,
+      "head": "frames/head/frame_0013.png",
+      "wrist": "frames/wrist/frame_0013.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0013.png",
+      "graph_json": "graph_json/graph_0013.json"
+    },
+    {
+      "index": 14,
+      "step": 14,
+      "head": "frames/head/frame_0014.png",
+      "wrist": "frames/wrist/frame_0014.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0014.png",
+      "graph_json": "graph_json/graph_0014.json"
+    },
+    {
+      "index": 15,
+      "step": 15,
+      "head": "frames/head/frame_0015.png",
+      "wrist": "frames/wrist/frame_0015.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0015.png",
+      "graph_json": "graph_json/graph_0015.json"
+    },
+    {
+      "index": 16,
+      "step": 16,
+      "head": "frames/head/frame_0016.png",
+      "wrist": "frames/wrist/frame_0016.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0016.png",
+      "graph_json": "graph_json/graph_0016.json"
+    },
+    {
+      "index": 17,
+      "step": 17,
+      "head": "frames/head/frame_0017.png",
+      "wrist": "frames/wrist/frame_0017.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0017.png",
+      "graph_json": "graph_json/graph_0017.json"
+    },
+    {
+      "index": 18,
+      "step": 18,
+      "head": "frames/head/frame_0018.png",
+      "wrist": "frames/wrist/frame_0018.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0018.png",
+      "graph_json": "graph_json/graph_0018.json"
+    },
+    {
+      "index": 19,
+      "step": 19,
+      "head": "frames/head/frame_0019.png",
+      "wrist": "frames/wrist/frame_0019.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0019.png",
+      "graph_json": "graph_json/graph_0019.json"
+    },
+    {
+      "index": 20,
+      "step": 20,
+      "head": "frames/head/frame_0020.png",
+      "wrist": "frames/wrist/frame_0020.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0020.png",
+      "graph_json": "graph_json/graph_0020.json"
+    },
+    {
+      "index": 21,
+      "step": 21,
+      "head": "frames/head/frame_0021.png",
+      "wrist": "frames/wrist/frame_0021.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0021.png",
+      "graph_json": "graph_json/graph_0021.json"
+    },
+    {
+      "index": 22,
+      "step": 22,
+      "head": "frames/head/frame_0022.png",
+      "wrist": "frames/wrist/frame_0022.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0022.png",
+      "graph_json": "graph_json/graph_0022.json"
+    },
+    {
+      "index": 23,
+      "step": 23,
+      "head": "frames/head/frame_0023.png",
+      "wrist": "frames/wrist/frame_0023.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0023.png",
+      "graph_json": "graph_json/graph_0023.json"
+    },
+    {
+      "index": 24,
+      "step": 24,
+      "head": "frames/head/frame_0024.png",
+      "wrist": "frames/wrist/frame_0024.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0024.png",
+      "graph_json": "graph_json/graph_0024.json"
+    },
+    {
+      "index": 25,
+      "step": 25,
+      "head": "frames/head/frame_0025.png",
+      "wrist": "frames/wrist/frame_0025.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0025.png",
+      "graph_json": "graph_json/graph_0025.json"
+    },
+    {
+      "index": 26,
+      "step": 26,
+      "head": "frames/head/frame_0026.png",
+      "wrist": "frames/wrist/frame_0026.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0026.png",
+      "graph_json": "graph_json/graph_0026.json"
+    },
+    {
+      "index": 27,
+      "step": 27,
+      "head": "frames/head/frame_0027.png",
+      "wrist": "frames/wrist/frame_0027.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0027.png",
+      "graph_json": "graph_json/graph_0027.json"
+    },
+    {
+      "index": 28,
+      "step": 28,
+      "head": "frames/head/frame_0028.png",
+      "wrist": "frames/wrist/frame_0028.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0028.png",
+      "graph_json": "graph_json/graph_0028.json"
+    },
+    {
+      "index": 29,
+      "step": 29,
+      "head": "frames/head/frame_0029.png",
+      "wrist": "frames/wrist/frame_0029.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0029.png",
+      "graph_json": "graph_json/graph_0029.json"
+    },
+    {
+      "index": 30,
+      "step": 30,
+      "head": "frames/head/frame_0030.png",
+      "wrist": "frames/wrist/frame_0030.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0030.png",
+      "graph_json": "graph_json/graph_0030.json"
+    },
+    {
+      "index": 31,
+      "step": 31,
+      "head": "frames/head/frame_0031.png",
+      "wrist": "frames/wrist/frame_0031.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0031.png",
+      "graph_json": "graph_json/graph_0031.json"
+    },
+    {
+      "index": 32,
+      "step": 32,
+      "head": "frames/head/frame_0032.png",
+      "wrist": "frames/wrist/frame_0032.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0032.png",
+      "graph_json": "graph_json/graph_0032.json"
+    },
+    {
+      "index": 33,
+      "step": 33,
+      "head": "frames/head/frame_0033.png",
+      "wrist": "frames/wrist/frame_0033.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0033.png",
+      "graph_json": "graph_json/graph_0033.json"
+    },
+    {
+      "index": 34,
+      "step": 34,
+      "head": "frames/head/frame_0034.png",
+      "wrist": "frames/wrist/frame_0034.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0034.png",
+      "graph_json": "graph_json/graph_0034.json"
+    },
+    {
+      "index": 35,
+      "step": 35,
+      "head": "frames/head/frame_0035.png",
+      "wrist": "frames/wrist/frame_0035.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0035.png",
+      "graph_json": "graph_json/graph_0035.json"
+    },
+    {
+      "index": 36,
+      "step": 36,
+      "head": "frames/head/frame_0036.png",
+      "wrist": "frames/wrist/frame_0036.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0036.png",
+      "graph_json": "graph_json/graph_0036.json"
+    },
+    {
+      "index": 37,
+      "step": 37,
+      "head": "frames/head/frame_0037.png",
+      "wrist": "frames/wrist/frame_0037.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0037.png",
+      "graph_json": "graph_json/graph_0037.json"
+    },
+    {
+      "index": 38,
+      "step": 38,
+      "head": "frames/head/frame_0038.png",
+      "wrist": "frames/wrist/frame_0038.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0038.png",
+      "graph_json": "graph_json/graph_0038.json"
+    },
+    {
+      "index": 39,
+      "step": 39,
+      "head": "frames/head/frame_0039.png",
+      "wrist": "frames/wrist/frame_0039.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0039.png",
+      "graph_json": "graph_json/graph_0039.json"
+    },
+    {
+      "index": 40,
+      "step": 40,
+      "head": "frames/head/frame_0040.png",
+      "wrist": "frames/wrist/frame_0040.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0040.png",
+      "graph_json": "graph_json/graph_0040.json"
+    },
+    {
+      "index": 41,
+      "step": 41,
+      "head": "frames/head/frame_0041.png",
+      "wrist": "frames/wrist/frame_0041.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0041.png",
+      "graph_json": "graph_json/graph_0041.json"
+    },
+    {
+      "index": 42,
+      "step": 42,
+      "head": "frames/head/frame_0042.png",
+      "wrist": "frames/wrist/frame_0042.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0042.png",
+      "graph_json": "graph_json/graph_0042.json"
+    },
+    {
+      "index": 43,
+      "step": 43,
+      "head": "frames/head/frame_0043.png",
+      "wrist": "frames/wrist/frame_0043.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0043.png",
+      "graph_json": "graph_json/graph_0043.json"
+    },
+    {
+      "index": 44,
+      "step": 44,
+      "head": "frames/head/frame_0044.png",
+      "wrist": "frames/wrist/frame_0044.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0044.png",
+      "graph_json": "graph_json/graph_0044.json"
+    },
+    {
+      "index": 45,
+      "step": 45,
+      "head": "frames/head/frame_0045.png",
+      "wrist": "frames/wrist/frame_0045.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0045.png",
+      "graph_json": "graph_json/graph_0045.json"
+    },
+    {
+      "index": 46,
+      "step": 46,
+      "head": "frames/head/frame_0046.png",
+      "wrist": "frames/wrist/frame_0046.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0046.png",
+      "graph_json": "graph_json/graph_0046.json"
+    },
+    {
+      "index": 47,
+      "step": 47,
+      "head": "frames/head/frame_0047.png",
+      "wrist": "frames/wrist/frame_0047.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0047.png",
+      "graph_json": "graph_json/graph_0047.json"
+    },
+    {
+      "index": 48,
+      "step": 48,
+      "head": "frames/head/frame_0048.png",
+      "wrist": "frames/wrist/frame_0048.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0048.png",
+      "graph_json": "graph_json/graph_0048.json"
+    },
+    {
+      "index": 49,
+      "step": 49,
+      "head": "frames/head/frame_0049.png",
+      "wrist": "frames/wrist/frame_0049.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0049.png",
+      "graph_json": "graph_json/graph_0049.json"
+    },
+    {
+      "index": 50,
+      "step": 50,
+      "head": "frames/head/frame_0050.png",
+      "wrist": "frames/wrist/frame_0050.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0050.png",
+      "graph_json": "graph_json/graph_0050.json"
+    },
+    {
+      "index": 51,
+      "step": 51,
+      "head": "frames/head/frame_0051.png",
+      "wrist": "frames/wrist/frame_0051.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0051.png",
+      "graph_json": "graph_json/graph_0051.json"
+    },
+    {
+      "index": 52,
+      "step": 52,
+      "head": "frames/head/frame_0052.png",
+      "wrist": "frames/wrist/frame_0052.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0052.png",
+      "graph_json": "graph_json/graph_0052.json"
+    },
+    {
+      "index": 53,
+      "step": 53,
+      "head": "frames/head/frame_0053.png",
+      "wrist": "frames/wrist/frame_0053.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0053.png",
+      "graph_json": "graph_json/graph_0053.json"
+    },
+    {
+      "index": 54,
+      "step": 54,
+      "head": "frames/head/frame_0054.png",
+      "wrist": "frames/wrist/frame_0054.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0054.png",
+      "graph_json": "graph_json/graph_0054.json"
+    },
+    {
+      "index": 55,
+      "step": 55,
+      "head": "frames/head/frame_0055.png",
+      "wrist": "frames/wrist/frame_0055.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0055.png",
+      "graph_json": "graph_json/graph_0055.json"
+    },
+    {
+      "index": 56,
+      "step": 56,
+      "head": "frames/head/frame_0056.png",
+      "wrist": "frames/wrist/frame_0056.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0056.png",
+      "graph_json": "graph_json/graph_0056.json"
+    },
+    {
+      "index": 57,
+      "step": 57,
+      "head": "frames/head/frame_0057.png",
+      "wrist": "frames/wrist/frame_0057.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0057.png",
+      "graph_json": "graph_json/graph_0057.json"
+    },
+    {
+      "index": 58,
+      "step": 58,
+      "head": "frames/head/frame_0058.png",
+      "wrist": "frames/wrist/frame_0058.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0058.png",
+      "graph_json": "graph_json/graph_0058.json"
+    },
+    {
+      "index": 59,
+      "step": 59,
+      "head": "frames/head/frame_0059.png",
+      "wrist": "frames/wrist/frame_0059.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0059.png",
+      "graph_json": "graph_json/graph_0059.json"
+    },
+    {
+      "index": 60,
+      "step": 60,
+      "head": "frames/head/frame_0060.png",
+      "wrist": "frames/wrist/frame_0060.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0060.png",
+      "graph_json": "graph_json/graph_0060.json"
+    },
+    {
+      "index": 61,
+      "step": 61,
+      "head": "frames/head/frame_0061.png",
+      "wrist": "frames/wrist/frame_0061.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0061.png",
+      "graph_json": "graph_json/graph_0061.json"
+    },
+    {
+      "index": 62,
+      "step": 62,
+      "head": "frames/head/frame_0062.png",
+      "wrist": "frames/wrist/frame_0062.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0062.png",
+      "graph_json": "graph_json/graph_0062.json"
+    },
+    {
+      "index": 63,
+      "step": 63,
+      "head": "frames/head/frame_0063.png",
+      "wrist": "frames/wrist/frame_0063.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0063.png",
+      "graph_json": "graph_json/graph_0063.json"
+    },
+    {
+      "index": 64,
+      "step": 64,
+      "head": "frames/head/frame_0064.png",
+      "wrist": "frames/wrist/frame_0064.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0064.png",
+      "graph_json": "graph_json/graph_0064.json"
+    },
+    {
+      "index": 65,
+      "step": 65,
+      "head": "frames/head/frame_0065.png",
+      "wrist": "frames/wrist/frame_0065.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0065.png",
+      "graph_json": "graph_json/graph_0065.json"
+    },
+    {
+      "index": 66,
+      "step": 66,
+      "head": "frames/head/frame_0066.png",
+      "wrist": "frames/wrist/frame_0066.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0066.png",
+      "graph_json": "graph_json/graph_0066.json"
+    },
+    {
+      "index": 67,
+      "step": 67,
+      "head": "frames/head/frame_0067.png",
+      "wrist": "frames/wrist/frame_0067.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0067.png",
+      "graph_json": "graph_json/graph_0067.json"
+    },
+    {
+      "index": 68,
+      "step": 68,
+      "head": "frames/head/frame_0068.png",
+      "wrist": "frames/wrist/frame_0068.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0068.png",
+      "graph_json": "graph_json/graph_0068.json"
+    },
+    {
+      "index": 69,
+      "step": 69,
+      "head": "frames/head/frame_0069.png",
+      "wrist": "frames/wrist/frame_0069.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0069.png",
+      "graph_json": "graph_json/graph_0069.json"
+    },
+    {
+      "index": 70,
+      "step": 70,
+      "head": "frames/head/frame_0070.png",
+      "wrist": "frames/wrist/frame_0070.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0070.png",
+      "graph_json": "graph_json/graph_0070.json"
+    },
+    {
+      "index": 71,
+      "step": 71,
+      "head": "frames/head/frame_0071.png",
+      "wrist": "frames/wrist/frame_0071.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0071.png",
+      "graph_json": "graph_json/graph_0071.json"
+    },
+    {
+      "index": 72,
+      "step": 72,
+      "head": "frames/head/frame_0072.png",
+      "wrist": "frames/wrist/frame_0072.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0072.png",
+      "graph_json": "graph_json/graph_0072.json"
+    },
+    {
+      "index": 73,
+      "step": 73,
+      "head": "frames/head/frame_0073.png",
+      "wrist": "frames/wrist/frame_0073.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0073.png",
+      "graph_json": "graph_json/graph_0073.json"
+    },
+    {
+      "index": 74,
+      "step": 74,
+      "head": "frames/head/frame_0074.png",
+      "wrist": "frames/wrist/frame_0074.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0074.png",
+      "graph_json": "graph_json/graph_0074.json"
+    },
+    {
+      "index": 75,
+      "step": 75,
+      "head": "frames/head/frame_0075.png",
+      "wrist": "frames/wrist/frame_0075.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0075.png",
+      "graph_json": "graph_json/graph_0075.json"
+    },
+    {
+      "index": 76,
+      "step": 76,
+      "head": "frames/head/frame_0076.png",
+      "wrist": "frames/wrist/frame_0076.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0076.png",
+      "graph_json": "graph_json/graph_0076.json"
+    },
+    {
+      "index": 77,
+      "step": 77,
+      "head": "frames/head/frame_0077.png",
+      "wrist": "frames/wrist/frame_0077.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0077.png",
+      "graph_json": "graph_json/graph_0077.json"
+    },
+    {
+      "index": 78,
+      "step": 78,
+      "head": "frames/head/frame_0078.png",
+      "wrist": "frames/wrist/frame_0078.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0078.png",
+      "graph_json": "graph_json/graph_0078.json"
+    },
+    {
+      "index": 79,
+      "step": 79,
+      "head": "frames/head/frame_0079.png",
+      "wrist": "frames/wrist/frame_0079.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0079.png",
+      "graph_json": "graph_json/graph_0079.json"
+    },
+    {
+      "index": 80,
+      "step": 80,
+      "head": "frames/head/frame_0080.png",
+      "wrist": "frames/wrist/frame_0080.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0080.png",
+      "graph_json": "graph_json/graph_0080.json"
+    },
+    {
+      "index": 81,
+      "step": 81,
+      "head": "frames/head/frame_0081.png",
+      "wrist": "frames/wrist/frame_0081.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0081.png",
+      "graph_json": "graph_json/graph_0081.json"
+    },
+    {
+      "index": 82,
+      "step": 82,
+      "head": "frames/head/frame_0082.png",
+      "wrist": "frames/wrist/frame_0082.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0082.png",
+      "graph_json": "graph_json/graph_0082.json"
+    },
+    {
+      "index": 83,
+      "step": 83,
+      "head": "frames/head/frame_0083.png",
+      "wrist": "frames/wrist/frame_0083.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0083.png",
+      "graph_json": "graph_json/graph_0083.json"
+    },
+    {
+      "index": 84,
+      "step": 84,
+      "head": "frames/head/frame_0084.png",
+      "wrist": "frames/wrist/frame_0084.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0084.png",
+      "graph_json": "graph_json/graph_0084.json"
+    },
+    {
+      "index": 85,
+      "step": 85,
+      "head": "frames/head/frame_0085.png",
+      "wrist": "frames/wrist/frame_0085.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0085.png",
+      "graph_json": "graph_json/graph_0085.json"
+    },
+    {
+      "index": 86,
+      "step": 86,
+      "head": "frames/head/frame_0086.png",
+      "wrist": "frames/wrist/frame_0086.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0086.png",
+      "graph_json": "graph_json/graph_0086.json"
+    },
+    {
+      "index": 87,
+      "step": 87,
+      "head": "frames/head/frame_0087.png",
+      "wrist": "frames/wrist/frame_0087.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0087.png",
+      "graph_json": "graph_json/graph_0087.json"
+    },
+    {
+      "index": 88,
+      "step": 88,
+      "head": "frames/head/frame_0088.png",
+      "wrist": "frames/wrist/frame_0088.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0088.png",
+      "graph_json": "graph_json/graph_0088.json"
+    },
+    {
+      "index": 89,
+      "step": 89,
+      "head": "frames/head/frame_0089.png",
+      "wrist": "frames/wrist/frame_0089.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0089.png",
+      "graph_json": "graph_json/graph_0089.json"
+    },
+    {
+      "index": 90,
+      "step": 90,
+      "head": "frames/head/frame_0090.png",
+      "wrist": "frames/wrist/frame_0090.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0090.png",
+      "graph_json": "graph_json/graph_0090.json"
+    },
+    {
+      "index": 91,
+      "step": 91,
+      "head": "frames/head/frame_0091.png",
+      "wrist": "frames/wrist/frame_0091.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0091.png",
+      "graph_json": "graph_json/graph_0091.json"
+    },
+    {
+      "index": 92,
+      "step": 92,
+      "head": "frames/head/frame_0092.png",
+      "wrist": "frames/wrist/frame_0092.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0092.png",
+      "graph_json": "graph_json/graph_0092.json"
+    },
+    {
+      "index": 93,
+      "step": 93,
+      "head": "frames/head/frame_0093.png",
+      "wrist": "frames/wrist/frame_0093.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0093.png",
+      "graph_json": "graph_json/graph_0093.json"
+    },
+    {
+      "index": 94,
+      "step": 94,
+      "head": "frames/head/frame_0094.png",
+      "wrist": "frames/wrist/frame_0094.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0094.png",
+      "graph_json": "graph_json/graph_0094.json"
+    },
+    {
+      "index": 95,
+      "step": 95,
+      "head": "frames/head/frame_0095.png",
+      "wrist": "frames/wrist/frame_0095.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0095.png",
+      "graph_json": "graph_json/graph_0095.json"
+    },
+    {
+      "index": 96,
+      "step": 96,
+      "head": "frames/head/frame_0096.png",
+      "wrist": "frames/wrist/frame_0096.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0096.png",
+      "graph_json": "graph_json/graph_0096.json"
+    },
+    {
+      "index": 97,
+      "step": 97,
+      "head": "frames/head/frame_0097.png",
+      "wrist": "frames/wrist/frame_0097.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0097.png",
+      "graph_json": "graph_json/graph_0097.json"
+    },
+    {
+      "index": 98,
+      "step": 98,
+      "head": "frames/head/frame_0098.png",
+      "wrist": "frames/wrist/frame_0098.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0098.png",
+      "graph_json": "graph_json/graph_0098.json"
+    },
+    {
+      "index": 99,
+      "step": 99,
+      "head": "frames/head/frame_0099.png",
+      "wrist": "frames/wrist/frame_0099.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0099.png",
+      "graph_json": "graph_json/graph_0099.json"
+    },
+    {
+      "index": 100,
+      "step": 100,
+      "head": "frames/head/frame_0100.png",
+      "wrist": "frames/wrist/frame_0100.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0100.png",
+      "graph_json": "graph_json/graph_0100.json"
+    },
+    {
+      "index": 101,
+      "step": 101,
+      "head": "frames/head/frame_0101.png",
+      "wrist": "frames/wrist/frame_0101.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0101.png",
+      "graph_json": "graph_json/graph_0101.json"
+    },
+    {
+      "index": 102,
+      "step": 102,
+      "head": "frames/head/frame_0102.png",
+      "wrist": "frames/wrist/frame_0102.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0102.png",
+      "graph_json": "graph_json/graph_0102.json"
+    },
+    {
+      "index": 103,
+      "step": 103,
+      "head": "frames/head/frame_0103.png",
+      "wrist": "frames/wrist/frame_0103.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0103.png",
+      "graph_json": "graph_json/graph_0103.json"
+    },
+    {
+      "index": 104,
+      "step": 104,
+      "head": "frames/head/frame_0104.png",
+      "wrist": "frames/wrist/frame_0104.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0104.png",
+      "graph_json": "graph_json/graph_0104.json"
+    },
+    {
+      "index": 105,
+      "step": 105,
+      "head": "frames/head/frame_0105.png",
+      "wrist": "frames/wrist/frame_0105.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0105.png",
+      "graph_json": "graph_json/graph_0105.json"
+    },
+    {
+      "index": 106,
+      "step": 106,
+      "head": "frames/head/frame_0106.png",
+      "wrist": "frames/wrist/frame_0106.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0106.png",
+      "graph_json": "graph_json/graph_0106.json"
+    },
+    {
+      "index": 107,
+      "step": 107,
+      "head": "frames/head/frame_0107.png",
+      "wrist": "frames/wrist/frame_0107.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0107.png",
+      "graph_json": "graph_json/graph_0107.json"
+    },
+    {
+      "index": 108,
+      "step": 108,
+      "head": "frames/head/frame_0108.png",
+      "wrist": "frames/wrist/frame_0108.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0108.png",
+      "graph_json": "graph_json/graph_0108.json"
+    },
+    {
+      "index": 109,
+      "step": 109,
+      "head": "frames/head/frame_0109.png",
+      "wrist": "frames/wrist/frame_0109.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0109.png",
+      "graph_json": "graph_json/graph_0109.json"
+    },
+    {
+      "index": 110,
+      "step": 110,
+      "head": "frames/head/frame_0110.png",
+      "wrist": "frames/wrist/frame_0110.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0110.png",
+      "graph_json": "graph_json/graph_0110.json"
+    },
+    {
+      "index": 111,
+      "step": 111,
+      "head": "frames/head/frame_0111.png",
+      "wrist": "frames/wrist/frame_0111.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0111.png",
+      "graph_json": "graph_json/graph_0111.json"
+    },
+    {
+      "index": 112,
+      "step": 112,
+      "head": "frames/head/frame_0112.png",
+      "wrist": "frames/wrist/frame_0112.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0112.png",
+      "graph_json": "graph_json/graph_0112.json"
+    },
+    {
+      "index": 113,
+      "step": 113,
+      "head": "frames/head/frame_0113.png",
+      "wrist": "frames/wrist/frame_0113.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0113.png",
+      "graph_json": "graph_json/graph_0113.json"
+    },
+    {
+      "index": 114,
+      "step": 114,
+      "head": "frames/head/frame_0114.png",
+      "wrist": "frames/wrist/frame_0114.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0114.png",
+      "graph_json": "graph_json/graph_0114.json"
+    },
+    {
+      "index": 115,
+      "step": 115,
+      "head": "frames/head/frame_0115.png",
+      "wrist": "frames/wrist/frame_0115.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0115.png",
+      "graph_json": "graph_json/graph_0115.json"
+    },
+    {
+      "index": 116,
+      "step": 116,
+      "head": "frames/head/frame_0116.png",
+      "wrist": "frames/wrist/frame_0116.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0116.png",
+      "graph_json": "graph_json/graph_0116.json"
+    },
+    {
+      "index": 117,
+      "step": 117,
+      "head": "frames/head/frame_0117.png",
+      "wrist": "frames/wrist/frame_0117.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0117.png",
+      "graph_json": "graph_json/graph_0117.json"
+    },
+    {
+      "index": 118,
+      "step": 118,
+      "head": "frames/head/frame_0118.png",
+      "wrist": "frames/wrist/frame_0118.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0118.png",
+      "graph_json": "graph_json/graph_0118.json"
+    },
+    {
+      "index": 119,
+      "step": 119,
+      "head": "frames/head/frame_0119.png",
+      "wrist": "frames/wrist/frame_0119.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0119.png",
+      "graph_json": "graph_json/graph_0119.json"
+    },
+    {
+      "index": 120,
+      "step": 120,
+      "head": "frames/head/frame_0120.png",
+      "wrist": "frames/wrist/frame_0120.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0120.png",
+      "graph_json": "graph_json/graph_0120.json"
+    },
+    {
+      "index": 121,
+      "step": 121,
+      "head": "frames/head/frame_0121.png",
+      "wrist": "frames/wrist/frame_0121.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0121.png",
+      "graph_json": "graph_json/graph_0121.json"
+    },
+    {
+      "index": 122,
+      "step": 122,
+      "head": "frames/head/frame_0122.png",
+      "wrist": "frames/wrist/frame_0122.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0122.png",
+      "graph_json": "graph_json/graph_0122.json"
+    },
+    {
+      "index": 123,
+      "step": 123,
+      "head": "frames/head/frame_0123.png",
+      "wrist": "frames/wrist/frame_0123.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0123.png",
+      "graph_json": "graph_json/graph_0123.json"
+    },
+    {
+      "index": 124,
+      "step": 124,
+      "head": "frames/head/frame_0124.png",
+      "wrist": "frames/wrist/frame_0124.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0124.png",
+      "graph_json": "graph_json/graph_0124.json"
+    },
+    {
+      "index": 125,
+      "step": 125,
+      "head": "frames/head/frame_0125.png",
+      "wrist": "frames/wrist/frame_0125.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0125.png",
+      "graph_json": "graph_json/graph_0125.json"
+    },
+    {
+      "index": 126,
+      "step": 126,
+      "head": "frames/head/frame_0126.png",
+      "wrist": "frames/wrist/frame_0126.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0126.png",
+      "graph_json": "graph_json/graph_0126.json"
+    },
+    {
+      "index": 127,
+      "step": 127,
+      "head": "frames/head/frame_0127.png",
+      "wrist": "frames/wrist/frame_0127.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0127.png",
+      "graph_json": "graph_json/graph_0127.json"
+    },
+    {
+      "index": 128,
+      "step": 128,
+      "head": "frames/head/frame_0128.png",
+      "wrist": "frames/wrist/frame_0128.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0128.png",
+      "graph_json": "graph_json/graph_0128.json"
+    },
+    {
+      "index": 129,
+      "step": 129,
+      "head": "frames/head/frame_0129.png",
+      "wrist": "frames/wrist/frame_0129.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0129.png",
+      "graph_json": "graph_json/graph_0129.json"
+    },
+    {
+      "index": 130,
+      "step": 130,
+      "head": "frames/head/frame_0130.png",
+      "wrist": "frames/wrist/frame_0130.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0130.png",
+      "graph_json": "graph_json/graph_0130.json"
+    },
+    {
+      "index": 131,
+      "step": 131,
+      "head": "frames/head/frame_0131.png",
+      "wrist": "frames/wrist/frame_0131.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0131.png",
+      "graph_json": "graph_json/graph_0131.json"
+    },
+    {
+      "index": 132,
+      "step": 132,
+      "head": "frames/head/frame_0132.png",
+      "wrist": "frames/wrist/frame_0132.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0132.png",
+      "graph_json": "graph_json/graph_0132.json"
+    },
+    {
+      "index": 133,
+      "step": 133,
+      "head": "frames/head/frame_0133.png",
+      "wrist": "frames/wrist/frame_0133.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0133.png",
+      "graph_json": "graph_json/graph_0133.json"
+    },
+    {
+      "index": 134,
+      "step": 134,
+      "head": "frames/head/frame_0134.png",
+      "wrist": "frames/wrist/frame_0134.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0134.png",
+      "graph_json": "graph_json/graph_0134.json"
+    },
+    {
+      "index": 135,
+      "step": 135,
+      "head": "frames/head/frame_0135.png",
+      "wrist": "frames/wrist/frame_0135.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0135.png",
+      "graph_json": "graph_json/graph_0135.json"
+    },
+    {
+      "index": 136,
+      "step": 136,
+      "head": "frames/head/frame_0136.png",
+      "wrist": "frames/wrist/frame_0136.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0136.png",
+      "graph_json": "graph_json/graph_0136.json"
+    },
+    {
+      "index": 137,
+      "step": 137,
+      "head": "frames/head/frame_0137.png",
+      "wrist": "frames/wrist/frame_0137.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0137.png",
+      "graph_json": "graph_json/graph_0137.json"
+    },
+    {
+      "index": 138,
+      "step": 138,
+      "head": "frames/head/frame_0138.png",
+      "wrist": "frames/wrist/frame_0138.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0138.png",
+      "graph_json": "graph_json/graph_0138.json"
+    },
+    {
+      "index": 139,
+      "step": 139,
+      "head": "frames/head/frame_0139.png",
+      "wrist": "frames/wrist/frame_0139.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0139.png",
+      "graph_json": "graph_json/graph_0139.json"
+    },
+    {
+      "index": 140,
+      "step": 140,
+      "head": "frames/head/frame_0140.png",
+      "wrist": "frames/wrist/frame_0140.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0140.png",
+      "graph_json": "graph_json/graph_0140.json"
+    },
+    {
+      "index": 141,
+      "step": 141,
+      "head": "frames/head/frame_0141.png",
+      "wrist": "frames/wrist/frame_0141.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0141.png",
+      "graph_json": "graph_json/graph_0141.json"
+    },
+    {
+      "index": 142,
+      "step": 142,
+      "head": "frames/head/frame_0142.png",
+      "wrist": "frames/wrist/frame_0142.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0142.png",
+      "graph_json": "graph_json/graph_0142.json"
+    },
+    {
+      "index": 143,
+      "step": 143,
+      "head": "frames/head/frame_0143.png",
+      "wrist": "frames/wrist/frame_0143.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0143.png",
+      "graph_json": "graph_json/graph_0143.json"
+    },
+    {
+      "index": 144,
+      "step": 144,
+      "head": "frames/head/frame_0144.png",
+      "wrist": "frames/wrist/frame_0144.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0144.png",
+      "graph_json": "graph_json/graph_0144.json"
+    },
+    {
+      "index": 145,
+      "step": 145,
+      "head": "frames/head/frame_0145.png",
+      "wrist": "frames/wrist/frame_0145.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0145.png",
+      "graph_json": "graph_json/graph_0145.json"
+    },
+    {
+      "index": 146,
+      "step": 146,
+      "head": "frames/head/frame_0146.png",
+      "wrist": "frames/wrist/frame_0146.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0146.png",
+      "graph_json": "graph_json/graph_0146.json"
+    },
+    {
+      "index": 147,
+      "step": 147,
+      "head": "frames/head/frame_0147.png",
+      "wrist": "frames/wrist/frame_0147.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0147.png",
+      "graph_json": "graph_json/graph_0147.json"
+    },
+    {
+      "index": 148,
+      "step": 148,
+      "head": "frames/head/frame_0148.png",
+      "wrist": "frames/wrist/frame_0148.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0148.png",
+      "graph_json": "graph_json/graph_0148.json"
+    },
+    {
+      "index": 149,
+      "step": 149,
+      "head": "frames/head/frame_0149.png",
+      "wrist": "frames/wrist/frame_0149.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0149.png",
+      "graph_json": "graph_json/graph_0149.json"
+    },
+    {
+      "index": 150,
+      "step": 150,
+      "head": "frames/head/frame_0150.png",
+      "wrist": "frames/wrist/frame_0150.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0150.png",
+      "graph_json": "graph_json/graph_0150.json"
+    },
+    {
+      "index": 151,
+      "step": 151,
+      "head": "frames/head/frame_0151.png",
+      "wrist": "frames/wrist/frame_0151.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0151.png",
+      "graph_json": "graph_json/graph_0151.json"
+    },
+    {
+      "index": 152,
+      "step": 152,
+      "head": "frames/head/frame_0152.png",
+      "wrist": "frames/wrist/frame_0152.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0152.png",
+      "graph_json": "graph_json/graph_0152.json"
+    },
+    {
+      "index": 153,
+      "step": 153,
+      "head": "frames/head/frame_0153.png",
+      "wrist": "frames/wrist/frame_0153.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0153.png",
+      "graph_json": "graph_json/graph_0153.json"
+    },
+    {
+      "index": 154,
+      "step": 154,
+      "head": "frames/head/frame_0154.png",
+      "wrist": "frames/wrist/frame_0154.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0154.png",
+      "graph_json": "graph_json/graph_0154.json"
+    },
+    {
+      "index": 155,
+      "step": 155,
+      "head": "frames/head/frame_0155.png",
+      "wrist": "frames/wrist/frame_0155.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0155.png",
+      "graph_json": "graph_json/graph_0155.json"
+    },
+    {
+      "index": 156,
+      "step": 156,
+      "head": "frames/head/frame_0156.png",
+      "wrist": "frames/wrist/frame_0156.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0156.png",
+      "graph_json": "graph_json/graph_0156.json"
+    },
+    {
+      "index": 157,
+      "step": 157,
+      "head": "frames/head/frame_0157.png",
+      "wrist": "frames/wrist/frame_0157.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0157.png",
+      "graph_json": "graph_json/graph_0157.json"
+    },
+    {
+      "index": 158,
+      "step": 158,
+      "head": "frames/head/frame_0158.png",
+      "wrist": "frames/wrist/frame_0158.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0158.png",
+      "graph_json": "graph_json/graph_0158.json"
+    },
+    {
+      "index": 159,
+      "step": 159,
+      "head": "frames/head/frame_0159.png",
+      "wrist": "frames/wrist/frame_0159.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0159.png",
+      "graph_json": "graph_json/graph_0159.json"
+    },
+    {
+      "index": 160,
+      "step": 160,
+      "head": "frames/head/frame_0160.png",
+      "wrist": "frames/wrist/frame_0160.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0160.png",
+      "graph_json": "graph_json/graph_0160.json"
+    },
+    {
+      "index": 161,
+      "step": 161,
+      "head": "frames/head/frame_0161.png",
+      "wrist": "frames/wrist/frame_0161.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0161.png",
+      "graph_json": "graph_json/graph_0161.json"
+    },
+    {
+      "index": 162,
+      "step": 162,
+      "head": "frames/head/frame_0162.png",
+      "wrist": "frames/wrist/frame_0162.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0162.png",
+      "graph_json": "graph_json/graph_0162.json"
+    },
+    {
+      "index": 163,
+      "step": 163,
+      "head": "frames/head/frame_0163.png",
+      "wrist": "frames/wrist/frame_0163.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0163.png",
+      "graph_json": "graph_json/graph_0163.json"
+    },
+    {
+      "index": 164,
+      "step": 164,
+      "head": "frames/head/frame_0164.png",
+      "wrist": "frames/wrist/frame_0164.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0164.png",
+      "graph_json": "graph_json/graph_0164.json"
+    },
+    {
+      "index": 165,
+      "step": 165,
+      "head": "frames/head/frame_0165.png",
+      "wrist": "frames/wrist/frame_0165.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0165.png",
+      "graph_json": "graph_json/graph_0165.json"
+    },
+    {
+      "index": 166,
+      "step": 166,
+      "head": "frames/head/frame_0166.png",
+      "wrist": "frames/wrist/frame_0166.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0166.png",
+      "graph_json": "graph_json/graph_0166.json"
+    },
+    {
+      "index": 167,
+      "step": 167,
+      "head": "frames/head/frame_0167.png",
+      "wrist": "frames/wrist/frame_0167.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0167.png",
+      "graph_json": "graph_json/graph_0167.json"
+    },
+    {
+      "index": 168,
+      "step": 168,
+      "head": "frames/head/frame_0168.png",
+      "wrist": "frames/wrist/frame_0168.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0168.png",
+      "graph_json": "graph_json/graph_0168.json"
+    },
+    {
+      "index": 169,
+      "step": 169,
+      "head": "frames/head/frame_0169.png",
+      "wrist": "frames/wrist/frame_0169.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0169.png",
+      "graph_json": "graph_json/graph_0169.json"
+    },
+    {
+      "index": 170,
+      "step": 170,
+      "head": "frames/head/frame_0170.png",
+      "wrist": "frames/wrist/frame_0170.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0170.png",
+      "graph_json": "graph_json/graph_0170.json"
+    },
+    {
+      "index": 171,
+      "step": 171,
+      "head": "frames/head/frame_0171.png",
+      "wrist": "frames/wrist/frame_0171.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0171.png",
+      "graph_json": "graph_json/graph_0171.json"
+    },
+    {
+      "index": 172,
+      "step": 172,
+      "head": "frames/head/frame_0172.png",
+      "wrist": "frames/wrist/frame_0172.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0172.png",
+      "graph_json": "graph_json/graph_0172.json"
+    },
+    {
+      "index": 173,
+      "step": 173,
+      "head": "frames/head/frame_0173.png",
+      "wrist": "frames/wrist/frame_0173.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0173.png",
+      "graph_json": "graph_json/graph_0173.json"
+    },
+    {
+      "index": 174,
+      "step": 174,
+      "head": "frames/head/frame_0174.png",
+      "wrist": "frames/wrist/frame_0174.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0174.png",
+      "graph_json": "graph_json/graph_0174.json"
+    },
+    {
+      "index": 175,
+      "step": 175,
+      "head": "frames/head/frame_0175.png",
+      "wrist": "frames/wrist/frame_0175.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0175.png",
+      "graph_json": "graph_json/graph_0175.json"
+    },
+    {
+      "index": 176,
+      "step": 176,
+      "head": "frames/head/frame_0176.png",
+      "wrist": "frames/wrist/frame_0176.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0176.png",
+      "graph_json": "graph_json/graph_0176.json"
+    },
+    {
+      "index": 177,
+      "step": 177,
+      "head": "frames/head/frame_0177.png",
+      "wrist": "frames/wrist/frame_0177.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0177.png",
+      "graph_json": "graph_json/graph_0177.json"
+    },
+    {
+      "index": 178,
+      "step": 178,
+      "head": "frames/head/frame_0178.png",
+      "wrist": "frames/wrist/frame_0178.png",
+      "n_nodes": 4,
+      "n_edges": 22,
+      "graph": "graphs/graph_0178.png",
+      "graph_json": "graph_json/graph_0178.json"
+    }
+  ]
+}
