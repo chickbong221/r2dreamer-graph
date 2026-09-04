@@ -17,10 +17,11 @@ import pickle
 import shutil
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 from scenegraph.adapters.graph_vocab import build_entity_vocab
-from scenegraph.configs.loader import load_config
+from scenegraph.configs.loader import default_temporal_k, load_config
 from scenegraph.core.entity_identity import normalize_asset_key
 from scenegraph.core.graph_builder import GraphBuilder
 from scenegraph.core.whitelist import (
@@ -472,6 +473,43 @@ class TestLoaderResolvesPerGroup(unittest.TestCase):
     def test_required_assets_need_a_group(self):
         with self.assertRaises(ValueError):
             load_config(require_assets=True)
+
+
+class TestGrouplessLoadWarnsAboutNothing(unittest.TestCase):
+    """Reading one setting must not report a missing asset.
+
+    ``default_temporal_k`` loads the yaml with no task group to read
+    ``temporal.K``, and the mining tools call it at import. With no group
+    there is no asset path to resolve, so the loader was asking for the
+    affordance file at ``None`` and warning that it was not found -- a
+    warning that sent a reader hunting for a file nothing had asked for,
+    printed at the top of every collection run.
+    """
+
+    def _warnings(self, **kwargs):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            load_config(**kwargs)
+        return [str(w.message) for w in caught]
+
+    def test_reading_the_temporal_horizon_warns_about_nothing(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.assertGreater(default_temporal_k(), 0)
+        self.assertEqual([str(w.message) for w in caught], [])
+
+    def test_a_groupless_load_names_no_affordance_asset(self):
+        self.assertEqual(self._warnings(require_assets=False), [])
+
+    def test_an_asset_that_really_is_missing_still_warns(self):
+        """The genuine case: a group was named and its file is not there."""
+        found = self._warnings(task_group="no_such_group",
+                               require_assets=False)
+        self.assertTrue(any("affordance asset not found" in w for w in found))
+
+    def test_requiring_a_missing_asset_still_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            load_config(task_group="no_such_group", require_assets=True)
 
 
 # --------------------------------------------------------------------------- #

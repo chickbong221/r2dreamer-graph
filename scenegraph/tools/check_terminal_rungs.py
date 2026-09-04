@@ -189,8 +189,9 @@ def clause_findings(
         if not edges or len(names) != len(edges) + 1:
             findings.append(Finding(
                 UNVERIFIABLE, phase_name, relation, labels, weight,
-                detail=f"{phase_name}/{relation}: the asset carries no usable "
-                       f"{key!r} calibration ({len(edges)} edge(s))"))
+                detail=f"{phase_name}/{relation} {labels} weight={weight:g}: "
+                       f"the asset carries no usable {key!r} calibration "
+                       f"({len(edges)} edge(s))"))
             continue
         interval = allowed_interval(relation, tolerance)
         if interval is None:

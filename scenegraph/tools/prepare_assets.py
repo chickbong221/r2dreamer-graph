@@ -42,6 +42,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from scenegraph.core import families
 from scenegraph.tools import collect_robot_success_states
 
 REPO = Path(__file__).resolve().parents[2]
@@ -79,15 +80,19 @@ def _checkpointed_objects(ckpt_root: Path, mshab_task: str,
     return found
 
 
-def _unreadable_supporters(runtime_dir: Path) -> List[str]:
-    """``<file>: <key>`` for every admitted supporter with no extent.
+def _unmeasurable_members(runtime_dir: Path) -> List[str]:
+    """``<file>: <key> (<reason>)`` for every member the runtime cannot scale.
 
-    A supporter is admitted on interaction evidence alone, but whether it is
-    an extended surface is decided by its collision extent. A member the
-    classification could not reach carries no family, and the runtime then
-    measures it from its actor origin -- ~0.9m below a counter's own top,
-    which is the error the classification exists to remove. A warning is fine
-    while iterating; a finished asset is not.
+    The last gate before the assets are declared finished, and deliberately
+    reading the files rather than trusting the stage that wrote them.
+
+    Two ways a member gets here. It carries an explicit unresolved mark, put
+    there by the miner when no height-family rule reached it -- raw evidence
+    keeps such a member on purpose, and a runtime asset must not. Or it
+    supports something and carries no family at all, which means its collision
+    extent was unreadable: it could not be tested for being an extended
+    surface, so the runtime measures it from its actor origin, ~0.9m below a
+    counter's own top. That is the error the classification exists to remove.
     """
     import json as _json
 
@@ -97,6 +102,7 @@ def _unreadable_supporters(runtime_dir: Path) -> List[str]:
             members = _json.loads(path.read_text()).get('members') or {}
         except (OSError, ValueError):
             continue
+        problems = dict(families.runtime_blockers(members))
         for key, entry in sorted(members.items()):
             if not isinstance(entry, dict):
                 continue
@@ -104,7 +110,11 @@ def _unreadable_supporters(runtime_dir: Path) -> List[str]:
                 continue
             if entry.get('family'):
                 continue
-            out.append(f'{path.name}: {key}')
+            problems.setdefault(
+                key, 'supports something but carries no height family, so its '
+                     'collision extent was unreadable')
+        for key, reason in sorted(problems.items()):
+            out.append(f'{path.name}: {key} ({reason})')
     return out
 
 
@@ -362,20 +372,23 @@ def main(argv=None) -> int:
 
     print('\n[prep] verify')
     _report(needed, ckpt_objects, runtime_dir, table)
-    unreadable = _unreadable_supporters(runtime_dir)
-    if unreadable:
-        print(f'[prep] FAILED: {len(unreadable)} admitted supporter(s) '
-              'carry no height family, so their collision extent was '
-              'unreadable and they cannot be tested for being an '
-              'extended surface:', file=sys.stderr)
-        for line in unreadable[:20]:
-            print(f'          {line}', file=sys.stderr)
-        if len(unreadable) > 20:
-            print(f'          ... and {len(unreadable) - 20} more',
-                  file=sys.stderr)
-        print('       Extents are read from the simulator at collection '
-              'time and cannot be mined later; re-collect these targets.',
+    unmeasurable = _unmeasurable_members(runtime_dir)
+    if unmeasurable:
+        print(f'[prep] FAILED: {len(unmeasurable)} member(s) of the runtime '
+              'assets carry no usable end-effector height family, so the '
+              'graph would label them on another family\'s deadband:',
               file=sys.stderr)
+        for line in unmeasurable[:20]:
+            print(f'          {line}', file=sys.stderr)
+        if len(unmeasurable) > 20:
+            print(f'          ... and {len(unmeasurable) - 20} more',
+                  file=sys.stderr)
+        print('       A member with no readable collision extent needs a '
+              're-collection -- extents are read from the simulator and '
+              'cannot be mined later. One with no reference surface needs '
+              'build_affordances re-run. One no rule reaches at all should '
+              'not have survived the membership policy; check what admitted '
+              'it.', file=sys.stderr)
         return 1
     from scenegraph.core.whitelist import resolve_whitelist_path
     pairs = sorted(set().union(*needed.values())) if needed else []

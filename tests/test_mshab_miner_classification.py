@@ -451,32 +451,33 @@ class VerificationGateTest(unittest.TestCase):
         return directory
 
     def test_a_supporter_with_no_family_is_reported(self):
-        from scenegraph.tools.prepare_assets import _unreadable_supporters
-        found = _unreadable_supporters(
+        from scenegraph.tools.prepare_assets import _unmeasurable_members
+        found = _unmeasurable_members(
             self._dir({COUNTER: _member(["contact", "support"], "link")}))
         self.assertEqual(len(found), 1)
         self.assertIn(COUNTER, found[0])
 
     def test_a_classified_supporter_passes(self):
-        from scenegraph.tools.prepare_assets import _unreadable_supporters
+        from scenegraph.tools.prepare_assets import _unmeasurable_members
         entry = dict(_member(["contact", "support"], "link"),
                      family=FAMILY_STRUCTURAL, structural_surface=True)
-        self.assertEqual(_unreadable_supporters(self._dir({COUNTER: entry})), [])
+        self.assertEqual(
+            _unmeasurable_members(self._dir({COUNTER: entry})), [])
 
     def test_a_non_supporter_is_not_checked(self):
         """Only supporters need the extent, because only they can be an
         extended surface."""
-        from scenegraph.tools.prepare_assets import _unreadable_supporters
+        from scenegraph.tools.prepare_assets import _unmeasurable_members
         self.assertEqual(
-            _unreadable_supporters(self._dir({BOWL: _member(["contact"])})), [])
+            _unmeasurable_members(self._dir({BOWL: _member(["contact"])})), [])
 
     def test_the_shipped_maniskill_assets_pass_the_gate(self):
-        from scenegraph.tools.prepare_assets import _unreadable_supporters
+        from scenegraph.tools.prepare_assets import _unmeasurable_members
         for env_id in ("PickCube-v1", "PegInsertionSide-v1", "PlaceSphere-v1",
                        "PullCubeTool-v1"):
             with self.subTest(env=env_id):
                 self.assertEqual(
-                    _unreadable_supporters(
+                    _unmeasurable_members(
                         Path("scenegraph/configs/subtask_whitelists") / env_id),
                     [])
 

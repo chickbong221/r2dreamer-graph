@@ -883,6 +883,48 @@ class _WhitelistBuilder:
                 keep.add(key)
         return keep
 
+    def _resolve_or_refuse(self, unresolved: Dict[str, str]) -> None:
+        """Refuse a runtime asset with unresolved members; record a raw one.
+
+        The two policies write different artifacts and want different answers.
+
+        ``target-supporters`` is the shape the runtime loads, so a member it
+        admits without a usable height scale has to stop the mine. Every one
+        of them would be labelled on another family's deadband, and ``level``
+        has to mean one thing per scale.
+
+        ``full-evidence`` is not a runtime asset -- it is the record a pruning
+        policy is applied to later, and the members that fail to classify are
+        usually the ones pruning removes anyway. A sofa the arm brushed past
+        on its way to the can is neither grasped, nor a holder, nor an
+        extended surface, so no rule reaches it; refusing there would discard
+        nine targets' evidence over furniture no runtime asset can contain.
+        It is recorded instead, and rejected at the stage that decides what
+        reaches the runtime -- see ``prune_whitelists``.
+        """
+        if not unresolved:
+            return
+        if self.membership_policy == MEMBERSHIP_FULL_EVIDENCE:
+            for key, reason in sorted(unresolved.items()):
+                log.warning(
+                    "subtask=%s target=%s: %s is unresolved (%s). The raw "
+                    "asset keeps it, marked %r; no runtime asset may contain "
+                    "it.",
+                    self.subtask, self.target, key, reason,
+                    families_rules.UNRESOLVED_FIELD,
+                )
+            return
+        detail = "; ".join(
+            f"{key}: {reason}" for key, reason in sorted(unresolved.items()))
+        raise ValueError(
+            f"subtask={self.subtask} target={self.target}: "
+            f"{len(unresolved)} member(s) admitted by the "
+            f"{self.membership_policy!r} policy have no usable end-effector "
+            f"height family -- {detail}. Labelling them would borrow another "
+            "family's deadband, which is how one token comes to mean two "
+            "heights."
+        )
+
     def payload(self) -> Dict[str, Any]:
         admitted = self._admitted()
         members: Dict[str, Dict[str, Any]] = {}
@@ -930,43 +972,52 @@ class _WhitelistBuilder:
         # another family's deadband -- which is how one token comes to mean
         # two heights.
         structural = families_rules.structural_surfaces(self.extents, members)
-        unclassified = families_rules.unclassified_supporters(
-            self.extents, members)
-        if unclassified:
-            # Raised here, before classification, because the holder rule
-            # would otherwise call this member a receptacle -- a real family,
-            # which then hides it from every later check that looks for a
-            # missing one. Whether it is an extended surface is undecidable
-            # without the extent, and guessing "not a surface" is the ~0.9m
-            # origin error the classification exists to remove.
-            raise ValueError(
-                f"subtask={self.subtask} target={self.target}: "
-                f"{unclassified} support something but have no readable "
-                "collision extent, so they cannot be told apart from a "
-                "tabletop. Extents are read from the simulator at collection "
-                "time and cannot be mined later; re-collect these targets."
-            )
+        # Collected rather than raised one at a time. Whether an unresolved
+        # member is fatal depends on which asset is being written, and that
+        # decision belongs in one place: see ``_resolve_or_refuse``.
+        unresolved: Dict[str, str] = {
+            key: families_rules.UNRESOLVED_NO_EXTENT
+            for key in families_rules.unclassified_supporters(
+                self.extents, members)
+        }
         holders = {k for k, v in self.supports.items() if v}
         supported = {s for values in self.supports.values() for s in values}
         members = admit_site_members(members, self.sites)
-        # Virtual sites are excluded, not merely unclassified. They carry no
-        # interaction types, so rule 5 would call a rest position a goal
-        # marker and hand it that family's height scale -- silently, because
-        # rule 5 returns a family rather than None.
+        # Two exclusions from classification, for different reasons.
+        #
+        # Virtual sites are excluded because they carry no interaction types,
+        # so rule 5 would call a rest position a goal marker and hand it that
+        # family's height scale -- silently, because rule 5 returns a family
+        # rather than None.
+        #
+        # A supporter with no readable extent is excluded because the holder
+        # rule would call it a receptacle -- a real family, which then hides
+        # it from every later check that looks for a missing one. Whether it
+        # is an extended surface is undecidable without the extent, and
+        # guessing "not a surface" is the ~0.9m origin error the
+        # classification exists to remove.
         families = families_rules.object_families(
-            {k: v for k, v in members.items() if not k.startswith(SITE_PREFIX)},
+            {k: v for k, v in members.items()
+             if not k.startswith(SITE_PREFIX) and k not in unresolved},
             holders, supported, structural,
         )
-        ambiguous = families_rules.ambiguous_families(families)
-        if ambiguous:
-            # Refused rather than defaulted. See ``ambiguous_families``.
-            raise ValueError(
-                f"subtask={self.subtask} target={self.target}: "
-                f"{len(ambiguous)} member(s) fit no height-family rule: "
-                f"{ambiguous}. They took part in interactions but are neither "
-                "grasped, nor holders, nor extended surfaces, so labelling "
-                "them would borrow another family's deadband."
-            )
+        for key in families_rules.ambiguous_families(families):
+            unresolved.setdefault(key, families_rules.UNRESOLVED_NO_FAMILY)
+        # A surface whose plane was never mined is classified and still
+        # unusable: the runtime measures its height against that plane and
+        # raises without it, and calibrating against the actor origin instead
+        # is the ~0.9m error the classification exists to remove.
+        for key, family in sorted(families.items()):
+            if family != spatial_metrics.FAMILY_STRUCTURAL:
+                continue
+            if lookup_reference_surface(
+                    self.affordance_set,
+                    Node(node_id=key, node_type="object", name=key,
+                         pose_world=[0.0] * 3 + [1.0, 0.0, 0.0, 0.0],
+                         attributes={"whitelist_key": key})) is None:
+                unresolved.setdefault(key, families_rules.UNRESOLVED_NO_PLANE)
+
+        self._resolve_or_refuse(unresolved)
         for key, entry in members.items():
             if key in structural:
                 entry["structural_surface"] = True
@@ -974,32 +1025,20 @@ class _WhitelistBuilder:
             family = families.get(key)
             if family:
                 entry["family"] = family
+            if key in unresolved:
+                entry[families_rules.UNRESOLVED_FIELD] = unresolved[key]
 
         object_samples = self._mine_object_pair_samples()
         # After classification, because which scale a sample belongs on is
-        # exactly what the classification decides.
-        family_samples = self._mine_family_height_samples(families)
+        # exactly what the classification decides -- and an unresolved member
+        # contributes nothing, because there is no scale it belongs on. Its
+        # heights would otherwise land on whichever family the rules happened
+        # to reach it with, which is the deadband error in a new place.
+        family_samples = self._mine_family_height_samples(
+            {key: family for key, family in families.items()
+             if key not in unresolved})
         for key, values in family_samples.items():
             object_samples[key].extend(values)
-        missing_plane = sorted(
-            key for key, family in families.items()
-            if family == spatial_metrics.FAMILY_STRUCTURAL
-            and lookup_reference_surface(
-                self.affordance_set,
-                Node(node_id=key, node_type="object", name=key,
-                     pose_world=[0.0] * 3 + [1.0, 0.0, 0.0, 0.0],
-                     attributes={"whitelist_key": key})) is None
-        )
-        if missing_plane:
-            raise ValueError(
-                f"subtask={self.subtask} target={self.target}: "
-                f"{missing_plane} are structural surfaces with no "
-                "'reference_surface' in the affordance asset. The runtime "
-                "measures their height against that plane and raises without "
-                "it, and calibrating against the actor origin instead is the "
-                "~0.9m error the classification exists to remove. Re-run "
-                "build_affordances for this task group first."
-            )
         robust, _observed = self._aggregate_bins(object_samples)
         compatibility_samples = self._mine_compatibility_samples(
             derive_bin_edges(robust)
@@ -1008,7 +1047,7 @@ class _WhitelistBuilder:
             compatibility_samples[key].extend(values)
         robust, observed = self._aggregate_bins(compatibility_samples)
         bin_edges = derive_bin_edges(robust)
-        return {
+        out = {
             "_schema_version": WHITELIST_SCHEMA_VERSION,
             "subtask": self.subtask,
             "task_group": self.task_group,
@@ -1021,6 +1060,12 @@ class _WhitelistBuilder:
             "bin_stats_observed": observed,
             "_n_successful_rollouts": self.rollout_count,
         }
+        # An index of what the member entries already say, so the state is
+        # visible without walking them. Recomputed wherever membership
+        # changes -- a copied one would go on naming members a prune dropped.
+        if unresolved:
+            out["_unresolved_members"] = dict(sorted(unresolved.items()))
+        return out
 
 
 def _target_key(data: Dict[str, Any]) -> Optional[str]:
@@ -1065,6 +1110,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Path to affordances.json. Defaults to <out-dir>/../affordances.json; "
             "compatibility-change bins are omitted when unavailable."
         ),
+    )
+    parser.add_argument(
+        "--expect-targets", nargs="+", default=None, metavar="TARGET",
+        help="The targets this mine must produce, as canonical keys or bare "
+             "object names (004_sugar_box). The run fails if the rollouts "
+             "yield a different set. Without it a collection that lost a "
+             "target mines cleanly and simply writes one file fewer, which "
+             "is indistinguishable on disk from one that never wanted it.",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -1176,6 +1229,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         log.error("no successful interaction rollouts found under %s", root)
         return 2
 
+    if args.expect_targets is not None:
+        def _expected(name: str) -> str:
+            # ``004_sugar_box`` is how a person writes it on the command
+            # line; the canonical key is ``actor:004_sugar_box``. Both are
+            # accepted, and a key naming its own kind is left alone.
+            key = normalize_asset_key(name) or str(name)
+            return key if ":" in key else f"actor:{key}"
+
+        mined = {target for _subtask, target in builders}
+        wanted = {_expected(name) for name in args.expect_targets}
+        missing, extra = sorted(wanted - mined), sorted(mined - wanted)
+        if missing or extra:
+            log.error(
+                "the rollouts under %s yield %d target(s), not the %d asked "
+                "for. Missing: %s. Unexpected: %s. A mine of the wrong set "
+                "writes a directory that looks finished, so this stops "
+                "before anything is written.",
+                root, len(mined), len(wanted), missing or "none",
+                extra or "none",
+            )
+            return 2
+
     empty = [
         (subtask, target)
         for (subtask, target), builder in sorted(builders.items())
@@ -1194,17 +1269,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
 
+    # Every payload before any file. Mining is where an asset can still be
+    # refused -- an unresolved member, a surface with no plane -- and writing
+    # as we went left a directory holding four of nine targets that looked
+    # exactly like a finished mine. Nothing is written unless all of it can be.
+    staged: List[Tuple[Path, Dict[str, Any], int]] = []
     for (subtask, target), builder in sorted(builders.items()):
         filename_target = whitelist_target_slug(target)
         out_path = out_dir / f"{subtask}_{filename_target}.json"
-        payload = builder.payload()
+        staged.append((out_path, builder.payload(), len(builder.roles)))
+
+    for out_path, payload, seen in staged:
         with open(out_path, "w") as stream:
             json.dump(payload, stream, indent=2)
         log.info(
             "wrote %s (%d members of %d seen)",
-            out_path.name, len(payload["members"]), len(builder.roles),
+            out_path.name, len(payload["members"]), seen,
         )
-
+    flagged = {
+        path.name: sorted(payload["_unresolved_members"])
+        for path, payload, _seen in staged
+        if payload.get("_unresolved_members")
+    }
+    if flagged:
+        log.warning(
+            "%d of %d whitelist(s) carry unresolved members. They are kept as "
+            "evidence and marked %r, and prune_whitelists refuses any runtime "
+            "asset that still contains one: %s",
+            len(flagged), len(staged), families_rules.UNRESOLVED_FIELD,
+            flagged,
+        )
     log.info(
         "mined %d %s whitelists for task group %r from %d successful rollouts",
         len(builders), args.membership_policy, args.task_group, n_rollouts,

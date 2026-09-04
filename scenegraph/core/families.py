@@ -146,10 +146,91 @@ def ambiguous_families(families: Dict[str, Optional[str]]) -> List[str]:
 
     A member that took part in interactions but is neither grasped, nor a
     holder, nor structural. Falling back to a family would give it another
-    family's deadband, which is how one token comes to mean two heights; the
-    miner refuses to write the asset instead.
+    family's deadband, which is how one token comes to mean two heights.
+
+    What happens next depends on which asset is being written. A runtime
+    whitelist refuses to exist with one of these in it; raw evidence records
+    it through :data:`UNRESOLVED_FIELD` and keeps the member, because a sofa
+    the arm brushed past is part of what happened and the runtime membership
+    rule drops it anyway.
     """
     return sorted(key for key, family in families.items() if not family)
+
+
+# Written into a raw member entry the mine could not resolve. It is a record,
+# not a family: the runtime never reads it as a scale, and its only job is to
+# make an unresolved member impossible to mistake for a classified one.
+UNRESOLVED_FIELD = "family_unresolved"
+
+# The three ways a member fails to resolve, each needing a different remedy.
+UNRESOLVED_NO_EXTENT = (
+    "no readable collision extent, so it cannot be told apart from a "
+    "tabletop; extents are read from the simulator at collection time and "
+    "cannot be mined later"
+)
+UNRESOLVED_NO_FAMILY = (
+    "took part in interactions but is neither grasped, nor a holder, nor an "
+    "extended surface, so no height-family rule reaches it"
+)
+UNRESOLVED_NO_PLANE = (
+    "classified as an extended surface but the affordance asset carries no "
+    "'reference_surface' for it, so its height has no plane to be measured "
+    "against"
+)
+
+
+def unresolved_members(members: Dict[str, Any]) -> Dict[str, str]:
+    """``{key: reason}`` for every member the asset marks unresolved.
+
+    Raw evidence keeps entities a runtime asset will not: a sofa the arm
+    brushed past on its way to the can is part of what happened, and deleting
+    it to make the mine finish would throw away evidence to avoid an error
+    message. Marking it is the alternative -- the member stays, and every
+    later stage can see that nothing classified it.
+    """
+    out: Dict[str, str] = {}
+    for key, entry in sorted(members.items()):
+        # A legacy asset may store a bare role list rather than a record, and
+        # one of those carries no marks to read.
+        if not isinstance(entry, dict):
+            continue
+        reason = entry.get(UNRESOLVED_FIELD)
+        if reason:
+            out[key] = str(reason)
+    return out
+
+
+def runtime_blockers(members: Dict[str, Any]) -> Dict[str, str]:
+    """``{key: reason}`` for members that must not reach a runtime asset.
+
+    Two clauses, and under the current miner they agree on every member:
+
+    * anything explicitly marked unresolved, whatever else it carries. A
+      surface with no mined plane is *classified* and still unusable, because
+      the height it would be measured on does not exist.
+    * in a families-aware asset, any physical member with no family at all.
+      This is the same distinction ``ee_height_bin_key`` makes at runtime: an
+      asset that classifies nothing is a legacy one and keeps the single
+      shared scale, while an asset that classifies its other members and omits
+      one is an error rather than a reason to reach for the old scale.
+
+    Virtual sites are exempt from the second clause. They have no body for the
+    gripper to be above, are measured on the ``ee-site-*`` scales instead, and
+    are never given a family by anything.
+    """
+    from .sites import SITE_PREFIX
+
+    out = unresolved_members(members)
+    physical = {key: entry for key, entry in members.items()
+                if isinstance(entry, dict)
+                and not str(key).startswith(SITE_PREFIX)}
+    if not any(entry.get("family") for entry in physical.values()):
+        return out            # legacy asset: nothing was ever classified.
+    for key, entry in sorted(physical.items()):
+        if not entry.get("family") and key not in out:
+            out[key] = ("carries no end-effector height family, but this "
+                        "asset classifies its other members")
+    return out
 
 
 def directed_pairs(buckets: Iterable[str]) -> Tuple[Set[str], Set[str]]:

@@ -69,6 +69,7 @@ from .entity_identity import (
     normalize_asset_key,
     stable_entity_key,
 )
+from .families import UNRESOLVED_FIELD as _UNRESOLVED_FIELD
 from .schema import Node
 from .sites import SiteDeclaration, parse_site_declarations
 from .spatial_metrics import (
@@ -252,6 +253,25 @@ def load_whitelist(path: str) -> Whitelist:
 
     if not by_key:
         raise ValueError(f"whitelist {path!r}: 'members' is empty")
+
+    # The last place an unresolved member can be stopped, and the only one
+    # that sees what a run actually loaded. Raw mining assets carry these
+    # marks on purpose -- they keep the sofa the arm brushed past, which no
+    # height-family rule reaches -- and a whitelist directory pointed at the
+    # raw tree instead of the pruned one would otherwise load it and label it
+    # on another family's deadband.
+    unresolved = {
+        k: entry[_UNRESOLVED_FIELD] for k, entry in members.items()
+        if isinstance(k, str) and isinstance(entry, dict)
+        and entry.get(_UNRESOLVED_FIELD)
+    }
+    if unresolved:
+        detail = "; ".join(f"{k}: {v}" for k, v in sorted(unresolved.items()))
+        raise ValueError(
+            f"whitelist {path!r} carries {len(unresolved)} member(s) nothing "
+            f"could classify -- {detail}. This is a raw mining asset, not a "
+            "runtime one; point the run at the pruned whitelist directory."
+        )
 
     bin_edges: Dict[str, List[float]] = {}
     raw_edges = raw.get("bin_edges", {})

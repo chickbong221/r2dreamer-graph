@@ -81,8 +81,9 @@ class FeatureConsumptionTest(unittest.TestCase):
 
         with torch.no_grad():
             out = encoder(graph)
-        # The pooled readout is what the RSSM consumes.
-        return out.tokens if hasattr(out, "tokens") else out[0]
+        # ``token`` is the pooled readout the RSSM consumes -- the one place
+        # every node and every fact has to have arrived to matter.
+        return out.token
 
     def _moves(self, mutate):
         """Whether changing one field changes the encoding."""
@@ -172,8 +173,6 @@ class FeatureConsumptionTest(unittest.TestCase):
     def test_the_continuous_features_receive_gradient(self):
         """Reading a value and learning from it are different; a detached
         feature would pass every test above."""
-        import torch
-
         encoder = self._encoder()
         graph = self._graph()
         for key in ("graph_node_bbox", "graph_node_centroid"):
@@ -181,19 +180,13 @@ class FeatureConsumptionTest(unittest.TestCase):
                 tensor = graph[key].clone().requires_grad_(True)
                 fed = dict(graph)
                 fed[key] = tensor
-                out = encoder(fed)
-                token = out.tokens if hasattr(out, "tokens") else out[0]
-                token.sum().backward()
+                encoder(fed).token.sum().backward()
                 self.assertIsNotNone(tensor.grad)
                 self.assertGreater(float(tensor.grad.abs().sum()), 0.0)
 
     def test_the_embeddings_receive_gradient(self):
-        import torch
-
         encoder = self._encoder()
-        out = encoder(self._graph())
-        token = out.tokens if hasattr(out, "tokens") else out[0]
-        token.sum().backward()
+        encoder(self._graph()).token.sum().backward()
         for name in ("entity", "target", "relation", "absolute"):
             with self.subTest(embedding=name):
                 weight = getattr(encoder, name).weight

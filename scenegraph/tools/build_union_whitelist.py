@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+from scenegraph.core import families
 from scenegraph.core.whitelist import (
     WHITELIST_SCHEMA_VERSION,
     derive_bin_edges,
@@ -85,6 +86,14 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
                             'member cannot carry two classifications; re-mine '
                             'the group.')
                     merged[field] = entry[field]
+            # A record, not a classification, so it is carried rather than
+            # conflict-checked: two targets can fail to resolve the same
+            # member for different reasons and both are true. Dropping it is
+            # what would let a raw union -- which is where the runtime reads
+            # its bins and its vocabulary -- load as if it were pruned.
+            if entry.get(families.UNRESOLVED_FIELD):
+                merged.setdefault(families.UNRESOLVED_FIELD,
+                                  entry[families.UNRESOLVED_FIELD])
         for key, entry in (raw.get('sites') or {}).items():
             previous = sites.get(key)
             if previous is not None and previous != entry:
@@ -120,12 +129,14 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         if entry['supports']:
             out['supports'] = sorted(entry['supports'])
         for field in ('family', 'structural_surface',
-                      'structural_surface_reason', 'name'):
+                      'structural_surface_reason', 'name',
+                      families.UNRESOLVED_FIELD):
             if entry.get(field) is not None:
                 out[field] = entry[field]
         out_members[key] = out
+    unresolved = families.unresolved_members(out_members)
 
-    return {
+    out = {
         '_schema_version': WHITELIST_SCHEMA_VERSION,
         'subtask': subtask,
         'task_group': task_group,
@@ -138,6 +149,9 @@ def merge(whitelist_dir: Path, subtask: str) -> Dict:
         '_n_successful_rollouts': rollouts,
         '_merged_from': [p.name for p in sources],
     }
+    if unresolved:
+        out['_unresolved_members'] = unresolved
+    return out
 
 
 def main(argv=None) -> int:

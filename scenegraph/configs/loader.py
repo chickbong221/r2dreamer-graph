@@ -20,7 +20,7 @@ from typing import Optional
 
 import yaml
 
-from ..core.affordance import load_affordance_set
+from ..core.affordance import AffordanceSet, load_affordance_set
 from ..core.whitelist import whitelist_group_dir
 
 
@@ -93,7 +93,14 @@ def load_config(
     selection_cfg = dict(raw.get("selection") or {})
     selection_cfg.setdefault("n_max", 11)
 
-    aff_set = load_affordance_set(affordances_cfg["asset_path_abs"])
+    # ``None`` here means no task group was named, so no asset was ever
+    # requested -- there is nothing that could have been found, and warning
+    # that it was not found sends the reader looking for a missing file. That
+    # is what ``default_temporal_k`` does: it reads one integer out of the
+    # yaml and needs no assets at all. A real path that does not exist still
+    # warns, and ``require_assets`` still refuses below either way.
+    aff_set = (load_affordance_set(affordances_cfg["asset_path_abs"])
+               if affordances_cfg["asset_path_abs"] else AffordanceSet())
 
     if require_assets:
         if aff_set.is_empty():

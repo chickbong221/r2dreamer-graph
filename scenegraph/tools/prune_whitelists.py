@@ -22,6 +22,15 @@ Policies:
     Copy membership through unchanged. Useful to measure what the runtime gate
     is actually costing before committing to a narrower rule.
 
+Whichever policy runs, this is the stage that decides what a training run
+loads, so it is also where runtime readiness is enforced: every physical
+member that survives has to carry a usable end-effector height family. Raw
+evidence is deliberately wider than that -- it keeps the sofa the arm brushed
+past, which no family rule reaches and which ``target-supporters`` removes
+anyway -- and one that survives the policy stops the prune. It is never
+dropped to make the error go away: deleting a member the policy admitted would
+change what the graph contains in order to silence a check on it.
+
 Bin statistics are carried over untouched -- they are mined from per-rollout
 value samples, not from membership -- so pruning never moves a relation bin.
 The per-group ``<subtask>_all.json`` union is rebuilt from the pruned files at
@@ -34,8 +43,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
+from scenegraph.core import families as families_rules
 from scenegraph.tools.build_subtask_whitelists import (
     MEMBERSHIP_FULL_EVIDENCE,
     MEMBERSHIP_POLICIES,
@@ -96,9 +106,28 @@ def prune_payload(raw: Dict, policy: str) -> Dict:
             entry.pop("supports", None)
         out_members[key] = entry
 
+    # Runtime readiness, checked on what survived rather than on what the
+    # evidence held. Raw membership is deliberately wider: it keeps the sofa
+    # the arm brushed past, which no height-family rule reaches. That member
+    # is not a defect in the evidence, and it is gone by this line -- but if
+    # one is still here, this file is about to become an asset a run loads,
+    # and a member with no scale would be labelled on another family's
+    # deadband. Refused rather than dropped: silently deleting a member the
+    # policy admitted would change the graph's membership to make an error go
+    # away.
+    blockers = families_rules.runtime_blockers(out_members)
+    if blockers:
+        detail = "; ".join(f"{key}: {reason}"
+                           for key, reason in sorted(blockers.items()))
+        raise ValueError(
+            f"{len(blockers)} member(s) admitted by the {policy!r} policy "
+            f"cannot be measured -- {detail}"
+        )
+
     out = dict(raw)
     out["members"] = out_members
     out["membership_policy"] = policy
+    out.pop("_unresolved_members", None)
     out["_pruned_from"] = {
         "membership_policy": str(raw.get("membership_policy") or ""),
         "members": len(members),
@@ -147,6 +176,10 @@ def main(argv=None) -> int:
             print(f"[prune] no {subtask}_*.json under {raw_dir}",
                   file=sys.stderr)
             continue
+        # Every payload before any file, for the same reason the miner stages
+        # its writes: a prune that fails halfway leaves a directory holding
+        # some of the targets and looking like all of them.
+        staged: List[Tuple[Path, Dict, int]] = []
         for path in sources:
             raw = json.loads(path.read_text())
             group = str(raw.get("task_group") or "")
@@ -155,13 +188,24 @@ def main(argv=None) -> int:
                       f"{group or '<none>'!r}, expected "
                       f"{args.task_group!r}", file=sys.stderr)
                 return 1
-            payload = prune_payload(raw, args.policy)
-            (out_dir / path.name).write_text(
-                json.dumps(payload, indent=2, sort_keys=True))
-            print(f"[prune] {path.name}: {len(raw.get('members') or {})} -> "
+            try:
+                payload = prune_payload(raw, args.policy)
+            except ValueError as exc:
+                print(f"[prune] FAILED {path.name}: {exc}", file=sys.stderr)
+                print("        A runtime whitelist is what a training run "
+                      "loads, so a member it cannot measure stops the prune "
+                      "rather than being quietly dropped. The raw evidence is "
+                      "untouched; re-mine or fix the affordance asset.",
+                      file=sys.stderr)
+                return 1
+            staged.append(
+                (out_dir / path.name, payload, len(raw.get("members") or {})))
+
+        for out_path, payload, seen in staged:
+            out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+            print(f"[prune] {out_path.name}: {seen} -> "
                   f"{len(payload['members'])} members")
             written += 1
-
         # The runtime reads its relation bins from the union, so it has to
         # follow the pruned files rather than the raw ones.
         try:
