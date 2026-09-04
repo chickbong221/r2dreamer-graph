@@ -104,6 +104,32 @@ def _inv_transform_point(
     return R.T @ (np.asarray(point, dtype=float) - p)
 
 
+def support_normal_obj(supporter_pose, force_vector) -> Optional[np.ndarray]:
+    """The outward surface normal on a supporter, in its own object frame.
+
+    ``force_vector`` is the world-frame force ON the supporter from the thing
+    it carries, so it points into the surface and its negation points away.
+    Rotating that into the supporter's frame is the whole derivation, and it
+    is a derivation rather than an assumption because a supporter's object
+    frame need not be z-up: ReplicaCAD furniture is y-up, so the local +z this
+    used to hard-code rotates into the world horizontal, where a surface
+    normal has no "above" and every height sample is discarded.
+
+    None when the force was not recorded or is degenerate; the caller then
+    falls back to the old assumption and says so in the asset.
+    """
+    if force_vector is None or supporter_pose is None:
+        return None
+    f = np.asarray(force_vector, dtype=float).reshape(-1)
+    if f.size < 3 or not np.all(np.isfinite(f[:3])):
+        return None
+    magnitude = float(np.linalg.norm(f[:3]))
+    if magnitude <= 1e-9:
+        return None
+    return _inv_rotate_dir(np.asarray(supporter_pose, dtype=float),
+                           -f[:3] / magnitude)
+
+
 def _inv_rotate_dir(
     pose_wxyz: np.ndarray, dir_world: np.ndarray
 ) -> Optional[np.ndarray]:
@@ -398,7 +424,9 @@ def _accumulate_obj_obj_samples(
     # things lets one pair match the other's anchor.
     contact_obs: Dict[Tuple[str, str],
                       List[Tuple[np.ndarray, Optional[np.ndarray]]]] = {}
-    support_obs: Dict[Tuple[str, str], List[np.ndarray]] = {}
+    support_obs: Dict[
+        Tuple[str, str],
+        List[Tuple[np.ndarray, Optional[np.ndarray]]]] = {}
     bottom_obs: Dict[Tuple[str, str], List[np.ndarray]] = {}
 
     for rollout in rollouts:
@@ -451,14 +479,27 @@ def _accumulate_obj_obj_samples(
             supported_key = _stable_key(rec.get("supported_key"))
             sp_sup = np.asarray(supporter_pose, dtype=float)
             sp_subj = np.asarray(supported_pose, dtype=float)
-            # Surface anchor on supporter: supported center projected into
-            # supporter's local frame. We trust the supporter's surface to be
-            # the local +z plane (matches MS-HAB drawer/counter convention).
+            # Outward normal on the supporter, recovered rather than assumed:
+            # ``force_vector`` is the force ON the supporter from the thing it
+            # carries, so it points into the surface; away from the surface is
+            # its negation, and the object frame is where the asset stores it.
+            #
+            # This used to be hard-coded to the supporter's local +z. That is
+            # a different direction for every piece of furniture: ReplicaCAD
+            # assets are y-up in their own frames, so rotating local +z into
+            # the world gave a horizontal vector, ``oriented_normal`` refused
+            # it as having no "up", and every structural height sample was
+            # silently dropped -- which is why the mined asset classified six
+            # surfaces and calibrated a scale for none of them.
+            normal_obj = support_normal_obj(sp_sup, rec.get("force_vector"))
+            # Surface anchor on supporter: supported centre projected into the
+            # supporter's local frame.
             if supporter_key and supported_key:
                 anchor = _inv_transform_point(sp_sup, sp_subj[:3])
                 if anchor is not None:
                     support_obs.setdefault(
-                        (supporter_key, supported_key), []).append(anchor)
+                        (supporter_key, supported_key),
+                        []).append((anchor, normal_obj))
             # Bottom anchor on supported: supporter center in supported frame.
             if supporter_key and supported_key:
                 anchor = _inv_transform_point(sp_subj, sp_sup[:3])
@@ -492,8 +533,27 @@ def _accumulate_obj_obj_samples(
         entry["contact_components"].append(comp)
 
     for (key, partner), samples in support_obs.items():
-        arr = np.stack(samples, axis=0)
+        arr = np.stack([s[0] for s in samples], axis=0)
         anchor_mean = arr.mean(axis=0)
+        # Averaged in the supporter's own frame, where the samples were
+        # taken. Normalising is the only correction applied: forcing it
+        # toward world up here would be a world-frame judgement about an
+        # object-frame vector, which is the same mistake in the other
+        # direction.
+        normals = [s[1] for s in samples if s[1] is not None]
+        surface_normal = [0.0, 0.0, 1.0]
+        normal_provenance = "assumed local +z: no support force was recorded"
+        normal_points = ""
+        if normals:
+            mean = np.mean(np.vstack(normals), axis=0)
+            length = float(np.linalg.norm(mean))
+            if length > 1e-9:
+                surface_normal = [round(float(v), 6) for v in mean / length]
+                normal_points = "outward"
+                normal_provenance = (
+                    f"mean of {len(normals)} support-force direction(s), "
+                    "negated to point away from the surface and expressed in "
+                    "the supporter's object frame")
         # Footprint radius: max in-plane distance from the mean (xy in
         # supporter local frame). Floor at 1 cm so a single observation still
         # produces a non-degenerate radius.
@@ -506,7 +566,9 @@ def _accumulate_obj_obj_samples(
                 round(float(anchor_mean[1]), 6),
                 round(float(anchor_mean[2]), 6),
             ],
-            "surface_normal": [0.0, 0.0, 1.0],
+            "surface_normal": surface_normal,
+            "surface_normal_points": normal_points,
+            "surface_normal_provenance": normal_provenance,
             "footprint_radius": round(footprint, 6),
             "partner": partner,
             "n_samples": int(len(samples)),

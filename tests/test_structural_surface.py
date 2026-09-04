@@ -11,6 +11,7 @@ no public planar-distance is emitted, because the origin of a metre-wide plane
 names no place to approach.
 """
 
+import json
 import unittest
 
 import numpy as np
@@ -19,7 +20,9 @@ from scenegraph.core.affordance import (
     AffordanceSet,
     BottomComponent,
     ReferenceSurface,
+    transform_dir,
 )
+from scenegraph.core.families import reference_surface_from_supports
 from scenegraph.core.relation_rules import (
     ee_object_spatial_edges,
     is_structural_surface,
@@ -31,10 +34,12 @@ from scenegraph.core.schema import Graph, Node
 from scenegraph.core.spatial_metrics import (
     OBJECT_OBJECT_SCOPE,
     EE_OBJECT_SCOPE,
+    anchor_world as anchor_world_point,
     oriented_normal,
     spatial_bin_key,
     surface_height,
 )
+from scenegraph.tools.build_affordances import support_normal_obj
 
 TABLE_KEY = "actor:table-workspace"
 SPHERE_KEY = "actor:sphere"
@@ -127,6 +132,81 @@ class NormalConventionTest(unittest.TestCase):
         """Guessing would be a silent half-metre error."""
         self.assertIsNone(oriented_normal([1.0, 0.0, 0.0]))
         self.assertIsNone(surface_height([0, 0, 1], [0, 0, 0], [1, 0, 0]))
+
+
+# A supporter rotated +90 degrees about X: its local +y is world up, and its
+# local +z is world -y. ReplicaCAD furniture is shaped like this, which is why
+# tidy_house mined six structural surfaces and calibrated a scale for none.
+Y_UP_POSE = [1.0, 0.0, 0.0, 0.70710678, 0.70710678, 0.0, 0.0]
+ANCHOR_LOCAL = [0.0, 0.83, 0.0]
+
+
+class ObjectFrameIsNotWorldFrameTest(unittest.TestCase):
+    """The normal is an object-frame vector; "up" is a world-frame fact.
+
+    Deciding one against the other worked only while the two frames happened
+    to coincide, and failed silently everywhere else: no exception, no
+    warning, just a family with no samples and an asset the graph builder
+    then refuses for a bin it cannot find.
+    """
+
+    def _entry(self, normal, points=""):
+        component = {"surface_anchor": list(ANCHOR_LOCAL),
+                     "surface_normal": list(normal)}
+        if points:
+            component["surface_normal_points"] = points
+        return {"support_components": [component]}
+
+    def _world_normal(self, local):
+        return transform_dir(Y_UP_POSE, np.asarray(local, dtype=float))
+
+    def test_the_normal_is_recovered_from_the_support_force(self):
+        """Force on the supporter points down; away from the surface is up,
+        and in this frame that is local +y."""
+        recovered = support_normal_obj(Y_UP_POSE, [0.0, 0.0, -9.8])
+        np.testing.assert_allclose(recovered, [0.0, 1.0, 0.0], atol=1e-6)
+
+    def test_a_local_y_normal_survives_the_helper(self):
+        surface = reference_surface_from_supports(
+            self._entry([0.0, 1.0, 0.0], points="outward"))
+        np.testing.assert_allclose(surface["outward_normal"], [0.0, 1.0, 0.0])
+
+    def test_it_transforms_to_world_up_and_measures(self):
+        surface = reference_surface_from_supports(
+            self._entry([0.0, 1.0, 0.0], points="outward"))
+        world = self._world_normal(surface["outward_normal"])
+        np.testing.assert_allclose(world, [0.0, 0.0, 1.0], atol=1e-6)
+        anchor_world = anchor_world_point(Y_UP_POSE, surface["anchor"])
+        self.assertAlmostEqual(
+            surface_height([1.0, 0.0, 1.5], anchor_world, world), 0.67, 5)
+
+    def test_the_hard_coded_local_z_measures_nothing(self):
+        """The defect, end to end: local +z here is world -y, a horizontal
+        normal has no 'above', and the height is dropped without a word."""
+        world = self._world_normal([0.0, 0.0, 1.0])
+        np.testing.assert_allclose(world, [0.0, -1.0, 0.0], atol=1e-6)
+        self.assertIsNone(
+            surface_height([1.0, 0.0, 1.5], [1.0, 0.0, 0.83], world))
+
+    def test_an_inward_normal_is_negated_by_declaration(self):
+        surface = reference_surface_from_supports(
+            self._entry([0.0, -1.0, 0.0], points="inward"))
+        np.testing.assert_allclose(surface["outward_normal"], [0.0, 1.0, 0.0])
+
+    def test_an_unlabelled_asset_falls_back_to_the_anchor(self):
+        """Legacy files carry no declaration. The anchor is on the outside of
+        the surface, which settles the sign without consulting the world."""
+        surface = reference_surface_from_supports(
+            self._entry([0.0, -1.0, 0.0]))
+        np.testing.assert_allclose(surface["outward_normal"], [0.0, 1.0, 0.0])
+
+    def test_the_shipped_maniskill_table_is_unchanged(self):
+        """Real data, z-up and unlabelled: the fix must not move it."""
+        with open("scenegraph/configs/affordances/PickCube-v1.json") as handle:
+            entry = json.load(handle)["objects"]["actor:table-workspace"]
+        np.testing.assert_allclose(
+            reference_surface_from_supports(entry)["outward_normal"],
+            entry["reference_surface"]["outward_normal"])
 
 
 class SurfaceRelativeHeightTest(unittest.TestCase):

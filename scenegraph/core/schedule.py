@@ -372,7 +372,7 @@ def maniskill_schedule_source(
 
 def mshab_schedule_source(
     task_group: str, subtask: str, configs: str, schedule_dir: str = "",
-    whitelist_dir: str = "",
+    whitelist_dir: str = "", affordance_path: str = "",
 ) -> ScheduleSource:
     """MS-HAB: assets per task group, one schedule per subtask inside it.
 
@@ -391,7 +391,10 @@ def mshab_schedule_source(
         label=f"{task_group}/{subtask}",
         schedule_path=os.path.join(
             schedule_dir, task_group, f"{subtask}.json"),
-        affordance_path=os.path.join(
+        # Overridable for the same reason ``whitelist_dir`` is: a caller
+        # pointed at one asset tree must not compile a schedule against the
+        # packaged one. Defaults to the tree ``configs`` names.
+        affordance_path=affordance_path or os.path.join(
             configs, "affordances", f"{task_group}.json"),
         union_whitelist_path=whitelist_path(
             resolved, subtask, TASK_LEVEL_TARGET),

@@ -205,6 +205,48 @@ def identity_mismatches(stored: Mapping[str, Any],
     return out
 
 
+def _digest(*parts: Any) -> str:
+    import hashlib
+
+    text = "\x1f".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _file_digest(path: Optional[str]) -> str:
+    if not path or not os.path.isfile(path):
+        return "absent"
+    with open(path, "rb") as handle:
+        return _digest(handle.read().decode("utf-8", "replace"))
+
+
+def run_identity(*, whitelist_dir: str, schedule_path: str = "",
+                 schedule_label: str = "", n_max: int = 0, e_max: int = 0,
+                 n_cams: int = 0, entity_tokens: Sequence[str] = (),
+                 relation_tokens: Sequence[str] = (),
+                 absolute_tokens: Sequence[str] = ()) -> Dict[str, str]:
+    """What a checkpoint has to agree with before its weights mean anything.
+
+    Deliberately about the *model contract* and nothing else: which ids the
+    embeddings index, how many rows and facts a frame holds, which schedule
+    the progress head was supervised against, and which mined assets produced
+    all of that. An evaluation is free to change the scene, the lighting or
+    the episode count without any of these moving -- which is what lets
+    Experiment C load Experiment B's checkpoint.
+    """
+    union = (os.path.join(whitelist_dir, "pick_all.json")
+             if whitelist_dir else "")
+    return {
+        "entity_vocab": f"{len(entity_tokens)}:{_digest(*entity_tokens)}",
+        "relation_vocab":
+            f"{len(relation_tokens)}:{_digest(*relation_tokens)}",
+        "absolute_vocab":
+            f"{len(absolute_tokens)}:{_digest(*absolute_tokens)}",
+        "graph_schema": f"n{int(n_max)}e{int(e_max)}c{int(n_cams)}",
+        "schedule": f"{schedule_label}:{_file_digest(schedule_path)}",
+        "assets": _file_digest(union),
+    }
+
+
 def load_checkpoint(path: str, identity: Mapping[str, Any],
                     map_location: Any = "cpu") -> Dict[str, Any]:
     """Load, or raise naming every field that disagrees.

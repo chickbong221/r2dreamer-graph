@@ -4,9 +4,9 @@
 # READINESS -- this script refuses to run until each is resolved. None is a
 # value to guess at:
 #
-#   1. The tidy_house Pick assets must be re-mined from a schema-v9 collection
-#      of all nine objects. The committed ones carry _bins_migrated_pre_anchor
-#      and GraphBuilder refuses them.
+#   1. The tidy_house Pick assets must validate. The nine-object schema-v9
+#      collection is mined; what a run still needs is every bin the graph
+#      builder demands, which is what validate_task_assets checks below.
 #   2. model.graph.entity_vocab / n_max / e_max come from the mined asset and
 #      a per-configuration capacity audit, never from a remembered number:
 #        python -m scenegraph.tools.audit_graph_capacity #          --whitelist-dir scenegraph/configs/subtask_whitelists/tidy_house
@@ -22,12 +22,10 @@ UNION=$WL/pick_all.json
 require() { [ -n "${2:-}" ] || { echo "BLOCKED: $1" >&2; exit 1; }; }
 
 [ -f "$UNION" ] || { echo "BLOCKED: no $UNION -- mine the assets first" >&2; exit 1; }
-python - <<'EOF' || exit 1
-import json, sys
-d = json.load(open("scenegraph/configs/subtask_whitelists/tidy_house/pick_all.json"))
-if d.get("_bins_migrated_pre_anchor"):
-    sys.exit("BLOCKED: the union asset is key-migrated, not re-mined")
-EOF
+# Every gate a run hits at construction, checked in a second rather than
+# after a scene build: the nine targets, no unresolved member, every required
+# bin calibrated, every surface with a plane, and a schedule that compiles.
+python tests/probes/validate_task_assets.py --task tidy_house --targets   002_master_chef_can 003_cracker_box 004_sugar_box 005_tomato_soup_can   007_tuna_fish_can 008_pudding_box 009_gelatin_box 010_potted_meat_can   024_bowl || { echo "BLOCKED: the tidy_house assets do not validate" >&2; exit 1; }
 
 require "set ENTITY_VOCAB from audit_graph_capacity" "${ENTITY_VOCAB:-}"
 require "set N_MAX from the capacity audit"          "${N_MAX:-}"

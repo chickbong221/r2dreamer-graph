@@ -72,17 +72,21 @@ class Report:
 
 def capacity_for(graphs, n_max: int = 0,
                  e_max: int = 0) -> Tuple[int, int, Dict]:
-    """``(n_max, e_max, occupancy)`` -- measured when not supplied.
+    """``(n_max, e_max, occupancy)`` for packing this trace.
 
-    A probe that had to be told the capacity in advance could not answer the
-    capacity question, and packing at exactly the observed peak is what makes
-    an overflow here mean the same thing it would mean in training.
+    When the run's configured capacities are given they are used, so an
+    overflow here is the overflow training would hit. When they are not, the
+    trace is packed at its own peak -- which lets the frames be scored but
+    proves nothing about capacity, and is reported as such. One episode in one
+    configuration is a floor: retention only adds nodes, another scene holds
+    other furniture, and a canonical key can have two instances at once.
     """
     from scenegraph.tools.audit_graph_capacity import (
         frames_from_graphs, occupancy_report,
     )
 
-    occupancy = occupancy_report(frames_from_graphs(graphs), None, None)
+    occupancy = occupancy_report(frames_from_graphs(graphs), n_max or None,
+                                 e_max or None)
     # Three rows are reserved by contract -- end effector, target, site --
     # so a trace that never showed three nodes still needs room for them.
     return (int(n_max or max(occupancy["peak_nodes"], 3)),
@@ -130,7 +134,8 @@ def score_frames(graphs, schedule, vocab, *, n_max: int, e_max: int,
 
 
 def report_trace(rep, graphs, potentials, valids, discount: float,
-                 occupancy=None, n_max=None, e_max=None) -> None:
+                 occupancy=None, n_max=None, e_max=None,
+                 configured: bool = False) -> None:
     """Every acceptance criterion the trace can answer."""
     import torch
 
@@ -167,10 +172,31 @@ def report_trace(rep, graphs, potentials, valids, discount: float,
         return
     rep.note("peak occupancy (LOWER bound: one episode, one scene)",
              f"{occupancy['peak_nodes']} node(s), "
-             f"{occupancy['peak_edges']} edge(s)")
+             f"{occupancy['peak_edges']} edge(s) over "
+             f"{occupancy['n_frames']} frame(s)")
+    rep.note("most simultaneous instances of one key",
+             f"{occupancy['peak_instances_per_key']} "
+             f"({occupancy['peak_duplicate_key'] or 'none duplicated'})")
     rep.note("distinct entity keys in the trace",
              f"{occupancy['distinct_entity_keys']}")
-    rep.note("packed at", f"n_max={n_max}, e_max={e_max}")
+    over_n = occupancy["frames_over_n_max"]
+    over_e = occupancy["frames_over_e_max"]
+    if configured:
+        rep.check("the configured capacities hold for this episode",
+                  not over_n and not over_e,
+                  f"{len(over_n)} frame(s) over n_max, "
+                  f"{len(over_e)} over e_max")
+        for frame in over_n[:3]:
+            rep.note("  over n_max", f"frame {frame['frame']}: "
+                                     f"{frame['entity_keys']}")
+        for frame in over_e[:3]:
+            rep.note("  over e_max",
+                     f"frame {frame['frame']}: {frame['n_edges']} edges")
+    else:
+        rep.note("packed at", f"n_max={n_max}, e_max={e_max} -- fitted to "
+                              "this trace, so it proves nothing about "
+                              "capacity. Pass --n-max/--e-max to test the "
+                              "run's own settings.")
 
 
 def compile_schedule_from(args, entity):
@@ -178,23 +204,20 @@ def compile_schedule_from(args, entity):
 
     source = mshab_schedule_source(
         args.task, args.subtask, args.configs, args.schedule_dir,
-        args.whitelist_dir)
-    return compile_from_source(source, entity)
+        args.whitelist_dir, affordance_path=args.affordance)
+    return compile_from_source(source, entity), source
 
 
 def load_vocabs(args):
-    """The three vocabularies, all from the explicitly named asset tree."""
-    from scenegraph.adapters.graph_vocab import (
-        GraphVocab, build_absolute_vocab, build_entity_vocab,
-        build_relation_vocab, build_temporal_vocab,
-    )
+    """The run's own vocabulary, from the explicitly named asset tree.
 
-    return GraphVocab(
-        entity=build_entity_vocab(args.whitelist_dir),
-        relation=build_relation_vocab(),
-        absolute=build_absolute_vocab(),
-        temporal=build_temporal_vocab(),
-    )
+    Built through ``build_graph_vocab`` rather than assembled here, so the
+    label-validity masks the packer checks against are the ones the runtime
+    uses.
+    """
+    from scenegraph.adapters.graph_vocab import build_graph_vocab
+
+    return build_graph_vocab(args.whitelist_dir)
 
 
 def build_config(args, rep):
@@ -226,8 +249,19 @@ def build_config(args, rep):
                               asset_path_abs=str(affordance))
     cfg["whitelist_dir"] = args.whitelist_dir
     cfg["use_target_flag"] = True
+    # The MS-HAB run's own graph settings, not this module's defaults. A probe
+    # that measured a keep-everything graph would report an occupancy the
+    # training run never sees, and one that emitted object-object spatial
+    # edges would report facts the schedule cannot name.
+    cfg["object_object_spatial"] = bool(args.object_object_spatial)
+    cfg["cameras"] = list(args.cameras)
+    cfg["visibility_policy"] = args.visibility_policy
     rep.note("affordance asset", str(affordance))
     rep.note("whitelist dir", args.whitelist_dir)
+    rep.note("graph settings",
+             f"visibility={args.visibility_policy}, "
+             f"cameras={list(args.cameras)}, "
+             f"object_object_spatial={bool(args.object_object_spatial)}")
     rep.check("the configured assets are the ones named on the command line",
               cfg["whitelist_dir"] == args.whitelist_dir
               and cfg["affordances"]["asset_path_abs"] == str(affordance))
@@ -258,32 +292,51 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--discount", type=float, default=1.0)
     p.add_argument("--n-max", type=int, default=0)
     p.add_argument("--e-max", type=int, default=0)
-    p.add_argument("--n-cams", type=int, default=2)
+    p.add_argument("--cameras", nargs="+",
+                   default=["fetch_head", "fetch_hand"],
+                   help="Camera order, which fixes the bbox axis order. Must "
+                        "match env.cameras for the run being probed.")
+    p.add_argument("--visibility-policy", default="projected_camera",
+                   help="MS-HAB runs projected_camera; the builder's own "
+                        "default is keep, which admits more nodes.")
+    p.add_argument("--object-object-spatial", action="store_true",
+                   help="Off for MS-HAB Pick, matching env.graph.")
     p.add_argument("--out", default="", help="Write the trace as JSON.")
     args = p.parse_args(argv)
 
     rep = Report()
     vocab = load_vocabs(args)
-    schedule = compile_schedule_from(args, vocab.entity)
+    schedule, source = compile_schedule_from(args, vocab.entity)
     rep.note("entity vocabulary", f"{len(vocab.entity.token_to_id)} tokens")
     rep.note("schedule", f"{len(schedule.phases)} phases, "
                          f"{len(schedule.slots)} distinct facts")
+    # One asset tree for both halves. Compiling the schedule against the
+    # packaged affordances while building graphs against a mined tree is a
+    # mismatch nothing downstream would report.
+    rep.check("the schedule compiled against the named affordance asset",
+              source.affordance_path == args.affordance,
+              f"{source.affordance_path} vs {args.affordance}")
 
     cfg = build_config(args, rep)
     if cfg is None:
         rep.render()
         return 1
 
-    graphs = rollout_graphs(args, cfg, rep)
-    if not graphs:
+    episode, success_at = rollout_graphs(args, cfg, rep)
+    if not episode or success_at is None:
         rep.render()
         return 1
 
-    n_max, e_max, occupancy = capacity_for(graphs, args.n_max, args.e_max)
+    # Scored to the success frame; audited over the whole episode. Retention
+    # only adds nodes, so the frames after success are where occupancy peaks,
+    # and stopping the audit at success would understate it.
+    scored = episode[:success_at + 1]
+    configured = bool(args.n_max and args.e_max)
+    n_max, e_max, occupancy = capacity_for(episode, args.n_max, args.e_max)
     try:
         potentials, valids = score_frames(
-            graphs, schedule, vocab, n_max=n_max, e_max=e_max,
-            n_cams=args.n_cams)
+            scored, schedule, vocab, n_max=n_max, e_max=e_max,
+            n_cams=len(args.cameras))
     except (ValueError, RuntimeError) as exc:
         # ``pack_graph`` raises on a broken protected row and on edge overflow.
         # Both are results, not crashes: report and stop.
@@ -293,12 +346,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     rep.check("the frames pack the way training packs them", True,
               f"n_max={n_max}, e_max={e_max}, protected rows verified")
-    report_trace(rep, graphs, potentials, valids, args.discount,
-                 occupancy, n_max, e_max)
+    report_trace(rep, scored, potentials, valids, args.discount,
+                 occupancy, n_max, e_max, configured)
 
     if args.out:
         with open(args.out, "w") as handle:
-            json.dump({"potentials": potentials, "valid": valids}, handle)
+            json.dump({"potentials": potentials, "valid": valids,
+                       "success_frame": success_at,
+                       "episode_frames": len(episode)}, handle)
         rep.note("trace written", args.out)
 
     failed = rep.render()
@@ -306,21 +361,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 1 if failed else 0
 
 
-def _env_zero_flag(info, key: str) -> bool:
-    import numpy as np
+def rollout_graphs(args, cfg, rep):
+    """``(frames, success_index)`` for one episode the environment calls a
+    success, or ``([], None)`` with a reason already reported.
 
-    value = info.get(key) if isinstance(info, dict) else None
-    if value is None:
-        return False
-    if hasattr(value, "detach"):
-        value = value.detach().cpu()
-    return bool(np.asarray(value).reshape(-1)[0])
-
-
-def rollout_graphs(args, cfg, rep) -> Optional[List[Any]]:
-    """Drive the released policy to one success, recording a graph per step.
-
-    Three things this has to get right, none of which the frames themselves
+    Four things this has to get right, none of which the frames themselves
     would reveal:
 
     * **The reset frame.** The graph at reset is a real frame of the episode
@@ -333,10 +378,15 @@ def rollout_graphs(args, cfg, rep) -> Optional[List[Any]]:
       frames from nothing and report them as valid.
     * **Episode boundaries.** ``ignore_terminations=True``, so success does
       not end the episode and the successful state is observable after the
-      step returns. Truncation still auto-resets, and the frame after one
-      belongs to a different episode -- so the trace restarts there rather
-      than splicing two episodes into one potential curve.
+      step returns. Truncation still auto-resets, and the observation that
+      comes back with it already belongs to the next episode -- so a success
+      landing on the same step as a truncation must not be read off it, and
+      the trace restarts rather than splicing two episodes into one curve.
+    * **The whole episode.** Occupancy is audited past the success frame,
+      because retention only adds nodes and the peak is usually at the end.
     """
+    import numpy as np
+
     from scenegraph.core.graph_builder import GraphBuilder
     from scenegraph.adapters.policy_loader import load_policy
     from scenegraph.tools.collect_robot_success_states import (
@@ -348,12 +398,12 @@ def rollout_graphs(args, cfg, rep) -> Optional[List[Any]]:
                 / args.subtask / args.obj)
     if not ckpt_dir.is_dir():
         rep.check("the policy checkpoint exists", False, str(ckpt_dir))
-        return None
+        return [], None
     if not args.asset_dir:
         rep.check("--asset-dir was given", False,
                   "the collector wrapper stages under it; without it the "
                   "probe would write rollout files beside the configs")
-        return None
+        return [], None
 
     env_args = argparse.Namespace(
         subtask=args.subtask, num_envs=args.num_envs, split="train",
@@ -371,43 +421,68 @@ def rollout_graphs(args, cfg, rep) -> Optional[List[Any]]:
             rep.check("the raw observation is reachable", False,
                       "env.unwrapped.raw_obs_cache is unset, so every graph "
                       "would be built from no observation")
-            return None
+            return [], None
         rep.check("the raw observation is reachable", True,
                   f"{len(cache.raw_obs)} top-level key(s)")
 
         policy = load_policy(str(ckpt_dir), venv, obs, device="cuda")
+        # Constructed the way ``graph_obs`` constructs it for training, so the
+        # nodes admitted here are the nodes the run admits.
         builder = GraphBuilder(venv.unwrapped, cfg, env_idx=0,
                                env_id=f"{args.task}/{args.subtask}",
+                               camera_order=list(args.cameras),
+                               visibility_policy=args.visibility_policy,
                                use_target_flag=True)
-        frames: List[Any] = []
-        boundary, succeeded, restarts = True, False, 0
+
+        def flag(info, key):
+            value = info.get(key) if isinstance(info, dict) else None
+            if value is None:
+                return False
+            if hasattr(value, "detach"):
+                value = value.detach().cpu()
+            return bool(np.asarray(value).reshape(-1)[0])
+
+        frames, success_at, restarts = [], None, 0
+        boundary, succeeded = True, False
         for step in range(args.max_total_steps):
             graph, _m, _c, _r = builder.step(
                 cache.raw_obs, step, episode_boundary=boundary,
                 need_masks=False)
             frames.append(graph)
-            if succeeded:
+            if succeeded and success_at is None:
+                success_at = len(frames) - 1
                 rep.note("success at frame",
-                         f"{len(frames) - 1} of {step + 1}")
+                         f"{success_at} of the episode, step {step}")
                 rep.note("episode restarts before it", f"{restarts}")
-                return frames
-            obs, _reward, _term, truncated, info = venv.step(policy.act(obs))
-            succeeded = _env_zero_flag(info, "success")
-            import numpy as np
-            boundary = bool(np.asarray(
-                truncated.detach().cpu() if hasattr(truncated, "detach")
-                else truncated).reshape(-1)[0])
-            if boundary and not succeeded:
-                # Auto-reset: the next observation opens a different episode,
-                # and a potential curve spanning two of them means nothing.
+            obs, _reward, terminated, truncated, info = venv.step(
+                policy.act(obs))
+            cut = flag(info, "TimeLimit.truncated") or _reshaped(truncated)
+            done = cut or _reshaped(terminated)
+            if success_at is not None and done:
+                return frames, success_at        # audited to the episode end
+            # A success that coincides with the reset is not observable: the
+            # returned observation is already the next episode's, so reading
+            # the flag off it would score an auto-reset frame as the success.
+            succeeded = flag(info, "success") and not done
+            boundary = done
+            if done and success_at is None:
                 frames, restarts = [], restarts + 1
+        if success_at is not None:
+            return frames, success_at
         rep.check("the policy reached a success", False,
                   f"none in {args.max_total_steps} steps, "
                   f"{restarts} episode(s)")
-        return None
+        return [], None
     finally:
         venv.close()
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def _reshaped(value) -> bool:
+    """First environment's flag, whatever tensor library produced it."""
+    import numpy as np
+
+    if value is None:
+        return False
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    return bool(np.asarray(value).reshape(-1)[0])

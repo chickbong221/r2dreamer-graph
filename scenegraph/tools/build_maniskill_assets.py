@@ -351,6 +351,11 @@ def _support_components(samples, supporter_key, supported_key, symmetry
         "surface_anchor": _round(mean),
         "surface_normal": (_unit(np.asarray(s_normals, dtype=float).mean(axis=0))
                            or [0.0, 0.0, 1.0]),
+        # Mined contact normals on the supporter, so they point *into* it.
+        # Declared rather than inferred: the reference-surface helper has to
+        # know which way the stored vector faces, and the only frame-free way
+        # to guess it was a comparison against the anchor.
+        "surface_normal_points": "inward",
         "footprint_radius": round(max(0.01, spread), 6),
         "partner": supported_key,
         "n_samples": len(arr),

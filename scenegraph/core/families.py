@@ -247,15 +247,24 @@ def directed_pairs(buckets: Iterable[str]) -> Tuple[Set[str], Set[str]]:
             holders.add(parts[1])
             supported.add(parts[2])
     return holders, supported
-
-
 def reference_surface_from_supports(entry: Dict[str, Any]) -> Optional[Dict]:
-    """The top face of a supporter, in its own object frame, or None.
+    """The supporting face of a supporter, in its own object frame, or None.
 
-    Derived from the support anchors already mined against it -- those points
-    lie on the face things rest on, which is the plane by definition. The
-    normal is forced outward here rather than only at read time, so the stored
-    asset means what it says.
+    Everything here is object-frame, and that is the whole point. The normal
+    used to be resolved against world up, which is a fact about the *scene*
+    being asserted about a vector in the *object*: it worked for ManiSkill's
+    table, whose object frame is z-up, and silently destroyed ReplicaCAD
+    furniture, which is y-up -- its local +z rotates into the world horizontal,
+    ``oriented_normal`` refuses a horizontal normal, and every structural
+    height sample vanished without a message. The direction is now taken from
+    the anchor instead: the thing being supported rests on the outside of the
+    surface, so the outward normal is the one pointing towards it, and that
+    comparison needs no world at all.
+
+    The anchor is the mean of the mined support anchors, each the supported
+    object's centre in this supporter's frame. It is on the supporter's
+    surface only up to the supported object's own half-height; see
+    ``docs/structural_surface_anchor.md``.
 
     Emitted for any object with support components, not only for classified
     surfaces: the runtime reads it only when the whitelist marks that member
@@ -270,23 +279,44 @@ def reference_surface_from_supports(entry: Dict[str, Any]) -> Optional[Dict]:
                for c in supports if c.get("surface_anchor") is not None]
     if not anchors:
         return None
+    anchor = np.mean(np.vstack(anchors), axis=0)
     normals = [np.asarray(c["surface_normal"], dtype=float)
                for c in supports if c.get("surface_normal") is not None]
     normal = np.array([0.0, 0.0, 1.0])
+    provenance = ("mean of mined support-surface anchors; no support normal "
+                  "was recorded, so the object's local +z is assumed")
+    # Which way the stored vectors face is declared by the miner that wrote
+    # them, because it is the only thing that knows. ManiSkill mines contact
+    # normals on the supporter, which point into it; MS-HAB negates the
+    # support force, so its normals already point away. An unlabelled asset
+    # predates the declaration and falls back to the anchor, which lies on
+    # the outside of the surface by construction.
+    declared = {str(c.get("surface_normal_points") or "").lower()
+                for c in supports} - {""}
     if normals:
-        oriented = spatial_metrics.oriented_normal(
-            np.mean(np.vstack(normals), axis=0))
-        if oriented is not None:
-            normal = oriented
+        mean = np.mean(np.vstack(normals), axis=0)
+        length = float(np.linalg.norm(mean))
+        if length > 1e-9:
+            normal = mean / length
+            if declared == {"inward"}:
+                normal = -normal
+                why = "negated: the miner declares them inward"
+            elif declared == {"outward"}:
+                why = "kept: the miner declares them outward"
+            elif float(np.dot(normal, anchor)) < 0.0:
+                normal = -normal
+                why = "negated: it pointed away from the anchor"
+            else:
+                why = "kept: it already points towards the anchor"
+            provenance = ("mean of mined support-surface anchors and normals, "
+                          f"in the object's own frame; {why}")
     round6 = lambda v: [round(float(x), 6)
                         for x in np.asarray(v, dtype=float).reshape(-1)]
     return {
-        "anchor": round6(np.mean(np.vstack(anchors), axis=0)),
+        "anchor": round6(anchor),
         "outward_normal": round6(normal),
         "n_samples": len(anchors),
-        "provenance": "mean of mined support-surface anchors, normal forced "
-                      "outward (support normals are mined from contact "
-                      "forces and point into the supporter)",
+        "provenance": provenance,
     }
 
 

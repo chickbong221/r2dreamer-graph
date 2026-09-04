@@ -202,10 +202,20 @@ class LauncherTest(unittest.TestCase):
             with self.subTest(experiment=name):
                 self.assertIn(f"env=mshab_pick_{name}", self._script(name))
 
-    def test_they_refuse_a_key_migrated_asset(self):
+    def test_they_refuse_an_asset_that_does_not_validate(self):
+        """Including a key-migrated one: the launcher used to grep for that
+        single field, and a run has more ways to be unrunnable than one. The
+        validator checks every gate the graph builder applies at
+        construction, migration among them."""
         for name in ("a", "b"):
             with self.subTest(experiment=name):
-                self.assertIn("_bins_migrated_pre_anchor", self._script(name))
+                self.assertIn("validate_task_assets", self._script(name))
+
+    def test_the_validator_checks_migration_and_the_required_bins(self):
+        source = Path("tests/probes/validate_task_assets.py").read_text(
+            encoding="utf-8")
+        self.assertIn("migrated_pre_anchor", source)
+        self.assertIn("required_bin_keys", source)
 
     def test_capacity_and_vocabulary_are_required_not_defaulted(self):
         for name in ("a", "b"):

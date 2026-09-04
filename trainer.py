@@ -140,7 +140,14 @@ def _observation_frame(trans, panel_fn=None):
 
 
 class OnlineTrainer:
-    def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs):
+    def __init__(self, config, replay_buffer, logger, logdir, train_envs,
+                 eval_envs, checkpointer=None):
+        # Rolling-best saving, or None when checkpointing is off. It is only
+        # ever consulted at an evaluation: nothing here writes on a schedule,
+        # at the end of the run, or on cancellation, so an interrupted run
+        # keeps whatever eligible best it had already earned and gains no
+        # file it did not earn.
+        self.checkpointer = checkpointer
         self.replay_buffer = replay_buffer
         self.logger = logger
         self.train_envs = train_envs
@@ -256,8 +263,17 @@ class OnlineTrainer:
         # are measured differently -- greedy actions, a separate horizon -- and
         # sharing a prefix puts them on the same dashboard panel as if they
         # were comparable.
-        self.logger.scalar("eval/score", returns.mean())
-        self.logger.scalar("eval/length", steps.to(torch.float32).mean())
+        # Collected as they are logged, because the checkpoint is selected on
+        # one of these and re-deriving it elsewhere would let the number that
+        # picks the model differ from the number that is reported.
+        metrics = {}
+
+        def record(key, value):
+            metrics[key] = float(value)
+            self.logger.scalar(key, value)
+
+        record("eval/score", returns.mean())
+        record("eval/length", steps.to(torch.float32).mean())
         # Mirrors the training reduction in ``train()``: the target-missing
         # flag becomes the fraction of frames it was set, every other gauge
         # takes the episode max, so a "once" flag reads 1.0 if it ever fired.
@@ -265,7 +281,7 @@ class OnlineTrainer:
         for key, value in log_maxima.items():
             if key == "log_graph_target_missing":
                 value = log_sums[key] / length
-            self.logger.scalar(f"eval/{key[4:]}", value.mean())
+            record(f"eval/{key[4:]}", value.mean())
         if video_frames:
             video = torch.stack(video_frames, dim=0)
             self.logger.video(
@@ -284,6 +300,29 @@ class OnlineTrainer:
             )
         self.logger.write(train_step)
         agent.train()
+        return metrics
+
+    def _maybe_checkpoint(self, agent, step, metrics) -> None:
+        """Offer this evaluation to the rolling-best checkpoint.
+
+        Every evaluation is offered, including those before ``start_step``:
+        the eligibility rule lives in one place, and an early evaluation that
+        cannot save must also not become the incumbent -- otherwise a strong
+        result at 2M would stop the first eligible one from ever writing.
+
+        ``state_fn`` is a closure rather than a dict because it is called only
+        when a save is actually happening: serialising a model at every
+        evaluation to throw it away is the cost this avoids.
+        """
+        if self.checkpointer is None:
+            return
+        saved = self.checkpointer.maybe_save(
+            step, metrics, lambda: {"model": agent.state_dict(), "step": step})
+        if saved:
+            print(f"[checkpoint] step {step}: new best "
+                  f"{self.checkpointer.config.metric}="
+                  f"{self.checkpointer.best:.4f} -> {self.checkpointer.path}",
+                  flush=True)
 
     def begin(self, agent):
         """Main online training loop.
@@ -327,7 +366,8 @@ class OnlineTrainer:
         while step < self.steps:
             # Evaluation
             if self._should_eval(step) and self.eval_episode_num > 0 and self.eval_envs is not None:
-                self.eval(agent, step)
+                eval_metrics = self.eval(agent, step)
+                self._maybe_checkpoint(agent, step, eval_metrics)
             # Save metrics
             if done.any():
                 finished = done & lengths.gt(0)

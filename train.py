@@ -8,6 +8,7 @@ import torch
 
 import tools
 from buffer import Buffer
+from checkpointing import CheckpointConfig, Checkpointer, run_identity
 from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
@@ -40,6 +41,13 @@ def main(config):
     # save config
     logger.log_hydra_config(config)
 
+    # Before the envs and the agent, which are the expensive part: a run with
+    # checkpointing on and no metric has to fail in seconds, not after a scene
+    # build and however many steps it takes to reach the first evaluation.
+    checkpoint_config = CheckpointConfig.from_mapping(
+        config.get("checkpoint", None))
+    checkpoint_config.validate()
+
     replay_buffer = Buffer(config.buffer)
 
     print("Create envs.")
@@ -56,11 +64,55 @@ def main(config):
     agent.attach_task_schedule(train_envs)
     agent = agent.to(config.device)
 
-    policy_trainer = OnlineTrainer(config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs)
+    checkpointer = None
+    if checkpoint_config.enabled:
+        checkpointer = Checkpointer(
+            checkpoint_config, str(logdir),
+            checkpoint_identity(config, train_envs))
+        print(f"[checkpoint] rolling best on {checkpoint_config.metric!r} "
+              f"from step {checkpoint_config.start_step} -> "
+              f"{checkpointer.path}", flush=True)
+
+    policy_trainer = OnlineTrainer(config.trainer, replay_buffer, logger,
+                                   logdir, train_envs, eval_envs,
+                                   checkpointer=checkpointer)
+    # Nothing is written after this returns. One rolling best, claimed only by
+    # an eligible evaluation that improved on the last: no final copy, no
+    # milestone, nothing on cancellation. An interrupted run keeps the best it
+    # had already earned, and gains no file it had not.
     policy_trainer.begin(agent)
-    # No checkpoint is written. Corrected relation labels have the same ids
-    # and different geometric meaning, so resuming across the change would
-    # train one label to mean two things. Runs are compared from metrics.
+
+
+def checkpoint_identity(config, envs):
+    """What a saved model has to agree with before its weights mean anything.
+
+    Read off the assets this run actually resolved rather than off the config,
+    because the config can name a directory and the run can resolve a
+    different one. Deliberately says nothing about the scene, the lighting or
+    the episode count: an evaluation is allowed to change those, which is what
+    lets Experiment C load Experiment B's checkpoint.
+    """
+    from envs.maniskill import _repo_path, task_schedule_source
+    from scenegraph.adapters.graph_vocab import (
+        build_absolute_vocab, build_entity_vocab, build_relation_vocab,
+    )
+
+    graph = config.model.graph
+    source = task_schedule_source(
+        envs, str(_repo_path(config.model.progress.schedule_dir)))
+    whitelist_dir = source.whitelist_dir if source else ""
+    return run_identity(
+        whitelist_dir=whitelist_dir,
+        schedule_path=source.schedule_path if source else "",
+        schedule_label=source.label if source else "",
+        n_max=int(graph.n_max), e_max=int(graph.e_max),
+        n_cams=len(list(config.env.cameras or [])),
+        entity_tokens=sorted(
+            build_entity_vocab(whitelist_dir).token_to_id)
+        if whitelist_dir else (),
+        relation_tokens=sorted(build_relation_vocab().token_to_id),
+        absolute_tokens=sorted(build_absolute_vocab().token_to_id),
+    )
 
 
 if __name__ == "__main__":
