@@ -97,13 +97,20 @@ class BranchTest(unittest.TestCase):
 
         Taken from the module tree rather than a re-parsed snippet, so the line
         numbers are the file's and no dedenting is involved.
+
+        One span per body, first statement to last, rather than one per
+        statement. A body is contiguous, so nothing between its ends is
+        outside the branch -- while per-statement spans leave the gaps between
+        them uncovered, and a comment sitting in one reads as unguarded.
         """
         spans = []
         for node in ast.walk(_node("__init__")):
             if isinstance(node, ast.If) and "_is_mshab" in ast.dump(node.test):
-                for stmt in node.body:
-                    spans.append((stmt.lineno,
-                                  getattr(stmt, "end_lineno", stmt.lineno)))
+                if not node.body:
+                    continue
+                spans.append((
+                    node.body[0].lineno,
+                    max(getattr(s, "end_lineno", s.lineno) for s in node.body)))
         return spans
 
     def test_every_mshab_only_symbol_sits_behind_the_guard(self):

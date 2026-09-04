@@ -267,7 +267,38 @@ def assert_pinned_build_config(venv, requested: str) -> None:
           flush=True)
 
 
-def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
+class RawObsCache:
+    """Keep the last raw observation without altering it.
+
+    The graph builder reads segmentation, which the policy-side wrappers
+    flatten away. A diagnostic that wants both needs the raw dict, and the one
+    thing it must not do is change what the policy sees -- so this returns the
+    observation unmodified and only remembers it. Opt-in: no collection run
+    builds it, and graph capture is never mandatory here.
+    """
+
+    def __init__(self, env):
+        import gymnasium as gym
+
+        self._cls = gym.ObservationWrapper
+        self.raw_obs = None
+
+    @staticmethod
+    def wrap(env):
+        import gymnasium as gym
+
+        class _Cache(gym.ObservationWrapper):
+            raw_obs = None
+
+            def observation(self, obs):
+                type(self).raw_obs = obs
+                return obs
+
+        return _Cache(env)
+
+
+def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None,
+               capture_raw_obs: bool = False):
     """Recreate the wrapper stack the released SAC was trained on, plus the
     local collector on the inside (so it sees raw success
     info before policy-side obs transforms)."""
@@ -322,6 +353,12 @@ def _build_env(task: str, obj_id: str, args, ckpt_dir: Optional[Path] = None):
         add_event_tracker_info=True,
         sensor_configs=dict(width=args.sensor_width, height=args.sensor_height),
     )
+
+    if capture_raw_obs:
+        # Above the base env and below every policy-side wrapper, so the raw
+        # sensor dict is visible and the policy's own observation is
+        # untouched.
+        env = RawObsCache.wrap(env)
 
     # Collect on the INSIDE (closest to base env) so it reads raw
     # ``info["success"]`` and raw ``agent.robot.qpos`` before any policy-side

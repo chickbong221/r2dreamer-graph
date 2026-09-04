@@ -56,3 +56,16 @@ trainer:
   params_hist_log: False
   update_log_every: 1500
   action_repeat: ${env.action_repeat}
+
+# One rolling-best checkpoint per run. Off by default, and a run that turns it
+# on without naming a metric refuses to start: which evaluation decides the
+# best model selects the checkpoint every later number is reported from, so it
+# is an experiment decision rather than a default.
+checkpoint:
+  enabled: false
+  start_step: 8e6
+  # PENDING -- must be set explicitly, e.g. eval/success_once
+  metric: ''
+  tiebreak: ''
+  mode: max
+  path: checkpoint_best.pt

@@ -1,0 +1,29 @@
+# Experiment B -- one object, every scene.
+#
+# Trains 004_sugar_box in one apartment and evaluates in all 63, so what
+# varies is the room. A clean grasp on purpose: the measurement is scene
+# variance, not grasp difficulty.
+#
+# The 63-scene evaluation does not choose the checkpoint. Selection uses the
+# fixed same-scene set; generalisation is reported from the checkpoint that
+# selection produced.
+defaults:
+  - mshab
+  - _self_
+
+mshab_task: tidy_house
+mshab_obj: 004_sugar_box
+mshab_objects: []
+train_build_config_ids:
+  - v3_sc0_staging_00.scene_instance.json
+
+# Every configuration, one evaluation environment each. reconfiguration_freq
+# is 0, so a sub-scene keeps its configuration for the whole run and the
+# number of distinct scenes is bounded by the environment count -- which is
+# eval_episode_num. 63 envs with the even-spread flag is one scene each.
+eval_build_config_ids: []
+eval_num_build_configs: 0
+eval_episode_num: 63
+eval_even_build_configs: true
+
+progress_mode: task_schedule

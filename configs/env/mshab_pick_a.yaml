@@ -1,0 +1,31 @@
+# Experiment A -- five objects, one scene.
+#
+# Tests whether the policy binds an instruction to the right node and reuses
+# approach/grasp/return across object identities. Train and evaluate in the
+# same apartment, so what varies is the object, not the room.
+#
+# The headline number cannot separate instruction-following from memorising
+# one reach. The control is to evaluate this scene under each object's
+# instruction and score whether the object actually picked matches.
+defaults:
+  - mshab
+  - _self_
+
+mshab_task: tidy_house
+mshab_objects:
+  - 002_master_chef_can
+  - 003_cracker_box
+  - 004_sugar_box
+  - 007_tuna_fish_can
+  - 024_bowl
+train_build_config_ids:
+  - v3_sc0_staging_00.scene_instance.json
+eval_build_config_ids:
+  - v3_sc0_staging_00.scene_instance.json
+
+# Five episodes per object at every evaluation, the same plans each time, so
+# checkpoint comparisons carry no object-mixture or spawn noise.
+eval_episode_num: 25
+eval_even_build_configs: false
+
+progress_mode: task_schedule

@@ -185,6 +185,59 @@ def graph_observation_config(graph_config, camera_names,
     return out
 
 
+def select_named_build_configs(task_plans, names, label: str = "train"):
+    """Keep only plans from build configurations named outright.
+
+    ``num_build_configs`` takes a sorted *prefix*, so which scene it means
+    moves the moment the build list changes -- and "the first one" is not a
+    scene identity anyone can check a result against. An experiment pinned to
+    a scene names it.
+
+    Raises rather than falling back: a misspelled configuration silently
+    training on a different apartment is the failure this exists to remove.
+    """
+    wanted = [str(n) for n in names if str(n)]
+    if not wanted:
+        return list(task_plans)
+    available = sorted({str(p.build_config_name) for p in task_plans})
+    missing = [n for n in wanted if n not in available]
+    if missing:
+        raise ValueError(
+            f"build configuration(s) {missing} are not in this task plan "
+            f"({len(available)} available, e.g. {available[:3]}). A pinned "
+            "scene that does not exist would otherwise train somewhere else."
+        )
+    keep = set(wanted)
+    selected = [p for p in task_plans if str(p.build_config_name) in keep]
+    print(f"[env] pinned {len(keep)} named build config(s) "
+          f"({len(selected)}/{len(task_plans)} plans, {label}): "
+          f"{sorted(keep)}", flush=True)
+    return selected
+
+
+def balance_objects(plans_by_object, label: str = "train"):
+    """Equal plan counts per object, deterministically.
+
+    Concatenating the five objects' plan files samples them in proportion to
+    how many plans each happens to have -- 5,115 to 5,823 across tidy_house's
+    pick targets, so one object would get 14% more episodes than another for
+    no reason anybody chose. Truncating each to the smallest count removes
+    that, and taking a prefix of an already-ordered list keeps two runs
+    comparable.
+    """
+    if not plans_by_object:
+        return []
+    counts = {key: len(plans) for key, plans in plans_by_object.items()}
+    smallest = min(counts.values())
+    out = []
+    for key in sorted(plans_by_object):
+        out.extend(list(plans_by_object[key])[:smallest])
+    print(f"[env] balanced {len(plans_by_object)} object(s) to {smallest} "
+          f"plan(s) each ({len(out)} total, {label}); before: {counts}",
+          flush=True)
+    return out
+
+
 def _select_build_configs(task_plans, count: int, label: str = "train"):
     """Keep whole build configs, as a prefix of the sorted names.
 
@@ -305,26 +358,52 @@ class ManiSkillVecEnv:
             eval_split = str(getattr(config, "eval_split", "") or "")
             split = eval_split if (self._eval and eval_split) else str(config.split)
             rearrange = ASSET_DIR / "scene_datasets/replica_cad_dataset/rearrange"
-            plan_path = (
-                rearrange
-                / "task_plans"
-                / str(config.mshab_task)
-                / subtask
-                / split
-                / f"{config.mshab_obj}.json"
-            )
-            plan_data = plan_data_from_file(plan_path)
-            # Training subsets its split; evaluation takes the whole of its own
-            # by default, so a held-out score is not reported over a sliver.
-            task_plans = _select_build_configs(
-                plan_data.plans,
-                int(
-                    getattr(config, "eval_num_build_configs", 0)
-                    if self._eval
-                    else config.num_build_configs
-                ),
-                label="eval" if self._eval else "train",
-            )
+            plan_dir = (rearrange / "task_plans" / str(config.mshab_task)
+                        / subtask / split)
+            # Named objects win over the single ``mshab_obj``: Experiment A
+            # trains on five of tidy_house's nine, and "all" is a different
+            # policy's plan file rather than a subset of theirs.
+            objects = [str(o) for o in
+                       (getattr(config, "mshab_objects", None) or []) if o]
+            label = "eval" if self._eval else "train"
+            if objects:
+                by_object, plan_data = {}, None
+                for obj in objects:
+                    path = plan_dir / f"{obj}.json"
+                    if not path.exists():
+                        raise FileNotFoundError(
+                            f"MS-HAB task plan not found for {obj!r}: {path}")
+                    data = plan_data_from_file(path)
+                    plan_data = plan_data or data
+                    by_object[obj] = data.plans
+                plan_path = plan_dir
+                raw_plans = balance_objects(by_object, label=label)
+            else:
+                plan_path = plan_dir / f"{config.mshab_obj}.json"
+                plan_data = plan_data_from_file(plan_path)
+                raw_plans = plan_data.plans
+
+            # A named scene beats a count. See ``select_named_build_configs``.
+            named = [str(n) for n in (
+                getattr(config, "eval_build_config_ids", None) if self._eval
+                else getattr(config, "train_build_config_ids", None)) or []
+                if str(n) and str(n) != "all"]
+            if named:
+                task_plans = select_named_build_configs(
+                    raw_plans, named, label=label)
+            else:
+                # Training subsets its split; evaluation takes the whole of
+                # its own by default, so a held-out score is not reported over
+                # a sliver.
+                task_plans = _select_build_configs(
+                    raw_plans,
+                    int(
+                        getattr(config, "eval_num_build_configs", 0)
+                        if self._eval
+                        else config.num_build_configs
+                    ),
+                    label=label,
+                )
             if not task_plans:
                 raise ValueError(
                     f"MS-HAB task selection produced no plans: {plan_path}")
@@ -335,7 +414,17 @@ class ManiSkillVecEnv:
                     rearrange / "spawn_data" / str(config.mshab_task) / subtask
                     / split / "spawn_data.pt"
                 ),
-                require_build_configs_repeated_equally_across_envs=False,
+                # Evaluation over every scene needs each sub-scene pinned to
+                # a different one. ``reconfiguration_freq=0`` fixes a
+                # sub-scene's configuration for the whole run, so the number
+                # of *distinct* scenes evaluated is bounded by the environment
+                # count, not the episode count -- and without this flag
+                # nothing makes the spread even. MS-HAB then requires
+                # divisibility, which is the check that 63 envs over 63
+                # configurations is one each.
+                require_build_configs_repeated_equally_across_envs=bool(
+                    self._eval
+                    and getattr(config, "eval_even_build_configs", False)),
             )
 
         control_mode = str(config.control_mode)

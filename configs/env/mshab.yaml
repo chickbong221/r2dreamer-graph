@@ -13,6 +13,22 @@ progress_mode: ee_target
 
 mshab_task: set_table
 mshab_obj: 024_bowl
+# Experiment selection. These are unset by default so nothing changes for an
+# ordinary run; the A/B configs below set them explicitly.
+#
+# mshab_objects wins over mshab_obj when non-empty: Experiment A trains on
+# five of tidy_house's nine pick targets, balanced to equal plan counts.
+mshab_objects: []
+# Exact scene names, which is what an experiment can be checked against.
+# num_build_configs takes a sorted prefix, so which scene it means moves when
+# the build list does.
+train_build_config_ids: []
+eval_build_config_ids: []
+# Ask MS-HAB to spread build configurations evenly across evaluation
+# sub-scenes. Required to cover all 63 in one pass; it makes MS-HAB check
+# divisibility, so eval_episode_num must be a multiple of the scene count.
+eval_even_build_configs: false
+
 split: train
 eval_split: train
 eval_num_build_configs: ${env.num_build_configs}
