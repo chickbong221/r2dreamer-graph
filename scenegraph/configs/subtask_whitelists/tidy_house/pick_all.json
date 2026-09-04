@@ -10,330 +10,441 @@
     "pick_010_potted_meat_can.json",
     "pick_024_bowl.json"
   ],
-  "_n_successful_rollouts": 271,
-  "_schema_version": 4,
+  "_n_successful_rollouts": 270,
+  "_schema_version": 5,
   "bin_edges": {
     "contact-compatibility": [
       0.3333333333333333,
       0.6666666666666666
     ],
     "contact-compatibility-change": [
-      -0.013690072799683576,
-      -0.001901398999956052,
-      0.001901398999956052,
-      0.013690072799683576
+      -0.03333660005092583,
+      -0.004630083340406365,
+      0.004630083340406365,
+      0.03333660005092583
     ],
     "contain-compatibility": [
       0.3333333333333333,
       0.6666666666666666
+    ],
+    "ee-manipuland-height-offset": [
+      -0.3084044909477234,
+      -0.10280149698257446,
+      0.10280149698257446,
+      0.3084044909477234
+    ],
+    "ee-manipuland-height-offset-change": [
+      -0.09249922513961792,
+      -0.01284711460272471,
+      0.01284711460272471,
+      0.09249922513961792
+    ],
+    "ee-object-height-offset": [
+      -0.6993012271821499,
+      -0.23310040906071663,
+      0.23310040906071663,
+      0.6993012271821499
+    ],
+    "ee-object-height-offset-change": [
+      -0.10221057415008543,
+      -0.014195913076400756,
+      0.014195913076400756,
+      0.10221057415008543
+    ],
+    "ee-object-planar-distance": [
+      0.2861224822608623,
+      0.5722449645217246,
+      0.8583674467825869,
+      1.1444899290434492
+    ],
+    "ee-object-planar-distance-change": [
+      -0.06698636443911861,
+      -0.009303661727655363,
+      0.009303661727655363,
+      0.06698636443911861
+    ],
+    "ee-receptacle-height-offset": [
+      -0.7203435051441194,
+      -0.24011450171470644,
+      0.24011450171470644,
+      0.7203435051441194
+    ],
+    "ee-receptacle-height-offset-change": [
+      -0.0495995807647705,
+      -0.00688883066177368,
+      0.00688883066177368,
+      0.0495995807647705
+    ],
+    "ee-site-height-offset": [
+      -0.4262679839362728,
+      -0.1420893279787576,
+      0.1420893279787576,
+      0.4262679839362728
+    ],
+    "ee-site-planar-distance": [
+      0.08812881355211671,
+      0.17625762710423343,
+      0.26438644065635014,
+      0.35251525420846685
     ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
     ],
     "grasp-compatibility-change": [
-      -0.02583809141538813,
-      -0.003588623807692796,
-      0.003588623807692796,
-      0.02583809141538813
-    ],
-    "ee-object-height-offset": [
-      -0.701651786416769,
-      -0.23388392880558967,
-      0.23388392880558967,
-      0.701651786416769
+      -0.05269590226285671,
+      -0.007318875314285655,
+      0.007318875314285655,
+      0.05269590226285671
     ],
     "object-object-height-offset": [
-      -0.701651786416769,
-      -0.23388392880558967,
-      0.23388392880558967,
-      0.701651786416769
-    ],
-    "ee-object-height-offset-change": [
-      -0.10467686533927915,
-      -0.01453845351934433,
-      0.01453845351934433,
-      0.10467686533927915
+      -0.5647930374663649,
+      -0.18826434582212165,
+      0.18826434582212165,
+      0.5647930374663649
     ],
     "object-object-height-offset-change": [
-      -0.10467686533927915,
-      -0.01453845351934433,
-      0.01453845351934433,
-      0.10467686533927915
-    ],
-    "ee-object-planar-distance": [
-      0.2928310300433018,
-      0.5856620600866036,
-      0.8784930901299053,
-      1.1713241201732072
+      -0.0586616737574646,
+      -0.00814745468853675,
+      0.00814745468853675,
+      0.0586616737574646
     ],
     "object-object-planar-distance": [
-      0.2928310300433018,
-      0.5856620600866036,
-      0.8784930901299053,
-      1.1713241201732072
-    ],
-    "ee-object-planar-distance-change": [
-      -0.07681232261135976,
-      -0.010668378140466632,
-      0.010668378140466632,
-      0.07681232261135976
+      0.3387048431233136,
+      0.6774096862466272,
+      1.0161145293699407,
+      1.3548193724932545
     ],
     "object-object-planar-distance-change": [
-      -0.07681232261135976,
-      -0.010668378140466632,
-      0.010668378140466632,
-      0.07681232261135976
+      -0.05525038185968215,
+      -0.007673664147178076,
+      0.007673664147178076,
+      0.05525038185968215
     ],
     "support-compatibility": [
       0.3333333333333333,
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.014996646485608472,
-      -0.0020828675674456213,
-      0.0020828675674456213,
-      0.014996646485608472
+      -0.004100080861701663,
+      -0.0005694556752363422,
+      0.0005694556752363422,
+      0.004100080861701663
     ]
   },
   "bin_stats_robust": {
     "contact_compatibility": 1.0,
-    "contact_compatibility_change": 0.022816787999472624,
-    "grasp_compatibility": 0.8701462532712029,
-    "grasp_compatibility_change": 0.04306348569231355,
-    "ee_object_height_offset": 1.1694196440279483,
-    "object_object_height_offset": 1.1694196440279483,
-    "ee_object_height_offset_change": 0.17446144223213195,
-    "object_object_height_offset_change": 0.17446144223213195,
-    "ee_object_planar_distance": 1.4641551502165089,
-    "object_object_planar_distance": 1.4641551502165089,
-    "ee_object_planar_distance_change": 0.1280205376855996,
-    "object_object_planar_distance_change": 0.1280205376855996,
+    "contact_compatibility_change": 0.055561000084876376,
+    "ee_manipuland_height_offset": 0.5140074849128723,
+    "ee_manipuland_height_offset_change": 0.15416537523269652,
+    "ee_object_height_offset": 1.1655020453035831,
+    "ee_object_height_offset_change": 0.17035095691680907,
+    "ee_object_planar_distance": 1.4306124113043115,
+    "ee_object_planar_distance_change": 0.11164394073186434,
+    "ee_receptacle_height_offset": 1.2005725085735321,
+    "ee_receptacle_height_offset_change": 0.08266596794128417,
+    "ee_site_height_offset": 0.710446639893788,
+    "ee_site_planar_distance": 0.44064406776058357,
+    "grasp_compatibility": 0.8419145669874327,
+    "grasp_compatibility_change": 0.08782650377142785,
+    "object_object_height_offset": 0.9413217291106082,
+    "object_object_height_offset_change": 0.097769456262441,
+    "object_object_planar_distance": 1.693524215616568,
+    "object_object_planar_distance_change": 0.09208396976613692,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.024994410809347455
+    "support_compatibility_change": 0.006833468102836106
   },
   "members": {
     "actor:002_master_chef_can": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:003_cracker_box": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:004_sugar_box": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:005_tomato_soup_can": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:007_tuna_fish_can": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:008_pudding_box": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:009_gelatin_box": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:010_potted_meat_can": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:024_bowl": {
+      "family": "manipuland",
       "interaction_types": [
         "contact",
         "grasp",
         "support"
       ],
       "kind": "actor",
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
     },
     "actor:frl_apartment_chair_01": {
+      "family": "structural-surface",
       "interaction_types": [
         "contact",
         "support"
       ],
       "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_chair_01-15",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.378m horizontal >= 0.3m",
+      "supports": [
+        "actor:003_cracker_box",
+        "actor:004_sugar_box",
+        "actor:007_tuna_fish_can",
+        "actor:024_bowl"
+      ]
+    },
+    "actor:frl_apartment_rug_01": {
+      "family": "receptacle",
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_rug_01-9",
       "roles": [
         "interacted",
         "support"
       ],
       "supports": [
-        "actor:002_master_chef_can",
-        "actor:003_cracker_box",
-        "actor:004_sugar_box",
-        "actor:007_tuna_fish_can",
+        "actor:010_potted_meat_can"
+      ]
+    },
+    "actor:frl_apartment_sofa": {
+      "family": "structural-surface",
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_sofa-7",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.400m horizontal >= 0.3m",
+      "supports": [
+        "actor:005_tomato_soup_can",
         "actor:009_gelatin_box",
         "actor:010_potted_meat_can",
         "actor:024_bowl"
       ]
     },
-    "actor:frl_apartment_sofa": {
-      "interaction_types": [
-        "support"
-      ],
-      "kind": "actor",
-      "roles": [
-        "support"
-      ],
-      "supports": [
-        "actor:003_cracker_box",
-        "actor:005_tomato_soup_can",
-        "actor:010_potted_meat_can"
-      ]
-    },
     "actor:frl_apartment_table_01": {
+      "family": "structural-surface",
       "interaction_types": [
         "contact",
         "support"
       ],
       "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_table_01-6",
       "roles": [
         "interacted",
         "support"
       ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.371m horizontal >= 0.3m",
       "supports": [
         "actor:002_master_chef_can",
+        "actor:004_sugar_box",
         "actor:005_tomato_soup_can",
-        "actor:008_pudding_box",
-        "actor:010_potted_meat_can"
-      ]
-    },
-    "actor:frl_apartment_table_02": {
-      "interaction_types": [
-        "contact",
-        "support"
-      ],
-      "kind": "actor",
-      "roles": [
-        "interacted",
-        "support"
-      ],
-      "supports": [
         "actor:007_tuna_fish_can"
       ]
     },
-    "actor:frl_apartment_tvstand": {
+    "actor:frl_apartment_table_02": {
+      "family": "structural-surface",
       "interaction_types": [
         "contact",
         "support"
       ],
       "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_table_02-5",
       "roles": [
         "interacted",
         "support"
       ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.459m horizontal >= 0.3m",
+      "supports": [
+        "actor:003_cracker_box",
+        "actor:004_sugar_box",
+        "actor:005_tomato_soup_can",
+        "actor:008_pudding_box",
+        "actor:009_gelatin_box",
+        "actor:010_potted_meat_can",
+        "actor:024_bowl"
+      ]
+    },
+    "actor:frl_apartment_tvstand": {
+      "family": "structural-surface",
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_tvstand-2",
+      "roles": [
+        "interacted",
+        "support"
+      ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.301m horizontal >= 0.3m",
       "supports": [
         "actor:002_master_chef_can",
+        "actor:003_cracker_box",
+        "actor:005_tomato_soup_can",
         "actor:007_tuna_fish_can",
+        "actor:008_pudding_box",
         "actor:009_gelatin_box",
         "actor:024_bowl"
       ]
     },
-    "actor:scene_background": {
-      "interaction_types": [
-        "contact",
-        "support"
-      ],
-      "kind": "actor",
-      "roles": [
-        "interacted",
-        "support"
-      ],
-      "supports": [
-        "actor:009_gelatin_box",
-        "actor:010_potted_meat_can"
-      ]
-    },
     "link:kitchen_counter-0/body": {
+      "family": "structural-surface",
       "interaction_types": [
         "contact",
         "support"
       ],
       "kind": "link",
+      "name": "body",
       "roles": [
         "interacted",
         "support"
       ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.328m horizontal >= 0.3m",
       "supports": [
         "actor:002_master_chef_can",
         "actor:003_cracker_box",
         "actor:004_sugar_box",
         "actor:005_tomato_soup_can",
+        "actor:007_tuna_fish_can",
         "actor:008_pudding_box",
         "actor:009_gelatin_box",
         "actor:010_potted_meat_can",
         "actor:024_bowl"
       ]
+    },
+    "spatial:ee_rest_site": {
+      "interaction_types": [],
+      "kind": "spatial",
+      "roles": [
+        "spatial"
+      ]
     }
   },
   "membership_policy": "target-supporters",
+  "sites": {
+    "spatial:ee_rest_site": {
+      "metric": "euclidean",
+      "provenance": "MS-HAB PickSubtask success requires the end effector back at rest while still holding the object: norm(tcp - base_link.pose * ee_rest_pos_wrt_base) <= pick_cfg.ee_rest_thresh, both read live. The robot-static and object-static halves of success are separate conditions and are not expressed by this site. Scoped to pick: no other subtask defines an ee_rest_thresh.",
+      "provider": "mshab_ee_rest",
+      "site_type": "point",
+      "source": "origin",
+      "subject": "ee"
+    }
+  },
   "subtask": "pick",
   "target": "all",
-  "task_group": "tidy_house",
-  "_bins_migrated_pre_anchor": true
+  "task_group": "tidy_house"
 }

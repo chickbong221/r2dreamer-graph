@@ -1,11 +1,11 @@
 {
-  "_schema_version": 4,
+  "_schema_version": 5,
   "subtask": "pick",
   "task_group": "tidy_house",
   "membership_policy": "full-evidence",
   "target": "actor:010_potted_meat_can",
   "members": {
-    "actor:003_cracker_box": {
+    "actor:008_pudding_box": {
       "roles": [
         "interacted"
       ],
@@ -14,8 +14,22 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-6_003_cracker_box-0",
-      "interaction_rollouts": 1
+      "name": "env-3_008_pudding_box-0",
+      "interaction_rollouts": 1,
+      "family": "manipuland"
+    },
+    "actor:009_gelatin_box": {
+      "roles": [
+        "interacted"
+      ],
+      "interaction_types": [
+        "contact",
+        "support"
+      ],
+      "kind": "actor",
+      "name": "env-0_009_gelatin_box-0",
+      "interaction_rollouts": 1,
+      "family": "manipuland"
     },
     "actor:010_potted_meat_can": {
       "roles": [
@@ -28,9 +42,10 @@
       ],
       "kind": "actor",
       "name": "obj_0",
-      "interaction_rollouts": 30
+      "interaction_rollouts": 30,
+      "family": "manipuland"
     },
-    "actor:frl_apartment_chair_01": {
+    "actor:frl_apartment_rug_01": {
       "roles": [
         "interacted",
         "support"
@@ -40,12 +55,13 @@
         "support"
       ],
       "kind": "actor",
-      "name": "scs-[6,7]_frl_apartment_chair_01-15",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_rug_01-9",
       "interaction_rollouts": 1,
-      "support_rollouts": 4,
+      "support_rollouts": 1,
       "supports": [
         "actor:010_potted_meat_can"
-      ]
+      ],
+      "family": "receptacle"
     },
     "actor:frl_apartment_sofa": {
       "roles": [
@@ -55,27 +71,16 @@
         "support"
       ],
       "kind": "actor",
-      "name": "scs-[2,3]_frl_apartment_sofa-7",
-      "support_rollouts": 15,
-      "supports": [
-        "actor:010_potted_meat_can"
-      ]
-    },
-    "actor:frl_apartment_table_01": {
-      "roles": [
-        "support"
-      ],
-      "interaction_types": [
-        "support"
-      ],
-      "kind": "actor",
-      "name": "scs-[2,3]_frl_apartment_table_01-6",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_sofa-7",
       "support_rollouts": 1,
       "supports": [
         "actor:010_potted_meat_can"
-      ]
+      ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.400m horizontal >= 0.3m",
+      "family": "structural-surface"
     },
-    "actor:scene_background": {
+    "actor:frl_apartment_table_02": {
       "roles": [
         "interacted",
         "support"
@@ -85,23 +90,16 @@
         "support"
       ],
       "kind": "actor",
-      "name": "scs-[0,1]_scene_background",
+      "name": "scs-[0,1,2,3,4,5,6,7]_frl_apartment_table_02-5",
       "interaction_rollouts": 1,
-      "support_rollouts": 1,
+      "support_rollouts": 7,
       "supports": [
+        "actor:008_pudding_box",
         "actor:010_potted_meat_can"
-      ]
-    },
-    "link:fridge-0/top_door": {
-      "roles": [
-        "interacted"
       ],
-      "interaction_types": [
-        "contact"
-      ],
-      "kind": "link",
-      "name": "top_door",
-      "interaction_rollouts": 2
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.459m horizontal >= 0.3m",
+      "family": "structural-surface"
     },
     "link:kitchen_counter-0/body": {
       "roles": [
@@ -115,11 +113,31 @@
       "kind": "link",
       "name": "body",
       "interaction_rollouts": 1,
-      "support_rollouts": 11,
+      "support_rollouts": 22,
       "supports": [
-        "actor:003_cracker_box",
+        "actor:009_gelatin_box",
         "actor:010_potted_meat_can"
-      ]
+      ],
+      "structural_surface": true,
+      "structural_surface_reason": "collision half-extent 0.328m horizontal >= 0.3m",
+      "family": "structural-surface"
+    },
+    "spatial:ee_rest_site": {
+      "roles": [
+        "spatial"
+      ],
+      "interaction_types": [],
+      "kind": "spatial"
+    }
+  },
+  "sites": {
+    "spatial:ee_rest_site": {
+      "site_type": "point",
+      "subject": "ee",
+      "metric": "euclidean",
+      "source": "origin",
+      "provider": "mshab_ee_rest",
+      "provenance": "MS-HAB PickSubtask success requires the end effector back at rest while still holding the object: norm(tcp - base_link.pose * ee_rest_pos_wrt_base) <= pick_cfg.ee_rest_thresh, both read live. The robot-static and object-static halves of success are separate conditions and are not expressed by this site. Scoped to pick: no other subtask defines an ee_rest_thresh."
     }
   },
   "bin_edges": {
@@ -139,72 +157,152 @@
       0.3333333333333333,
       0.6666666666666666
     ],
-    "planar-distance": [
-      0.2928310300433018,
-      0.5856620600866036,
-      0.8784930901299053,
-      1.1713241201732072
-    ],
-    "height-offset": [
-      -0.5815189920365811,
-      -0.19383966401219369,
-      0.19383966401219369,
-      0.5815189920365811
-    ],
-    "planar-distance-change": [
-      -0.04652323840610302,
-      -0.00646156088973653,
-      0.00646156088973653,
-      0.04652323840610302
-    ],
-    "height-offset-change": [
-      -0.0683481216430664,
-      -0.009492794672648111,
-      0.009492794672648111,
-      0.0683481216430664
-    ],
     "grasp-compatibility-change": [
-      -0.00923235968460771,
-      -0.0012822721784177375,
-      0.0012822721784177375,
-      0.00923235968460771
+      -0.013675392653945254,
+      -0.0018993600908257296,
+      0.0018993600908257296,
+      0.013675392653945254
     ],
     "contact-compatibility-change": [
-      -0.009819314053376743,
-      -0.0013637936185245476,
-      0.0013637936185245476,
-      0.009819314053376743
+      -0.016228843500585798,
+      -0.0022540060417480276,
+      0.0022540060417480276,
+      0.016228843500585798
     ],
     "support-compatibility-change": [
-      -0.008731876649364532,
-      -0.001212760645745074,
-      0.001212760645745074,
-      0.008731876649364532
+      -0.004100080861701663,
+      -0.0005694556752363422,
+      0.0005694556752363422,
+      0.004100080861701663
+    ],
+    "ee-object-planar-distance": [
+      0.24268414793143456,
+      0.4853682958628691,
+      0.7280524437943037,
+      0.9707365917257382
+    ],
+    "ee-object-planar-distance-change": [
+      -0.034013880907192276,
+      -0.004724150125998927,
+      0.004724150125998927,
+      0.034013880907192276
+    ],
+    "ee-object-height-offset": [
+      -0.6993012271821499,
+      -0.23310040906071663,
+      0.23310040906071663,
+      0.6993012271821499
+    ],
+    "ee-object-height-offset-change": [
+      -0.040791463851928694,
+      -0.005665481090545652,
+      0.005665481090545652,
+      0.040791463851928694
+    ],
+    "object-object-planar-distance": [
+      0.1921521030218208,
+      0.3843042060436416,
+      0.5764563090654624,
+      0.7686084120872833
+    ],
+    "object-object-planar-distance-change": [
+      -0.02425417523129656,
+      -0.0033686354487911887,
+      0.0033686354487911887,
+      0.02425417523129656
+    ],
+    "object-object-height-offset": [
+      -0.5552323758602142,
+      -0.1850774586200714,
+      0.1850774586200714,
+      0.5552323758602142
+    ],
+    "object-object-height-offset-change": [
+      -0.01230070784988159,
+      -0.0017084316458168874,
+      0.0017084316458168874,
+      0.01230070784988159
+    ],
+    "ee-manipuland-height-offset": [
+      -0.23389786317944522,
+      -0.07796595439314842,
+      0.07796595439314842,
+      0.23389786317944522
+    ],
+    "ee-manipuland-height-offset-change": [
+      -0.021703054904937732,
+      -0.0030143131812413516,
+      0.0030143131812413516,
+      0.021703054904937732
+    ],
+    "ee-receptacle-height-offset": [
+      -0.7203435051441194,
+      -0.24011450171470644,
+      0.24011450171470644,
+      0.7203435051441194
+    ],
+    "ee-receptacle-height-offset-change": [
+      -0.0495995807647705,
+      -0.00688883066177368,
+      0.00688883066177368,
+      0.0495995807647705
+    ],
+    "ee-site-planar-distance": [
+      0.08812881355211671,
+      0.17625762710423343,
+      0.26438644065635014,
+      0.35251525420846685
+    ],
+    "ee-site-height-offset": [
+      -0.2971893873286026,
+      -0.09906312910953421,
+      0.09906312910953421,
+      0.2971893873286026
     ]
   },
   "bin_stats_robust": {
-    "contact_compatibility": 0.7627613440737415,
-    "contact_compatibility_change": 0.01636552342229457,
-    "grasp_compatibility": 0.7816609609654624,
-    "grasp_compatibility_change": 0.01538726614101285,
-    "height_offset": 0.9691983200609684,
-    "height_offset_change": 0.11391353607177734,
-    "planar_distance": 1.4641551502165089,
-    "planar_distance_change": 0.07753873067683836,
+    "contact_compatibility": 0.8096190269948895,
+    "contact_compatibility_change": 0.02704807250097633,
+    "ee_manipuland_height_offset": 0.3898297719657421,
+    "ee_manipuland_height_offset_change": 0.03617175817489622,
+    "ee_object_height_offset": 1.1655020453035831,
+    "ee_object_height_offset_change": 0.06798577308654782,
+    "ee_object_planar_distance": 1.2134207396571728,
+    "ee_object_planar_distance_change": 0.056689801511987124,
+    "ee_receptacle_height_offset": 1.2005725085735321,
+    "ee_receptacle_height_offset_change": 0.08266596794128417,
+    "ee_site_height_offset": 0.49531564554767105,
+    "ee_site_planar_distance": 0.44064406776058357,
+    "grasp_compatibility": 0.8419145669874327,
+    "grasp_compatibility_change": 0.022792321089908755,
+    "object_object_height_offset": 0.9253872931003571,
+    "object_object_height_offset_change": 0.02050117974980265,
+    "object_object_planar_distance": 0.9607605151091041,
+    "object_object_planar_distance_change": 0.040423625385494266,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.014553127748940888
+    "support_compatibility_change": 0.006833468102836106
   },
   "bin_stats_observed": {
     "contact_compatibility": 1.0,
-    "contact_compatibility_change": 0.6200645853910913,
-    "grasp_compatibility": 0.9817260217507681,
-    "grasp_compatibility_change": 0.693370414412413,
-    "height_offset": 1.297536924481392,
-    "height_offset_change": 0.5554482564330101,
-    "planar_distance": 5.803449807973319,
-    "planar_distance_change": 0.3843047017872424,
+    "contact_compatibility_change": 0.667085060774903,
+    "ee_manipuland_height_offset": 0.8483249545097351,
+    "ee_manipuland_height_offset_change": 0.5705400109291077,
+    "ee_object_height_offset": 1.2825653292238712,
+    "ee_object_height_offset_change": 0.5705400109291077,
+    "ee_object_planar_distance": 1.6327518043703433,
+    "ee_object_planar_distance_change": 0.3826030545257827,
+    "ee_receptacle_height_offset": 1.2323838770389557,
+    "ee_receptacle_height_offset_change": 0.3611111640930176,
+    "ee_site_height_offset": 1.1762773475599164,
+    "ee_site_planar_distance": 0.6591147184459631,
+    "grasp_compatibility": 1.0,
+    "grasp_compatibility_change": 0.7512078817324193,
+    "object_object_height_offset": 1.2742755199744367,
+    "object_object_height_offset_change": 0.9434942783356777,
+    "object_object_planar_distance": 1.50641317411088,
+    "object_object_planar_distance_change": 0.7320945104574316,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.392748028627095
+    "support_compatibility_change": 0.5894312809271731
   },
   "_n_successful_rollouts": 30
 }
