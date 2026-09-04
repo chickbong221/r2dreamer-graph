@@ -1,0 +1,253 @@
+{
+  "_schema_version": 1,
+  "env_id": "tidy_house/pick",
+  "roles": {
+    "target": "$active_target",
+    "rest_site": "spatial:ee_rest_site"
+  },
+  "notes": [
+    "One schedule for every tidy_house Pick object. 'target' is the dynamic role: it resolves to the packer's reserved row 1 rather than to a fixed entity id, because a scene can hold two instances of one category which share a whitelist key and cannot be told apart by id at all.",
+    "'ee' is the reserved schedule token and is deliberately not a role: the end effector is not a whitelist member.",
+    "contact is not a milestone and not a gate. A grasped object is also in contact, so scoring both pays twice for one event, and an incidental brush on the way in would earn credit for the approach. The graph still emits the fact; the scorer ignores relations it does not name, so the edge costs nothing and the frame stays readable.",
+    "return_to_rest carries no 'very-near'-only planar rung and no 'level'-only height rung. Its exact completion is reached(ee, rest_site), which is norm(tcp - rest) <= pick_cfg.ee_rest_thresh read live -- 0.05 m at present. Those two finest rungs are equal-width quantiles of the mined ee-site scale and can tighten below that threshold, which would let a successful return leave a weighted rung unpaid and the potential top out under 1.0. The retained rungs clear it by an order of magnitude on any plausible scale. No mined clause in a final phase may be stricter than that phase's exact condition.",
+    "approach has no such constraint: it completes on grasp, not on a distance, so its ladder may run to the finest rung."
+  ],
+  "phases": [
+    {
+      "name": "approach",
+      "src": "ee",
+      "dst": "target",
+      "weight": 0.35,
+      "clauses": [
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "very-near"
+          ],
+          "weight": 0.0375
+        },
+        {
+          "relation": "height-offset",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "below",
+            "level",
+            "above"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "height-offset",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "level"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "poor-match",
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.03
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "partial-match",
+            "match"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "grasp-compatibility",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "match"
+          ],
+          "weight": 0.05
+        }
+      ],
+      "completion": {
+        "relation": "grasp",
+        "src": "ee",
+        "dst": "target",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "acquire",
+      "src": "ee",
+      "dst": "target",
+      "weight": 0.2,
+      "clauses": [
+        {
+          "relation": "grasp",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.2
+        }
+      ],
+      "completion": {
+        "relation": "grasp",
+        "src": "ee",
+        "dst": "target",
+        "labels": [
+          "holds"
+        ]
+      }
+    },
+    {
+      "name": "return_to_rest",
+      "src": "ee",
+      "dst": "rest_site",
+      "weight": 0.45,
+      "requires": {
+        "all_of": [
+          {
+            "relation": "grasp",
+            "src": "ee",
+            "dst": "target",
+            "labels": [
+              "holds"
+            ],
+            "weight": 0.0
+          }
+        ]
+      },
+      "clauses": [
+        {
+          "relation": "grasp",
+          "src": "ee",
+          "dst": "target",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.1
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "rest_site",
+          "labels": [
+            "far",
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "rest_site",
+          "labels": [
+            "medium",
+            "near",
+            "very-near"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "planar-distance",
+          "src": "ee",
+          "dst": "rest_site",
+          "labels": [
+            "near",
+            "very-near"
+          ],
+          "weight": 0.04
+        },
+        {
+          "relation": "height-offset",
+          "src": "ee",
+          "dst": "rest_site",
+          "labels": [
+            "below",
+            "level",
+            "above"
+          ],
+          "weight": 0.06
+        },
+        {
+          "relation": "reached",
+          "src": "ee",
+          "dst": "rest_site",
+          "labels": [
+            "holds"
+          ],
+          "weight": 0.17
+        }
+      ],
+      "completion": {
+        "all_of": [
+          {
+            "relation": "grasp",
+            "src": "ee",
+            "dst": "target",
+            "labels": [
+              "holds"
+            ]
+          },
+          {
+            "relation": "reached",
+            "src": "ee",
+            "dst": "rest_site",
+            "labels": [
+              "holds"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
