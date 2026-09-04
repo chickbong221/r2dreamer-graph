@@ -481,6 +481,63 @@ class VerificationGateTest(unittest.TestCase):
                     [])
 
 
+class PruneKeepsSitesTest(unittest.TestCase):
+    """Both policies filter mined membership; a site is neither mined nor a
+    supporter, so both would drop it -- and the pilot proved they did."""
+
+    SITES = {SITE_EE_REST: {"site_type": "point", "subject": "ee"}}
+
+    def _raw(self):
+        return {
+            "target": BOWL, "task_group": "tidy_house", "subtask": "pick",
+            "membership_policy": "target-supporters",
+            "sites": dict(self.SITES),
+            "members": {
+                BOWL: _member(["contact", "grasp"]),
+                SITE_EE_REST: {"roles": ["spatial"], "interaction_types": [],
+                               "kind": "spatial"},
+                "actor:brushed": _member(["contact"]),
+            },
+        }
+
+    def test_target_supporters_keeps_the_declared_site(self):
+        from scenegraph.tools.prune_whitelists import prune_payload
+        members = prune_payload(self._raw(), "target-supporters")["members"]
+        self.assertIn(SITE_EE_REST, members)
+        self.assertIn(BOWL, members)
+
+    def test_it_still_drops_the_brushed_past_object(self):
+        """The policy is unchanged for mined members."""
+        from scenegraph.tools.prune_whitelists import prune_payload
+        members = prune_payload(self._raw(), "target-supporters")["members"]
+        self.assertNotIn("actor:brushed", members)
+
+    def test_full_evidence_keeps_it_too(self):
+        from scenegraph.tools.prune_whitelists import prune_payload
+        self.assertIn(SITE_EE_REST,
+                      prune_payload(self._raw(), "full-evidence")["members"])
+
+    def test_a_payload_with_no_sites_is_unaffected(self):
+        from scenegraph.tools.prune_whitelists import prune_payload
+        raw = self._raw()
+        raw.pop("sites")
+        members = prune_payload(raw, "target-supporters")["members"]
+        self.assertEqual(sorted(members), [BOWL])
+
+    def test_the_site_survives_into_the_union(self):
+        """That union is where the runtime reads its vocabulary and bins."""
+        from scenegraph.tools.build_union_whitelist import merge
+        from scenegraph.tools.prune_whitelists import prune_payload
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            pruned = prune_payload(self._raw(), "target-supporters")
+            pruned["bin_stats_robust"] = {"ee_object_planar_distance": 1.0}
+            (directory / "pick_024_bowl.json").write_text(json.dumps(pruned))
+            merged = merge(directory, "pick")
+        self.assertIn(SITE_EE_REST, merged["members"])
+        self.assertIn(SITE_EE_REST, merged["sites"])
+
+
 class UnionPreservationTest(unittest.TestCase):
     """The union is what the runtime binds bins, families and sites from."""
 

@@ -74,6 +74,14 @@ def prune_payload(raw: Dict, policy: str) -> Dict:
             if target and target in (entry.get("supports") or ()):
                 keep.add(key)
 
+    # A declared site is task geometry, not mined membership. The policy
+    # filters what the *evidence* admitted -- a site supports nothing and
+    # touches nothing, so both policies would drop it, and dropping it removes
+    # the vocabulary row its runtime node needs: the site then encodes as
+    # padding and every fact naming it disappears. MS-HAB Pick is scored on
+    # ``reached(ee, spatial:ee_rest_site)``, so that is the whole schedule.
+    keep |= set(raw.get("sites") or {})
+
     out_members: Dict[str, Dict] = {}
     for key in sorted(keep):
         entry = members.get(key)
