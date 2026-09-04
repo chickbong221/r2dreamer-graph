@@ -220,7 +220,9 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
     legitimately omits one the demos never moved.
     """
     keys = [spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")]
-    families = sorted(set((cfg.get("families") or {}).values()))
+    # Falsy values dropped: an unclassified member carries None, which is not
+    # a family and has no scale, and sorting it against the real ones raises.
+    families = sorted({f for f in (cfg.get("families") or {}).values() if f})
     if families:
         keys.extend(ee_family_bin_key(f) for f in families)
     else:
@@ -233,11 +235,18 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
         keys.append(OBJECT_REGION_PLANAR_KEY)
     if ladder_site_keys(cfg):
         keys.extend((OBJECT_SITE_PLANAR_KEY, OBJECT_SITE_HEIGHT_KEY))
+    if ee_ladder_site_keys(cfg):
+        keys.extend((EE_SITE_PLANAR_KEY, EE_SITE_HEIGHT_KEY))
     oo_spatial = bool(cfg.get("object_object_spatial", False))
     oo_compat = bool(
         (cfg.get("affordances") or {}).get("object_object_compatibility", True)
     )
-    if oo_spatial or oo_compat:
+    # Only where an object *pair* can exist. A whitelist admitting one
+    # physical member has nothing to pair it with, at mining time or at
+    # runtime, so demanding a scale for it asks the asset to calibrate a
+    # distance the task never produces -- the same rule the region scale
+    # already follows.
+    if (oo_spatial or oo_compat) and _pairable_members(cfg) >= 2:
         keys.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "planar-distance"))
     if oo_spatial:
         keys.append(spatial_bin_key(OBJECT_OBJECT_SCOPE, "height-offset"))
@@ -429,6 +438,22 @@ def ee_height_bin_key(node: Node, cfg: dict) -> str:
     return ee_family_bin_key(family)
 
 
+def _pairable_members(cfg: dict) -> int:
+    """Physical members that could stand in an object-object relation.
+
+    Virtual sites are excluded: they have no body, so no object-object fact
+    can name one. Falls back to two when the configuration carries no member
+    listing, which keeps the requirement in force for every caller that does
+    not supply one.
+    """
+    from .sites import SITE_PREFIX
+
+    families = cfg.get("families")
+    if not isinstance(families, dict) or not families:
+        return 2
+    return sum(1 for key in families if not str(key).startswith(SITE_PREFIX))
+
+
 def region_site_keys(cfg: dict) -> Set[str]:
     """Declared sites whose geometry is a region rather than a point."""
     from .sites import SITE_REGION
@@ -457,18 +482,36 @@ def is_virtual_site(node: Node) -> bool:
 
 
 def ladder_site_keys(cfg: dict) -> Set[str]:
-    """Virtual sites that carry a distance ladder.
+    """Virtual sites carrying a ladder measured from an *object*.
 
     Virtual only: PickCube's goal marker is a real actor with real pixels and
     an object-object ladder that already works, and re-scoping it would mean
     re-mining a task nothing is wrong with. Regions are excluded because they
     have their own planar-only scale and no height target.
+
+    A site whose subject is the gripper is excluded too, and measured on the
+    end-effector scale instead -- see :func:`ee_ladder_site_keys`. A peg head
+    reaching a hole and a hand returning to its rest position are distances
+    over different bodies, and demanding the object scale for the second is
+    demanding a calibration the task produces no samples for.
     """
     from .sites import SITE_PREFIX, SITE_REGION
     return {
         key for key, decl in (cfg.get("site_declarations") or {}).items()
         if str(key).startswith(SITE_PREFIX)
         and getattr(decl, "site_type", None) != SITE_REGION
+        and getattr(decl, "subject_key", None) != EE_KEY
+    }
+
+
+def ee_ladder_site_keys(cfg: dict) -> Set[str]:
+    """Virtual sites carrying a ladder measured from the end effector."""
+    from .sites import SITE_PREFIX, SITE_REGION
+    return {
+        key for key, decl in (cfg.get("site_declarations") or {}).items()
+        if str(key).startswith(SITE_PREFIX)
+        and getattr(decl, "site_type", None) != SITE_REGION
+        and getattr(decl, "subject_key", None) == EE_KEY
     }
 
 

@@ -498,6 +498,66 @@ class DynamicRowResolutionTest(unittest.TestCase):
         self.assertTrue(bool(resolved[0, column]))
 
 
+class RequiredScaleTest(unittest.TestCase):
+    """Which calibration an asset must carry, given what it declares.
+
+    The pilot bound against a real asset and failed here: the rest site was
+    routed to the *object*-site scale, so the runtime demanded a calibration
+    for peg-head-to-hole distances in a task that has neither.
+    """
+
+    def _cfg(self, subject, families):
+        return {"site_declarations": {SITE_EE_REST: _decl(subject)},
+                "families": families}
+
+    def test_a_gripper_site_wants_the_end_effector_scale(self):
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg("ee", {TARGET: "manipuland"}))
+        self.assertIn(EE_SITE_PLANAR_KEY, keys)
+        self.assertIn(EE_SITE_HEIGHT_KEY, keys)
+
+    def test_it_does_not_want_the_object_site_scale(self):
+        """A hand returning to base and a peg head entering a hole are
+        distances over different bodies."""
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg("ee", {TARGET: "manipuland"}))
+        self.assertNotIn("object-site-planar-distance", keys)
+        self.assertNotIn("object-site-height-offset", keys)
+
+    def test_an_object_subject_site_still_wants_the_object_scale(self):
+        """PegInsertionSide is unchanged."""
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg(
+            TARGET, {TARGET: "manipuland", "actor:box": "receptacle"}))
+        self.assertIn("object-site-planar-distance", keys)
+        self.assertNotIn(EE_SITE_PLANAR_KEY, keys)
+
+    def test_one_physical_member_needs_no_object_object_scale(self):
+        """Nothing to pair it with, at mining time or at runtime."""
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg("ee", {TARGET: "manipuland"}))
+        self.assertNotIn("object-object-planar-distance", keys)
+
+    def test_two_physical_members_do(self):
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg(
+            "ee", {TARGET: "manipuland", "actor:counter": "structural-surface"}))
+        self.assertIn("object-object-planar-distance", keys)
+
+    def test_a_site_is_not_a_pairable_member(self):
+        """It has no body, so no object-object fact can name it."""
+        from scenegraph.core.relation_rules import required_bin_keys
+        keys = required_bin_keys(self._cfg(
+            "ee", {TARGET: "manipuland", SITE_EE_REST: None}))
+        self.assertNotIn("object-object-planar-distance", keys)
+
+    def test_an_asset_without_families_keeps_the_requirement(self):
+        """A legacy asset lists no families, and the requirement must stay in
+        force rather than lapse because the listing is absent."""
+        from scenegraph.core.relation_rules import required_bin_keys
+        self.assertIn("object-object-planar-distance", required_bin_keys({}))
+
+
 class NoContactInPickTest(unittest.TestCase):
     """Contact stays observable and unscheduled: a grasped object is also in
     contact, so scoring both pays twice for one event."""
