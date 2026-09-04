@@ -141,6 +141,47 @@ class PackedRowsAreWhatTheScorerReadsTest(unittest.TestCase):
 
 
 class ProbeCommandTest(unittest.TestCase):
+    def test_raw_cameras_reach_the_real_node_builder(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from scenegraph.core.node_builder import build_nodes
+        from tests.probes.probe_policy_potential import build_probe_frame
+
+        cameras = ["fetch_head", "fetch_hand"]
+        raw = {"sensor_data": {
+            cam: {"rgb": np.zeros((2, 8, 8, 3), dtype=np.uint8),
+                  "segmentation": np.stack([
+                      np.full((8, 8, 1), index + 1),
+                      np.full((8, 8, 1), index + 11)])}
+            for index, cam in enumerate(cameras)}}
+        state = SimpleNamespace(
+            env_idx=1, tcp_pose_world=_pose(), seg_id_map={},
+            robot_links=set(), robot_link_names=set(),
+            ee_links=[], ee_link_names=set())
+
+        def step(obs, frame, **kwargs):
+            self.assertEqual(frame, 7)
+            self.assertTrue(kwargs.pop("episode_boundary"))
+            return build_nodes(obs, state, camera_order=cameras,
+                               appearance=False, **kwargs)
+
+        builder = SimpleNamespace(env_idx=1, step=Mock(side_effect=step))
+        nodes, _, camera, _ = build_probe_frame(
+            builder, raw, 7, cameras, episode_boundary=True)
+        self.assertIn("ee", nodes)
+        self.assertEqual(camera, "fetch_head")
+        passed = builder.step.call_args.kwargs["seg_overrides"]
+        self.assertEqual(list(passed), cameras)
+        np.testing.assert_array_equal(passed["fetch_head"], np.full((8, 8), 11))
+        np.testing.assert_array_equal(passed["fetch_hand"], np.full((8, 8), 12))
+
+        # A genuinely missing camera must not silently become a one-camera run.
+        del raw["sensor_data"]["fetch_hand"]
+        builder.step.reset_mock()
+        with self.assertRaises(KeyError):
+            build_probe_frame(builder, raw, 8, cameras, episode_boundary=False)
+        builder.step.assert_not_called()
+
     def test_requested_capacity_reaches_the_builder(self):
         from types import SimpleNamespace
         from tests.probes.probe_policy_potential import Report, build_config

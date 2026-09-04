@@ -396,6 +396,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 1 if failed else 0
 
 
+def build_probe_frame(builder, raw_obs, frame, cameras, *, episode_boundary):
+    """Use training's explicit multi-camera path, not the one-camera fallback."""
+    from scenegraph.core.mask_extractor import extract_camera_obs
+
+    segmentation = {
+        camera: extract_camera_obs(raw_obs, camera, builder.env_idx)[1]
+        for camera in cameras
+    }
+    return builder.step(
+        {}, frame, episode_boundary=episode_boundary,
+        seg_overrides=segmentation, record_camera=cameras[0], need_masks=False)
+
+
 def rollout_graphs(args, cfg, rep):
     """``(frames, success_index)`` for one episode the environment calls a
     success, or ``([], None)`` with a reason already reported.
@@ -480,9 +493,9 @@ def rollout_graphs(args, cfg, rep):
         frames, success_at, restarts = [], None, 0
         boundary, succeeded = True, False
         for step in range(args.max_total_steps):
-            graph, _m, _c, _r = builder.step(
-                cache.raw_obs, step, episode_boundary=boundary,
-                need_masks=False)
+            graph, _m, _c, _r = build_probe_frame(
+                builder, cache.raw_obs, step, args.cameras,
+                episode_boundary=boundary)
             frames.append(graph)
             if succeeded and success_at is None:
                 success_at = len(frames) - 1
