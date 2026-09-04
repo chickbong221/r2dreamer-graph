@@ -699,7 +699,8 @@ class GraphBuilder:
             ),
         )
 
-        capture_initial = (not self._initial_captured
+        capture_initial = (not self.cfg.get("disable_object_object_relations", False)
+                           and not self._initial_captured
                            and frame >= self._initial_capture_frame)
         self.last_in_frame = graph.meta["n_in_frame"]
         build_absolute_edges(

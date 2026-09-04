@@ -1082,14 +1082,14 @@ class EeSubjectResolutionTest(unittest.TestCase):
 
     def test_an_object_subject_is_unaffected(self):
         """The ordinary path still resolves through ``whitelist_key``."""
-        edges = goal_edges(
-            _graph(_node("actor:cube", "actor:cube", _pose(x=0.9)),
-                   _node("actor:goal_site", "actor:goal_site", _pose())),
-            None,
-            {"site_specs": [_spec(_decl(key="actor:goal_site",
-                                        subject="actor:cube"))]})
+        graph = _graph(_node("actor:cube", "actor:cube", _pose(x=0.9)),
+                       _node("actor:goal_site", "actor:goal_site", _pose()))
+        cfg = {"site_specs": [_spec(_decl(key="actor:goal_site", subject="actor:cube"))]}
+        edges = goal_edges(graph, None, cfg)
         self.assertEqual((edges[0].src, edges[0].dst),
                          ("actor:cube", "actor:goal_site"))
+        cfg["disable_object_object_relations"] = True
+        self.assertEqual(goal_edges(graph, None, cfg), [])
 
     def test_the_reserved_key_has_one_definition(self):
         """The compiler and the emitter must agree on the spelling; a

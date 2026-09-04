@@ -735,8 +735,10 @@ class GraphConfigTest(unittest.TestCase):
         """MS-HAB names a task group that is not a gym id, so it must pass
         through untouched."""
         out = mod.graph_observation_config(
-            self._config(mshab_task="set_table"), ["fetch_head"])
+            self._config(mshab_task="set_table", disable_object_object_relations=True),
+            ["fetch_head"])
         self.assertEqual(out["mshab_task"], "set_table")
+        self.assertIs(out["disable_object_object_relations"], True)
 
 
 class ScheduleSourceTest(unittest.TestCase):

@@ -30,6 +30,7 @@ def _repo_path(value: str | Path) -> Path:
 _GRAPH_CONFIG_KEYS = (
     "enabled", "mshab_task", "entity_vocab",
     "use_target_flag", "object_object_spatial",
+    "disable_object_object_relations",
     "thresholds_path", "whitelist_dir", "n_max", "e_max",
     "visibility_policy", "bypass_teemo",
 )
@@ -38,6 +39,7 @@ _GRAPH_CONFIG_CASTS = {
     "enabled": bool,
     "use_target_flag": bool,
     "object_object_spatial": bool,
+    "disable_object_object_relations": bool,
     "visibility_policy": str,
     "bypass_teemo": bool,
     "uid_vocab": int,

@@ -39,6 +39,7 @@ graph:
   entity_vocab: ${model.graph.entity_vocab}
   use_target_flag: false
   object_object_spatial: true
+  disable_object_object_relations: false
   thresholds_path: ''
   whitelist_dir: ''
   visibility_policy: keep_tabletop

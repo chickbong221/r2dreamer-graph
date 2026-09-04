@@ -215,8 +215,9 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
 
     Scope-aware because MS-HAB emits no object-object spatial edges: requiring
     a height scale it never mines would reject every one of its whitelists.
-    Object-object planar is still needed there, since the obj-obj
-    compatibility near gate reads it. Change relations stay out -- an asset
+    Object-object planar is still needed when obj-obj compatibility is on.
+    The independent disable_object_object_relations switch removes all OO
+    requirements but keeps EE-site scales. Change relations stay out -- an asset
     legitimately omits one the demos never moved.
     """
     keys = [spatial_bin_key(EE_OBJECT_SCOPE, "planar-distance")]
@@ -228,17 +229,19 @@ def required_bin_keys(cfg: dict) -> Tuple[str, ...]:
     else:
         # Legacy asset: one shared end-effector height scale.
         keys.append(spatial_bin_key(EE_OBJECT_SCOPE, "height-offset"))
-    keys.extend(AFFORDANCE_RELATIONS)
+    disable_oo = bool(cfg.get("disable_object_object_relations", False))
+    keys.extend(r for r in AFFORDANCE_RELATIONS
+                if not disable_oo or r in ("contact-compatibility", "grasp-compatibility"))
     # Required only where a region site exists to measure against. A task
     # without one must not be made to carry a scale nothing in it produces.
-    if region_site_keys(cfg):
+    if not disable_oo and region_site_keys(cfg):
         keys.append(OBJECT_REGION_PLANAR_KEY)
-    if ladder_site_keys(cfg):
+    if not disable_oo and ladder_site_keys(cfg):
         keys.extend((OBJECT_SITE_PLANAR_KEY, OBJECT_SITE_HEIGHT_KEY))
     if ee_ladder_site_keys(cfg):
         keys.extend((EE_SITE_PLANAR_KEY, EE_SITE_HEIGHT_KEY))
-    oo_spatial = bool(cfg.get("object_object_spatial", False))
-    oo_compat = bool(
+    oo_spatial = not disable_oo and bool(cfg.get("object_object_spatial", False))
+    oo_compat = not disable_oo and bool(
         (cfg.get("affordances") or {}).get("object_object_compatibility", True)
     )
     # Only where an object *pair* can exist. A whitelist admitting one
@@ -1561,6 +1564,11 @@ def goal_edges(graph: Graph, state: PrivilegedState, cfg: dict) -> List[Edge]:
         return []
     edges: List[Edge] = []
     for spec in specs:
+        # Virtual sites count as object endpoints too. EE-rest reached stays
+        # live, but an object-to-site goal is disabled with all other OO facts.
+        if (cfg.get("disable_object_object_relations", False)
+                and spec.subject_key != "ee"):
+            continue
         spec.validate(f"{graph.env_id}/frame {graph.frame}")
         site_node = _node_for_key(graph, spec.key)
         subject_node = _node_for_key(graph, spec.subject_key)
@@ -1612,6 +1620,11 @@ def build_absolute_edges(
     graph.edges.extend(
         ee_object_physical_edges(graph, state, cfg, force_valid))
     graph.edges.extend(ee_object_affordance_edges(graph, state, cfg))
+    # Skip the work, not just its output: no pair enumeration, pairwise force
+    # queries, compatibility scoring or initial-pair capture on this path.
+    # The EE relations above are the complete MS-HAB Pick reward input.
+    if bool(cfg.get("disable_object_object_relations", False)):
+        return
     # Off for MS-HAB: its progress ladder is end-effector-to-target and these
     # would be new facts in an environment nothing asked to change. Named
     # explicitly rather than inferred from the edge contract, which is a

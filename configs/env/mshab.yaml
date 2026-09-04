@@ -66,6 +66,8 @@ graph:
   whitelist_dir: ''
   use_target_flag: true
   object_object_spatial: false
+  # Independent master switch; Pick experiment profiles enable the fast path.
+  disable_object_object_relations: false
   visibility_policy: projected_camera
   n_max: ${model.graph.n_max}
   e_max: ${model.graph.e_max}

@@ -190,11 +190,15 @@ class ProbeCommandTest(unittest.TestCase):
             thresholds=f"{CONFIGS}/thresholds.yaml", task="tidy_house",
             affordance=f"{CONFIGS}/affordances/tidy_house.json",
             whitelist_dir=WHITELIST_DIR, object_object_spatial=False,
+            disable_object_object_relations=True,
             cameras=["fetch_head", "fetch_hand"],
             visibility_policy="projected_camera", n_max=32)
         cfg = build_config(args, Report())
         self.assertEqual(cfg["selection"]["n_max"], 32)
         self.assertFalse(cfg["object_object_spatial"])
+        self.assertTrue(cfg["disable_object_object_relations"])
+        args.disable_object_object_relations = False
+        self.assertFalse(build_config(args, Report())["disable_object_object_relations"])
 
     def test_command_entry_point_runs_argument_parsing(self):
         # Importing main() is not enough: the server runs the file directly.

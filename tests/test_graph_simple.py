@@ -860,9 +860,11 @@ class EnvConfigPlumbingTest(unittest.TestCase):
             "visibility_policy": "keep_tabletop",
             "bypass_teemo": False,
             "use_target_flag": True, "object_object_spatial": False,
+            "disable_object_object_relations": True,
         })
         out = graph_observation_config(graph_config, ["fetch_head"])
         self.assertIs(out["enabled"], True)
+        self.assertIs(out["disable_object_object_relations"], True)
         self.assertEqual(out["cameras"], ["fetch_head"])
 
 

@@ -156,9 +156,11 @@ class IdentityIsAboutTheModelNotTheSceneTest(unittest.TestCase):
                 self.assertIn(f"{field}_vocab", problems[0])
 
     def test_a_moved_capacity_is_a_mismatch(self):
-        """The embeddings and the packed shapes are sized from these."""
-        moved = self._identity(n_max=11)
-        self.assertTrue(identity_mismatches(moved, self._identity()))
+        """Packed shapes and the enabled relation set are part of the contract."""
+        for override in ({"n_max": 11}, {"disable_object_object_relations": True}):
+            with self.subTest(override=override):
+                moved = self._identity(**override)
+                self.assertTrue(identity_mismatches(moved, self._identity()))
 
     def test_a_different_schedule_is_a_mismatch(self):
         moved = self._identity(schedule_label="tidy_house/place")

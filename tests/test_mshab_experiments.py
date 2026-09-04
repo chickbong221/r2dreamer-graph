@@ -175,6 +175,11 @@ class ExperimentConfigTest(unittest.TestCase):
                 self.assertEqual(self._config(name)["progress_mode"],
                                  "task_schedule")
 
+    def test_pick_profiles_disable_all_object_pairs_by_default(self):
+        for name in ("a", "b", "c"):
+            with self.subTest(experiment=name):
+                self.assertTrue(self._config(name)["graph"]["disable_object_object_relations"])
+
     def test_c_trains_nothing_and_leaves_lighting_unset(self):
         config = self._config("c")
         text = Path("configs/env/mshab_pick_c.yaml").read_text(encoding="utf-8")
@@ -188,10 +193,11 @@ class ExperimentConfigTest(unittest.TestCase):
         self.assertEqual(base["mshab_objects"], [])
         self.assertEqual(base["train_build_config_ids"], [])
         self.assertFalse(base["eval_even_build_configs"])
+        self.assertFalse(base["graph"]["disable_object_object_relations"])
 
 
 class LauncherTest(unittest.TestCase):
-    """The launchers refuse rather than filling in a number."""
+    """Launchers use approved settings and still validate supplied assets."""
 
     def _script(self, name):
         return Path(f"runs/mshab/experiment_{name}.sh").read_text(
@@ -217,18 +223,28 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("migrated_pre_anchor", source)
         self.assertIn("required_bin_keys", source)
 
-    def test_capacity_and_vocabulary_are_required_not_defaulted(self):
-        for name in ("a", "b"):
-            for var in ("ENTITY_VOCAB", "N_MAX", "E_MAX"):
-                with self.subTest(experiment=name, var=var):
-                    self.assertIn(f'"${{{var}:-}}"', self._script(name))
-
-    def test_the_checkpoint_metric_is_required(self):
+    def test_approved_capacity_and_asset_sized_vocabulary(self):
         for name in ("a", "b"):
             with self.subTest(experiment=name):
-                self.assertIn("CKPT_METRIC", self._script(name))
+                script = self._script(name)
+                self.assertIn('"${ENTITY_VOCAB:-}"', script)
+                self.assertIn("model.graph.n_max=12", script)
+                self.assertIn("model.graph.e_max=384", script)
+                self.assertIn('"$@"', script)
+                self.assertIn('logdir="$REPO_ROOT/logdir/', script)
+        probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
+        self.assertIn("--n-max 12 --e-max 384", probe)
 
-    def test_neither_launcher_hardcodes_a_capacity(self):
+    def test_the_approved_checkpoint_metric_is_success_once(self):
+        for name in ("a", "b"):
+            with self.subTest(experiment=name):
+                script = self._script(name)
+                self.assertIn("checkpoint.metric=eval/success_once", script)
+                self.assertIn("checkpoint.tiebreak=''", script)
+                self.assertNotIn("CKPT_METRIC", script)
+                self.assertNotIn("CKPT_TIEBREAK", script)
+
+    def test_neither_launcher_reuses_the_old_small_defaults(self):
         for name in ("a", "b"):
             script = self._script(name)
             with self.subTest(experiment=name):

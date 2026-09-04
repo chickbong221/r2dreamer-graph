@@ -588,6 +588,8 @@ def build_graph_obs(
     # different graphs here and neither should get the other's by default.
     teemo_cfg["object_object_spatial"] = bool(
         graph_cfg.get("object_object_spatial", False))
+    teemo_cfg["disable_object_object_relations"] = bool(
+        graph_cfg.get("disable_object_object_relations", False))
     if teemo_cfg.get("whitelist_dir") is None:
         raise ValueError(
             "graph: whitelist_dir is not set in the loaded config; set "

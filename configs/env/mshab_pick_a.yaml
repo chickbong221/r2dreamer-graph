@@ -29,3 +29,7 @@ eval_episode_num: 25
 eval_even_build_configs: false
 
 progress_mode: task_schedule
+
+graph:
+  # Pick scores only EE-target and EE-rest-site relations.
+  disable_object_object_relations: true

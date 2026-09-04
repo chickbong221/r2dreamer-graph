@@ -109,6 +109,8 @@ def checkpoint_identity(config, envs):
         schedule_label=source.label if source else "",
         n_max=int(graph.n_max), e_max=int(graph.e_max),
         n_cams=len(list(config.env.cameras or [])),
+        disable_object_object_relations=bool(
+            config.env.graph.get("disable_object_object_relations", False)),
         entity_ids=build_entity_vocab(whitelist_dir).token_to_id
         if whitelist_dir else {},
         relation_ids=build_relation_vocab().token_to_id,

@@ -24,3 +24,7 @@ eval_build_config_ids:
 eval_episode_num: 25
 
 progress_mode: task_schedule
+
+graph:
+  # Must match the graph mode used by Experiment B's checkpoint.
+  disable_object_object_relations: true

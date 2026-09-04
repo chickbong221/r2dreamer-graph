@@ -1,10 +1,23 @@
-# Structural-surface height: what is fixed and what is not
+# Structural-surface height: V1 decision and deferred refinement
 
 The stored reference plane is `(anchor, outward_normal)` in the supporter's
 object frame. Mining and runtime both use it. Agreement between those two
 paths is necessary, but does not establish that the anchor is on the physical
-surface. The requirement remains height above the physical supporting surface;
-this note does not approve a proxy or change any schedule.
+surface.
+
+## Approved V1 scope
+
+For the first MS-HAB version, retain the existing supported-object-origin proxy
+and the corrected object-frame/outward-normal conversion that made the assets
+runnable. Exact physical-surface reconstruction and verification are deferred,
+not a V1 training-readiness gate. Do not revert the coordinate-direction fix or
+replace the current assets with a new geometric estimator.
+
+The possible geometry-only recovery method below is retained for future work;
+it is not an enabled runtime path or an extra collection requirement. No new
+rollouts or re-mine are needed for this scope decision. Schedules, protected
+nodes, and per-target membership are unchanged. V1 should describe the height
+reference as an approximate mined support plane, not an exact tabletop plane.
 
 ## Normal-frame correction
 
@@ -59,7 +72,7 @@ only a conservative approximation for a non-box at arbitrary orientation.
 Do not silently repurpose this classification helper as an exact contact-plane
 estimator.
 
-## Investigate geometry-only recovery before recollection
+## Deferred: geometry-only recovery before recollection
 
 The inspected local ManiSkill source offers a recovery route:
 
@@ -90,9 +103,10 @@ Before changing anchor estimation, use the server's installed version to:
    per supporter and the spread across supported objects, not just an average.
 
 The collision asset files and simulator are not available in this local
-workspace, so the geometry recovery remains unverified. No collection,
-re-mining, or physical-anchor substitution is performed by this repair.
+workspace, so the geometry recovery remains unverified and outside V1. No
+collection, re-mining, or physical-anchor substitution is performed by this repair.
 If matched geometry can be recovered, an offline re-mine can use the existing
 rollouts; repeating the successful-policy collection is not inherently needed.
 If it cannot, state which geometry/provenance is missing before proposing any
-additional collection. Do not relax the physical-surface requirement by default.
+additional collection. Any future replacement of V1's proxy requires an explicit
+decision and consistent re-calibration of mining and runtime measurements.

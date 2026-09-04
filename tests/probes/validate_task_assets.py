@@ -131,7 +131,9 @@ def validate(args) -> int:
 
     cfg = {"structural_surfaces": set(union.structural_surfaces),
            "families": dict(union.families),
-           "site_declarations": dict(union.sites)}
+           "site_declarations": dict(union.sites),
+           "disable_object_object_relations": bool(
+               getattr(args, "disable_object_object_relations", False))}
     required = required_bin_keys(cfg)
     absent = [key for key in required if not union.bin_edges.get(key)]
     rep.check("every required bin is calibrated", not absent,
@@ -179,6 +181,10 @@ def validate(args) -> int:
     rep.note("  phases", ", ".join(
         f"{p.name}@{p.weight:g}" for p in schedule.phases))
     rep.note("  scored entities", ", ".join(str(e) for e in schedule.entity_ids))
+    if cfg["disable_object_object_relations"]:
+        object_slots = [slot for slot in schedule.slots if vocab.ee_id not in slot[1:]]
+        rep.check("EE-only mode preserves every scheduled fact", not object_slots,
+                  f"disabled slots {object_slots}" if object_slots else "all pairs include EE")
 
     # ---- capacity inputs, reported not asserted --------------------------- #
     rep.note("entity_vocab (asset property)", f"{len(vocab.token_to_id)}")
@@ -199,6 +205,8 @@ def main(argv=None) -> int:
     p.add_argument("--raw-dir", default="")
     p.add_argument("--affordance", default="")
     p.add_argument("--schedule-dir", default="")
+    p.add_argument("--disable-object-object-relations", action="store_true",
+                   help="Validate the EE-only graph used by Pick A/B/C.")
     args = p.parse_args(argv)
 
     configs = pathlib.Path(args.configs)

@@ -4,9 +4,8 @@
 # varies is the room. A clean grasp on purpose: the measurement is scene
 # variance, not grasp difficulty.
 #
-# The 63-scene evaluation does not choose the checkpoint. Selection uses the
-# fixed same-scene set; generalisation is reported from the checkpoint that
-# selection produced.
+# Checkpoint selection uses eval/success_once from the configured evaluation
+# set below (all 63 scenes); no separate same-scene selector is implemented.
 defaults:
   - mshab
   - _self_
@@ -27,3 +26,6 @@ eval_episode_num: 63
 eval_even_build_configs: true
 
 progress_mode: task_schedule
+
+graph:
+  disable_object_object_relations: true

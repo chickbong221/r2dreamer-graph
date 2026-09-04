@@ -64,7 +64,7 @@ trainer:
 checkpoint:
   enabled: false
   start_step: 8e6
-  # PENDING -- must be set explicitly, e.g. eval/success_once
+  # Required when enabled; MS-HAB A/B launchers set eval/success_once.
   metric: ''
   tiebreak: ''
   mode: max

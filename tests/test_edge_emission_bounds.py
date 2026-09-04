@@ -1,9 +1,8 @@
 """How many facts one maximally-admissible graph emits, against e_max.
 
-The configured ceiling is documented as ``3 * n_max * (n_max - 1)`` = 168, but
-that is the count only when each unordered pair emits six facts. Support and
-contain currently emit both orderings, in the physical family and again in the
-affordance family, so the real legacy count is higher and the packer truncates.
+Each physical object pair emits at most six physical/compatibility facts,
+plus two spatial facts when object_object_spatial is enabled. Directional
+relations emit once per pair. Overflow raises rather than truncating.
 
 Affordance component lookups and compatibility maths are stubbed: this measures
 emission structure, not affordance scoring.
@@ -18,6 +17,7 @@ import yaml
 
 from scenegraph.core import relation_rules as rr
 from scenegraph.core.schema import Graph, Node
+from scenegraph.core.sites import SITE_EE_REST, SiteDeclaration, SiteSpec
 
 ALL_TYPES = ["contact", "grasp", "support", "contain"]
 _SENTINEL = [object()]
@@ -108,9 +108,9 @@ def _stubs(roles=None):
     return p
 
 
-def _emit(n_objects, roles=None, nodes=None):
+def _emit(n_objects, roles=None, nodes=None, cfg=None):
     graph = _graph(n_objects) if nodes is None else nodes
-    state, cfg = _state(graph), _cfg()
+    state, cfg = _state(graph), _cfg() if cfg is None else cfg
     stubs = _stubs(roles)
     for s in stubs:
         s.start()
@@ -151,6 +151,73 @@ class EmissionTest(unittest.TestCase):
         legacy = _by_relation(_emit(1), ee=True)
         canon = _by_relation(_emit(1, _ROLES), ee=True)
         self.assertEqual(legacy, canon)
+
+    def test_disable_object_pairs_skips_work_and_preserves_ee_facts(self):
+        expected = [e for e in _emit(2, _ROLES) if "ee" in (e.src, e.dst)]
+        for spatial in (False, True):
+            with self.subTest(object_object_spatial=spatial):
+                cfg = _cfg()
+                cfg.update(disable_object_object_relations=True,
+                           object_object_spatial=spatial)
+                with mock.patch.object(rr, "_object_pairs", side_effect=AssertionError(
+                        "disabled pairs must not even be enumerated")):
+                    actual = _emit(2, _ROLES, cfg=cfg)
+                self.assertEqual(actual, expected)
+                self.assertTrue(all("ee" in (e.src, e.dst) for e in actual))
+                cfg["disable_object_object_relations"] = False
+                restored = _emit(2, _ROLES, cfg=cfg)
+                self.assertGreater(len(restored), len(actual))
+
+    def test_disabled_object_pairs_require_only_ee_calibration(self):
+        cfg = _cfg()
+        cfg["disable_object_object_relations"] = True
+        keys = rr.required_bin_keys(cfg)
+        self.assertIn("grasp-compatibility", keys)
+        self.assertIn("contact-compatibility", keys)
+        self.assertIn("ee-object-planar-distance", keys)
+        self.assertIn("ee-object-height-offset", keys)
+        for key in ("object-object-planar-distance", "object-object-height-offset",
+                    "support-compatibility", "contain-compatibility"):
+            self.assertNotIn(key, keys)
+
+    def test_mshab_twelve_node_edge_bound_includes_physical_pairs_and_site(self):
+        cfg = _cfg()
+        cfg["object_object_spatial"] = False
+        per_ee = sum(_by_relation(_emit(1, _ROLES, cfg=cfg), ee=True).values())
+        pairs = _by_relation(_emit(2, _ROLES, cfg=cfg))
+        self.assertEqual(per_ee, 6)
+        self.assertNotIn("planar-distance", pairs)
+        self.assertNotIn("height-offset", pairs)
+        self.assertEqual(sum(pairs.values()), 6)
+
+        graph = _graph(0)
+        pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        graph.nodes.append(Node(
+            SITE_EE_REST, "object", "rest", pose_world=pose.tolist(),
+            attributes={"whitelist_key": SITE_EE_REST,
+                        "interaction_types": []},
+        ))
+        declaration = SiteDeclaration(
+            key=SITE_EE_REST, site_type="point", subject_key="ee",
+            metric="euclidean", source="origin", provider="mshab_ee_rest",
+            provenance="MS-HAB Pick capacity bound",
+        )
+        cfg["site_declarations"] = {SITE_EE_REST: declaration}
+        cfg["site_specs"] = [SiteSpec(declaration, pose, 0.05)]
+        cfg["bin_edges"].update({
+            rr.EE_SITE_PLANAR_KEY: [0.1, 0.2, 0.3, 0.4],
+            rr.EE_SITE_HEIGHT_KEY: [-0.2, -0.1, 0.1, 0.2],
+        })
+        site_edges = list(_emit(0, nodes=graph, cfg=cfg))
+        self.assertCountEqual([e.relation for e in site_edges],
+                              ["planar-distance", "height-offset", "reached"])
+        cfg["disable_object_object_relations"] = True
+        graph.edges.clear()
+        self.assertEqual(_emit(0, nodes=graph, cfg=cfg), site_edges)
+        # EE + one empty-token virtual site leave at most ten physical nodes.
+        bound = 10 * per_ee + (10 * 9 // 2) * sum(pairs.values()) + len(site_edges)
+        self.assertEqual(bound, 333)
+        self.assertLessEqual(bound, 384)
 
     def test_saturated_graph_needs_more_than_configured_e_max(self):
         """n_max=8 is one end effector plus seven objects, so a saturated

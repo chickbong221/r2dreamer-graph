@@ -255,6 +255,7 @@ def build_config(args, rep):
     # training run never sees, and one that emitted object-object spatial
     # edges would report facts the schedule cannot name.
     cfg["object_object_spatial"] = bool(args.object_object_spatial)
+    cfg["disable_object_object_relations"] = bool(args.disable_object_object_relations)
     cfg["cameras"] = list(args.cameras)
     cfg["visibility_policy"] = args.visibility_policy
     if args.n_max:
@@ -266,7 +267,8 @@ def build_config(args, rep):
     rep.note("graph settings",
              f"visibility={args.visibility_policy}, "
              f"cameras={list(args.cameras)}, "
-             f"object_object_spatial={bool(args.object_object_spatial)}")
+             f"object_object_spatial={bool(args.object_object_spatial)}, "
+             f"disable_object_object_relations={bool(args.disable_object_object_relations)}")
     rep.check("the configured assets are the ones named on the command line",
               cfg["whitelist_dir"] == args.whitelist_dir
               and cfg["affordances"]["asset_path_abs"] == str(affordance))
@@ -316,6 +318,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "default is keep, which admits more nodes.")
     p.add_argument("--object-object-spatial", action="store_true",
                    help="Off for MS-HAB Pick, matching env.graph.")
+    p.add_argument("--disable-object-object-relations",
+                   action=argparse.BooleanOptionalAction, default=True,
+                   help="Skip all object-object work, matching Pick A/B/C. "
+                        "Use --no-disable-object-object-relations to restore it.")
     p.add_argument("--out", default="", help="Write the trace as JSON.")
     p.add_argument("--occupancy-out", default="",
                    help="Full-episode records for audit_graph_capacity "
@@ -352,6 +358,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not episode or success_at is None:
         rep.render()
         return 1
+    if args.disable_object_object_relations:
+        object_edges = sum(
+            "ee" not in (edge.src, edge.dst)
+            for graph in episode for edge in graph.edges)
+        rep.check("EE-only mode emits no object-object facts", object_edges == 0,
+                  f"{object_edges} object-object edges over {len(episode)} frames")
 
     # Export before scoring, so a packing/scoring failure does not destroy the
     # evidence needed to diagnose capacity. Include frames after first success.
