@@ -14,7 +14,9 @@ test that quietly picked one would make it look decided.
 """
 
 import ast
+import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,11 +40,13 @@ TEST_METRIC = "eval/test_metric"
 
 IDENTITY = dict(
     whitelist_dir="scenegraph/configs/subtask_whitelists/tidy_house",
+    affordance_path="scenegraph/configs/affordances/tidy_house.json",
     schedule_path="scenegraph/configs/schedules/tidy_house/pick.json",
     schedule_label="tidy_house/pick", n_max=8, e_max=168, n_cams=2,
-    entity_tokens=("<pad>", "<ee>", "actor:004_sugar_box"),
-    relation_tokens=("grasp", "reached"),
-    absolute_tokens=("holds", "not-holds"),
+    entity_ids={"<pad>": 0, "<ee>": 1, "actor:004_sugar_box": 2},
+    relation_ids={"grasp": 1, "reached": 2},
+    absolute_ids={"holds": 1, "not-holds": 2},
+    temporal_ids={"stable": 1, "closer": 2},
 )
 
 
@@ -134,14 +138,22 @@ class IdentityIsAboutTheModelNotTheSceneTest(unittest.TestCase):
         identity = self._identity()
         self.assertEqual(sorted(identity),
                          ["absolute_vocab", "assets", "entity_vocab",
-                          "graph_schema", "relation_vocab", "schedule"])
+                          "graph_schema", "relation_vocab", "schedule", "temporal_vocab"])
         self.assertNotIn("", identity.values())
 
-    def test_a_moved_vocabulary_is_a_mismatch(self):
-        moved = self._identity(entity_tokens=("<pad>", "<ee>", "actor:other"))
-        problems = identity_mismatches(moved, self._identity())
-        self.assertEqual(len(problems), 1)
-        self.assertIn("entity_vocab", problems[0])
+    def test_vocabulary_ids_matter_but_dictionary_order_does_not(self):
+        for field in ("entity", "relation", "absolute", "temporal"):
+            name = f"{field}_ids"
+            original = IDENTITY[name]
+            with self.subTest(vocabulary=field):
+                reversed_items = dict(reversed(list(original.items())))
+                self.assertEqual(self._identity(**{name: reversed_items}), self._identity())
+                moved = dict(original)
+                first, second = list(moved)[:2]
+                moved[first], moved[second] = moved[second], moved[first]
+                problems = identity_mismatches(self._identity(**{name: moved}), self._identity())
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f"{field}_vocab", problems[0])
 
     def test_a_moved_capacity_is_a_mismatch(self):
         """The embeddings and the packed shapes are sized from these."""
@@ -152,8 +164,32 @@ class IdentityIsAboutTheModelNotTheSceneTest(unittest.TestCase):
         moved = self._identity(schedule_label="tidy_house/place")
         self.assertTrue(identity_mismatches(moved, self._identity()))
 
-    def test_a_missing_asset_tree_is_visible_rather_than_silent(self):
-        self.assertIn("absent", self._identity(whitelist_dir="")["assets"])
+    def test_all_resolved_assets_are_bound_but_their_location_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            whitelist = root / "whitelists"
+            whitelist.mkdir()
+            union = whitelist / "pick_all.json"
+            target = whitelist / "pick_004_sugar_box.json"
+            affordance = root / "tidy_house.json"
+            for path in (union, target, affordance):
+                path.write_text("{}", encoding="utf-8")
+            paths = dict(whitelist_dir=str(whitelist), affordance_path=str(affordance))
+            original = self._identity(**paths)
+            relocated = root / "relocated"
+            shutil.copytree(whitelist, relocated)
+            self.assertEqual(original, self._identity(**dict(paths, whitelist_dir=str(relocated))))
+            for path in (union, target, affordance):
+                with self.subTest(asset=path.name):
+                    path.write_text(json.dumps({"changed": True}), encoding="utf-8")
+                    differences = identity_mismatches(original, self._identity(**paths))
+                    self.assertEqual(len(differences), 1)
+                    self.assertIn("assets", differences[0])
+                    path.write_text("{}", encoding="utf-8")
+            with self.assertRaises(CheckpointError):
+                self._identity(**dict(paths, affordance_path=str(root / "missing.json")))
+            with self.assertRaises(CheckpointError):
+                self._identity(**dict(paths, whitelist_dir=str(root / "missing")))
 
 
 class TheMetricIsStillTheUsersToChooseTest(unittest.TestCase):

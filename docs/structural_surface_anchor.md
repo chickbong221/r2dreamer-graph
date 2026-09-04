@@ -1,71 +1,98 @@
-# Where the structural-surface plane actually sits
+# Structural-surface height: what is fixed and what is not
 
-A structural surface is measured as a plane, not as an origin. The plane is
-`(anchor, outward_normal)` in the supporter's own object frame, mined by
-`build_affordances` and read back by `surface_relative_height`.
+The stored reference plane is `(anchor, outward_normal)` in the supporter's
+object frame. Mining and runtime both use it. Agreement between those two
+paths is necessary, but does not establish that the anchor is on the physical
+surface. The requirement remains height above the physical supporting surface;
+this note does not approve a proxy or change any schedule.
 
-Two halves, and only one of them is now exact.
+## Normal-frame correction
 
-## The normal: exact, and it was the blocker
+The old MS-HAB miner wrote local `[0, 0, 1]` without checking the supporter's
+orientation. For the affected furniture, that axis rotates to a horizontal
+world direction. The height calculation then rejects it, leaving no structural
+height samples and no corresponding bin scale. An anchor's coordinates alone
+do not establish the axis convention of every furniture model.
 
-`build_affordances` used to write `surface_normal: [0, 0, 1]` — the
-supporter's local +z, on the assumption that furniture is z-up in its own
-frame. ReplicaCAD furniture is **y-up**, which the mined anchors say plainly:
-`kitchen_counter-0/body` records `[-0.137, 0.833, 0.253]`, and 0.833 m is the
-height of a counter, sitting in Y.
+The corrected miner negates the recorded force on the supporter, transforms it
+into the supporter's frame, and declares that the resulting vector points
+outward. ManiSkill declares the convention of its own evidence separately.
+This fixes the frame/sign mismatch. A force-derived direction is an estimate
+from contact evidence, not a proof of an exact geometric surface normal.
 
-Rotating a local +z into the world therefore produced a *horizontal* world
-vector. `oriented_normal` refuses a horizontal normal — correctly, since a
-vertical surface has no "above" — so `surface_height` returned `None`, every
-structural height sample was discarded, no `ee-structural-surface-height-offset`
-scale was calibrated, and `GraphBuilder` refused the asset for a bin nothing
-had written. No exception, no warning, at any point in that chain.
+## The anchor remains a supported-object-origin proxy
 
-The normal is now derived from evidence the collector already records: the
-support contact force on the supporter points *into* the surface, so its
-negation points away, and rotating that into the supporter's frame gives the
-local normal. Each miner declares which way its stored vectors face
-(`surface_normal_points`), so the shared helper no longer has to guess — and
-it never consults world up about an object-frame vector again.
+The existing `surface_anchor` averages supported-object origins in the
+supporter's frame. An actor origin is not necessarily its mass centre or its
+collision-bounds centre. It can therefore sit above the real support surface,
+by an amount depending on the object's geometry and orientation. The exact
+bias for these assets has not been measured; a universal centimetre range is
+not established.
 
-## The anchor: a proxy, self-consistent, and off by the supported object
+If the proxy plane is displaced outward by `delta`, then
+`height_proxy = height_surface - delta`. Calibrating and evaluating against
+that same proxy makes the paths consistent; it does **not** cancel the physical
+bias, especially for symmetric height bands centred at zero. A passing bin or
+potential check does not validate the anchor's physical location.
 
-`surface_anchor` is the **supported object's centre**, expressed in the
-supporter's frame, averaged over the support samples. The supported object
-rests on the surface, so its centre lies above the surface by roughly its own
-half-height — 2–7 cm for the tidy_house YCB objects.
+## Why the recorded half-extents alone are insufficient
 
-This does not create the failure the classification exists to remove. The same
-stored plane is used when the height scale is mined *and* when a height is
-labelled at runtime, so the offset cancels: the deadband still means one
-thing, and `level` still means the same height everywhere. What it means is
-that "level with the table" is centred on where a can sits, not on the bare
-tabletop.
-
-### What is missing to place it on the surface
-
-The drop from the supported object's centre to its lowest point along the
-normal is
+For an actual box with body-local centre `c`, half-extents `h`, supported-body
+rotation `R`, body origin `p`, and outward unit normal `n` in world coordinates,
+the lowest projected coordinate is
 
 ```
-drop = Σ_i | R_supported[:, i] · n_world | · h_i
+n dot (p + R c) - sum_i(abs(n dot R[:, i]) * h[i])
 ```
 
-where `h` is the supported object's collision half-extents. `h` **is**
-recorded (`extents[key]["half_extents"]`), and both poses are recorded, so
-this much is available.
+The existing evidence supplies poses and half-extents, but not a verified `c`.
+There is a second limitation in the current geometry reader:
 
-What is not recorded is the **centre of that collision AABB in the object's
-own frame**. `collision_half_extents_status` computes `lo` and `hi` over the
-collision shapes and returns only `(hi - lo) / 2`, discarding `(hi + lo) / 2`.
-Without it, `centre_world` has to be assumed equal to the body origin, which
-is true only for objects whose collision bounds are centred on their origin.
+- `_shape_half_size` reduces mesh vertices to half-extents, losing their local
+  centre before the shapes are combined.
+- `collision_half_extents_status` adds shape translation but does not rotate
+  the bounds by the shape's local quaternion.
 
-So the surface anchor can be recovered to within that offset and no closer.
-Adding it is one 3-vector per entity at collection time — a collector change
-and a re-collection, not something a re-mine can recover.
+Consequently, merely returning the final `(lo + hi) / 2` from that helper would
+not reliably recover mesh-centre offsets or rotated shapes. An AABB is also
+only a conservative approximation for a non-box at arbitrary orientation.
+Do not silently repurpose this classification helper as an exact contact-plane
+estimator.
 
-**Pending decision.** Leave the anchor as the supported-object-centre proxy
-(self-consistent, zero offset between mining and runtime, "level" centred a
-few centimetres high), or record the AABB centre and re-collect. Nothing here
-assumes an answer.
+## Investigate geometry-only recovery before recollection
+
+The inspected local ManiSkill source offers a recovery route:
+
+1. `mani_skill/utils/building/actors/ycb.py` loads a model-specific
+   `collision.ply`, with scale taken from `info_pick_v0.json`.
+2. `mani_skill/utils/scene_builder/replicacad/rearrange/scene_builder.py` builds
+   YCB instances through that builder. Its initialization configurations change
+   poses; the inspected path does not randomize each instance's mesh.
+
+This supports inspecting geometry once per model/scale and combining it with
+the existing recorded poses. It does **not** yet prove that this checkout and
+the collection server have identical assets or collision decomposition.
+
+Before changing anchor estimation, use the server's installed version to:
+
+1. Match each supported actor to its model, scale and collision asset. Record
+   file hashes and compare recovered dimensions with the saved extents. Do not
+   assume every supporting event involves one of the nine training targets.
+2. Read the actual collision geometry, including shape scale, local translation
+   and rotation. Prefer the simulator's cooked collision shapes when possible;
+   the source mesh alone may differ from its convex decomposition.
+3. Transform the vertices into the body frame. For mesh vertices `v`, the exact
+   directional minimum of that geometry is
+   `n dot p + min_v((R.T n) dot v)`. Use analytic support functions for primitives.
+4. Combine that minimum with the existing support poses and independently check
+   resting contacts against the supporter geometry, allowing for simulator
+   contact offsets and penetration. Report the proxy-to-surface displacement
+   per supporter and the spread across supported objects, not just an average.
+
+The collision asset files and simulator are not available in this local
+workspace, so the geometry recovery remains unverified. No collection,
+re-mining, or physical-anchor substitution is performed by this repair.
+If matched geometry can be recovered, an offline re-mine can use the existing
+rollouts; repeating the successful-policy collection is not inherently needed.
+If it cannot, state which geometry/provenance is missing before proposing any
+additional collection. Do not relax the physical-surface requirement by default.

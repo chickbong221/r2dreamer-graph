@@ -108,8 +108,9 @@ def score_frames(graphs, schedule, vocab, *, n_max: int, e_max: int,
     from progress import TaskScheduleReplayPotential
     from scenegraph.adapters.graph_pack import pack_graph
 
-    scorer = TaskScheduleReplayPotential(
-        schedule, len(vocab.absolute.token_to_id))
+    # Vocab.__len__ includes the reserved padding ID. Counting just the named
+    # labels underallocates by one and rejects the highest real label ID.
+    scorer = TaskScheduleReplayPotential(schedule, len(vocab.absolute))
     potentials, valids = [], []
     for graph in graphs:
         packed = pack_graph(graph, vocab, n_max=n_max, e_max=e_max,
@@ -256,6 +257,10 @@ def build_config(args, rep):
     cfg["object_object_spatial"] = bool(args.object_object_spatial)
     cfg["cameras"] = list(args.cameras)
     cfg["visibility_policy"] = args.visibility_policy
+    if args.n_max:
+        # Apply the requested budget before building, not only while packing.
+        # Otherwise a probe of a larger graph stops at the default eight rows.
+        cfg["selection"] = dict(cfg.get("selection") or {}, n_max=args.n_max)
     rep.note("affordance asset", str(affordance))
     rep.note("whitelist dir", args.whitelist_dir)
     rep.note("graph settings",
@@ -266,6 +271,16 @@ def build_config(args, rep):
               cfg["whitelist_dir"] == args.whitelist_dir
               and cfg["affordances"]["asset_path_abs"] == str(affordance))
     return cfg
+
+
+def write_occupancy(path, episode):
+    """Write the existing capacity auditor's per-frame format, not just a peak."""
+    from scenegraph.tools.audit_graph_capacity import frames_from_graphs
+
+    destination = pathlib.Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as handle:
+        json.dump(frames_from_graphs(episode), handle)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -302,7 +317,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--object-object-spatial", action="store_true",
                    help="Off for MS-HAB Pick, matching env.graph.")
     p.add_argument("--out", default="", help="Write the trace as JSON.")
+    p.add_argument("--occupancy-out", default="",
+                   help="Full-episode records for audit_graph_capacity "
+                        "--occupancy-json. With --out, defaults to "
+                        "<trace stem>.occupancy.json.")
     args = p.parse_args(argv)
+    if args.n_max < 0 or args.e_max < 0:
+        p.error("--n-max and --e-max must be non-negative")
+    if not args.occupancy_out and args.out:
+        args.occupancy_out = str(pathlib.Path(args.out).with_suffix(".occupancy.json"))
+    if (args.out and args.occupancy_out
+            and pathlib.Path(args.out).resolve() == pathlib.Path(args.occupancy_out).resolve()):
+        p.error("--out and --occupancy-out must be different files")
 
     rep = Report()
     vocab = load_vocabs(args)
@@ -327,6 +353,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         rep.render()
         return 1
 
+    # Export before scoring, so a packing/scoring failure does not destroy the
+    # evidence needed to diagnose capacity. Include frames after first success.
+    if args.occupancy_out:
+        write_occupancy(args.occupancy_out, episode)
+        rep.note("full-episode occupancy written", args.occupancy_out)
+
     # Scored to the success frame; audited over the whole episode. Retention
     # only adds nodes, so the frames after success are where occupancy peaks,
     # and stopping the audit at success would understate it.
@@ -350,10 +382,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                  occupancy, n_max, e_max, configured)
 
     if args.out:
-        with open(args.out, "w") as handle:
+        pathlib.Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as handle:
             json.dump({"potentials": potentials, "valid": valids,
                        "success_frame": success_at,
-                       "episode_frames": len(episode)}, handle)
+                       "episode_frames": len(episode),
+                       "occupancy_file": args.occupancy_out,
+                       "occupancy": occupancy}, handle)
         rep.note("trace written", args.out)
 
     failed = rep.render()
@@ -486,3 +521,7 @@ def _reshaped(value) -> bool:
     if hasattr(value, "detach"):
         value = value.detach().cpu()
     return bool(np.asarray(value).reshape(-1)[0])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

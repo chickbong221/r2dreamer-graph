@@ -6,9 +6,9 @@ them answerable by guessing:
 * **Vocabulary.** ``model.graph.entity_vocab`` sizes an embedding table, and
   the runtime refuses to start when it is smaller than the mined asset needs.
   The number comes from the asset, never from a remembered value.
-* **A static upper bound.** Every member the whitelist admits could stand in
-  the graph at once, plus the end effector, plus whichever rows the protected
-  contract reserves. That bound is safe and usually loose.
+* **A one-instance-per-key count.** This is not an upper bound: multiple
+  scene instances can share a member key. A true bound needs a
+  per-configuration inventory, not just a whitelist.
 * **What a run actually held.** Retention is unconditional -- once a camera
   has seen a whitelisted object it stays a vertex until reset -- so occupancy
   only grows within an episode, and the honest measurement is over full-length
@@ -45,7 +45,7 @@ def vocabulary_report(whitelist_dir: str) -> Dict[str, Any]:
 
     Built the way the runtime builds it: every ``.json`` in the directory
     contributes its member keys, so a per-target file for an object the policy
-    never picks still occupies a row.
+    never picks still occupies a vocabulary entry, not a graph row.
     """
     from scenegraph.adapters.graph_vocab import build_entity_vocab
 
@@ -73,9 +73,8 @@ def static_bound(union_path: str,
     member is a *key*: a scene holding two bowls packs two rows against one
     whitelist key, and ``_row_assignment`` is written for exactly that case.
 
-    So a capacity at or above this number can still overflow, and the only
-    thing that settles it is counting simultaneous instances in real frames --
-    see ``occupancy_report``'s ``peak_instances_per_key``.
+    A capacity at or above this number can still overflow. A scene inventory
+    can bound possible instances; real frames only establish an observed floor.
     """
     with open(union_path) as handle:
         payload = json.load(handle)
@@ -188,7 +187,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         default=DEFAULT_RESERVED_ROWS)
     parser.add_argument("--occupancy-json", default="",
                         help="Frames recorded by a live probe, to fold in.")
+    parser.add_argument("--n-max", type=int, default=None,
+                        help="Check the observed frames against this node capacity.")
+    parser.add_argument("--e-max", type=int, default=None,
+                        help="Check the observed frames against this edge capacity.")
     args = parser.parse_args(argv)
+    if any(v is not None and v <= 0 for v in (args.n_max, args.e_max)):
+        parser.error("capacities must be positive")
 
     if not os.path.isdir(args.whitelist_dir):
         print(f"[capacity] no such directory: {args.whitelist_dir}",
@@ -212,16 +217,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         print(f"  no union at {union}; static bound not computed")
 
+    failed = False
     if args.occupancy_json:
-        with open(args.occupancy_json) as handle:
-            frames = json.load(handle)
-        report = occupancy_report(frames)
+        try:
+            with open(args.occupancy_json, encoding="utf-8") as handle:
+                frames = json.load(handle)
+            if (not isinstance(frames, list) or not frames
+                    or any(not isinstance(f, dict)
+                           or not {"node_ids", "entity_keys", "n_edges"} <= f.keys()
+                           for f in frames)):
+                raise ValueError("expected a non-empty list of per-frame occupancy records")
+            report = occupancy_report(frames, args.n_max, args.e_max)
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[capacity] cannot audit occupancy: {exc}", file=sys.stderr)
+            return 2
         print(f"  observed peak (LOWER bound): {report['peak_nodes']} node(s), "
               f"{report['peak_edges']} edge(s) over {report['n_frames']} frame(s)")
         print(f"  most simultaneous instances of one key: "
               f"{report['peak_instances_per_key']} "
               f"({report['peak_duplicate_key'] or 'none duplicated'})")
         print(f"  distinct entity keys seen: {report['distinct_entity_keys']}")
+        if args.n_max is not None or args.e_max is not None:
+            over_n = report["frames_over_n_max"]
+            over_e = report["frames_over_e_max"]
+            failed = bool(over_n or over_e)
+            print(f"  {'FAIL' if failed else 'PASS'} on observed frames only: "
+                  f"{len(over_n)} node overflow(s), {len(over_e)} edge overflow(s)")
+            for frame in over_n[:3]:
+                print(f"    node overflow: {frame}")
+            for frame in over_e[:3]:
+                print(f"    edge overflow: {frame}")
     else:
         print("  no --occupancy-json: simultaneous instances unmeasured, so "
               "no row count here is an upper bound")
@@ -231,7 +256,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
           "count bounds nothing until live frames say how many instances "
           "coexist. The observed peak is a floor. Setting n_max and e_max is "
           "a decision against the final assets and a per-configuration audit.")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -16,6 +16,13 @@ agree with itself while disagreeing with the run. The row contract needs no
 torch; the scoring does, so it runs on the server with the rest of the stack.
 """
 
+import contextlib
+import io
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import numpy as np
@@ -131,6 +138,57 @@ class PackedRowsAreWhatTheScorerReadsTest(unittest.TestCase):
         self.assertLess(ACTIVE_TARGET_ENTITY_ID, 0)
         self.assertNotIn(ACTIVE_TARGET_ENTITY_ID,
                          set(vocab.entity.token_to_id.values()))
+
+
+class ProbeCommandTest(unittest.TestCase):
+    def test_requested_capacity_reaches_the_builder(self):
+        from types import SimpleNamespace
+        from tests.probes.probe_policy_potential import Report, build_config
+
+        args = SimpleNamespace(
+            thresholds=f"{CONFIGS}/thresholds.yaml", task="tidy_house",
+            affordance=f"{CONFIGS}/affordances/tidy_house.json",
+            whitelist_dir=WHITELIST_DIR, object_object_spatial=False,
+            cameras=["fetch_head", "fetch_hand"],
+            visibility_policy="projected_camera", n_max=32)
+        cfg = build_config(args, Report())
+        self.assertEqual(cfg["selection"]["n_max"], 32)
+        self.assertFalse(cfg["object_object_spatial"])
+
+    def test_command_entry_point_runs_argument_parsing(self):
+        # Importing main() is not enough: the server runs the file directly.
+        script = pathlib.Path(__file__).parent / "probes" / "probe_policy_potential.py"
+        result = subprocess.run([sys.executable, str(script), "--help"],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--occupancy-out", result.stdout)
+        missing = subprocess.run([sys.executable, str(script)],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(missing.returncode, 2)
+
+    def test_full_episode_occupancy_round_trips_to_existing_auditor(self):
+        from tests.probes.probe_policy_potential import write_occupancy
+        from scenegraph.tools.audit_graph_capacity import main as audit, occupancy_report
+
+        before, after = _graph(), _graph()
+        after.nodes.append(Node(
+            node_id=f"{TARGET}-second", node_type="object", name="second",
+            pose_world=_pose(), attributes={"whitelist_key": TARGET}))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "episode.occupancy.json"
+            write_occupancy(path, [before, after])
+            frames = json.loads(path.read_text(encoding="utf-8"))
+            report = occupancy_report(frames)
+            self.assertEqual(report["n_frames"], 2)
+            self.assertEqual(report["peak_nodes"], 5)
+            self.assertEqual(report["peak_instances_per_key"], 2)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(audit(["--whitelist-dir", WHITELIST_DIR,
+                                        "--occupancy-json", str(path),
+                                        "--n-max", "5", "--e-max", "7"]), 0)
+                self.assertEqual(audit(["--whitelist-dir", WHITELIST_DIR,
+                                        "--occupancy-json", str(path),
+                                        "--n-max", "4"]), 1)
 
 
 def _torch():

@@ -95,6 +95,7 @@ def checkpoint_identity(config, envs):
     from envs.maniskill import _repo_path, task_schedule_source
     from scenegraph.adapters.graph_vocab import (
         build_absolute_vocab, build_entity_vocab, build_relation_vocab,
+        build_temporal_vocab,
     )
 
     graph = config.model.graph
@@ -104,14 +105,15 @@ def checkpoint_identity(config, envs):
     return run_identity(
         whitelist_dir=whitelist_dir,
         schedule_path=source.schedule_path if source else "",
+        affordance_path=source.affordance_path if source else "",
         schedule_label=source.label if source else "",
         n_max=int(graph.n_max), e_max=int(graph.e_max),
         n_cams=len(list(config.env.cameras or [])),
-        entity_tokens=sorted(
-            build_entity_vocab(whitelist_dir).token_to_id)
-        if whitelist_dir else (),
-        relation_tokens=sorted(build_relation_vocab().token_to_id),
-        absolute_tokens=sorted(build_absolute_vocab().token_to_id),
+        entity_ids=build_entity_vocab(whitelist_dir).token_to_id
+        if whitelist_dir else {},
+        relation_ids=build_relation_vocab().token_to_id,
+        absolute_ids=build_absolute_vocab().token_to_id,
+        temporal_ids=build_temporal_vocab().token_to_id,
     )
 
 

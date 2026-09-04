@@ -67,7 +67,10 @@ class FeatureConsumptionTest(unittest.TestCase):
         # ee, target, site -- the protected rows.
         graph["graph_node_ent"][0, :3] = torch.tensor([1, 5, 7])
         graph["graph_node_target"][0, 1] = 1
-        graph["graph_node_bbox"][0, :3] = 0.25
+        # Layout is (x_min, x_max, y_min, y_max). Equal coordinates describe
+        # an invisible box, which the encoder correctly masks to zero.
+        # Give physical nodes positive-area boxes; the virtual site has none.
+        graph["graph_node_bbox"][0, :2] = torch.tensor([0.1, 0.4, 0.2, 0.6])
         graph["graph_node_centroid"][0, :3] = torch.tensor(
             [[0.1, 0.2, 0.9], [0.3, 0.1, 0.5], [0.0, 0.4, 0.7]])
         graph["graph_edge_src"][0, :2] = torch.tensor([0, 0])
@@ -109,7 +112,7 @@ class FeatureConsumptionTest(unittest.TestCase):
     def test_the_bounding_box_reaches_the_encoder(self):
         """Where a node is on each screen, and where it goes when it leaves."""
         self.assertTrue(self._moves(
-            lambda g: g["graph_node_bbox"].__setitem__((0, 1), 0.75)))
+            lambda g: g["graph_node_bbox"][0, 1].add_(0.2)))
 
     def test_the_centroid_reaches_the_encoder(self):
         """Where a node is in the world, which the box cannot say once the
@@ -131,8 +134,7 @@ class FeatureConsumptionTest(unittest.TestCase):
         for cam in range(self.N_CAMS):
             with self.subTest(camera=cam):
                 self.assertTrue(self._moves(
-                    lambda g, c=cam: g["graph_node_bbox"].__setitem__(
-                        (0, 1, c), 0.9)))
+                    lambda g, c=cam: g["graph_node_bbox"][0, 1, c].add_(0.15)))
 
     def test_each_centroid_axis_is_read_separately(self):
         for axis in range(3):

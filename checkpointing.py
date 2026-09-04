@@ -37,6 +37,7 @@ IDENTITY_FIELDS = (
     "entity_vocab",
     "relation_vocab",
     "absolute_vocab",
+    "temporal_vocab",
     "graph_schema",
     "schedule",
     "assets",
@@ -213,17 +214,62 @@ def _digest(*parts: Any) -> str:
 
 
 def _file_digest(path: Optional[str]) -> str:
-    if not path or not os.path.isfile(path):
+    if not path:
         return "absent"
+    if not os.path.isfile(path):
+        raise CheckpointError(f"checkpoint identity asset is missing: {path}")
     with open(path, "rb") as handle:
         return _digest(handle.read().decode("utf-8", "replace"))
 
 
+def _vocab_digest(token_to_id: Optional[Mapping[str, int]]) -> str:
+    """Hash the numeric encoding, independently of dictionary insertion order."""
+    import json
+    from numbers import Integral
+
+    token_to_id = {} if token_to_id is None else token_to_id
+    if not isinstance(token_to_id, Mapping):
+        raise CheckpointError("checkpoint vocabulary must be a token-to-ID mapping")
+    items = []
+    for token, index in token_to_id.items():
+        if (not isinstance(token, str) or isinstance(index, bool)
+                or not isinstance(index, Integral) or index < 0):
+            raise CheckpointError(f"invalid vocabulary entry: {token!r}: {index!r}")
+        items.append((token, int(index)))
+    if len({index for _, index in items}) != len(items):
+        raise CheckpointError("checkpoint vocabulary contains duplicate IDs")
+    return f"{len(items)}:{_digest(json.dumps(sorted(items), ensure_ascii=False))}"
+
+
+def _asset_digest(whitelist_dir: str, affordance_path: str) -> str:
+    """Bind every admitted-target asset, without binding its filesystem location."""
+    import json
+
+    whitelists = []
+    if whitelist_dir:
+        if not os.path.isdir(whitelist_dir):
+            raise CheckpointError(f"checkpoint whitelist directory is missing: {whitelist_dir}")
+        for name in sorted(os.listdir(whitelist_dir)):
+            if name.endswith(".json"):
+                whitelists.append((name, _file_digest(os.path.join(whitelist_dir, name))))
+        if not whitelists:
+            raise CheckpointError(f"checkpoint whitelist directory is empty: {whitelist_dir}")
+        if not affordance_path:
+            raise CheckpointError("a graph checkpoint needs its resolved affordance path")
+    return _digest(json.dumps({
+        "whitelists": whitelists,
+        "affordance": _file_digest(affordance_path),
+    }, sort_keys=True))
+
+
 def run_identity(*, whitelist_dir: str, schedule_path: str = "",
+                 affordance_path: str = "",
                  schedule_label: str = "", n_max: int = 0, e_max: int = 0,
-                 n_cams: int = 0, entity_tokens: Sequence[str] = (),
-                 relation_tokens: Sequence[str] = (),
-                 absolute_tokens: Sequence[str] = ()) -> Dict[str, str]:
+                 n_cams: int = 0,
+                 entity_ids: Optional[Mapping[str, int]] = None,
+                 relation_ids: Optional[Mapping[str, int]] = None,
+                 absolute_ids: Optional[Mapping[str, int]] = None,
+                 temporal_ids: Optional[Mapping[str, int]] = None) -> Dict[str, str]:
     """What a checkpoint has to agree with before its weights mean anything.
 
     Deliberately about the *model contract* and nothing else: which ids the
@@ -233,17 +279,14 @@ def run_identity(*, whitelist_dir: str, schedule_path: str = "",
     the episode count without any of these moving -- which is what lets
     Experiment C load Experiment B's checkpoint.
     """
-    union = (os.path.join(whitelist_dir, "pick_all.json")
-             if whitelist_dir else "")
     return {
-        "entity_vocab": f"{len(entity_tokens)}:{_digest(*entity_tokens)}",
-        "relation_vocab":
-            f"{len(relation_tokens)}:{_digest(*relation_tokens)}",
-        "absolute_vocab":
-            f"{len(absolute_tokens)}:{_digest(*absolute_tokens)}",
+        "entity_vocab": _vocab_digest(entity_ids),
+        "relation_vocab": _vocab_digest(relation_ids),
+        "absolute_vocab": _vocab_digest(absolute_ids),
+        "temporal_vocab": _vocab_digest(temporal_ids),
         "graph_schema": f"n{int(n_max)}e{int(e_max)}c{int(n_cams)}",
         "schedule": f"{schedule_label}:{_file_digest(schedule_path)}",
-        "assets": _file_digest(union),
+        "assets": _asset_digest(whitelist_dir, affordance_path),
     }
 
 
