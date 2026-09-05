@@ -43,6 +43,23 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(len({c.plan_index for c in lights if c.repetition == k}), 1)
         self.assertEqual(panel, evaluation.build_panel(plans(), config()))
 
+    def test_the_shipped_b_counts_compose_into_one_fifty_env_panel(self):
+        """B's two counts come from mshab_pick_b.yaml; read them, don't restate."""
+        shipped = yaml.safe_load(
+            Path("configs/env/mshab_pick_b.yaml").read_text(encoding="utf-8"))
+        scenes = int(shipped["eval_num_build_configs"])
+        panel = evaluation.build_panel(
+            plans(scenes), config(count=int(shipped["eval_episode_num"])))
+        self.assertEqual(len(panel), scenes + 30)
+        self.assertEqual(len({c.scene for c in panel if c.group == "scene"}),
+                         scenes)
+        self.assertEqual(Counter(c.condition for c in panel if c.group == "light"),
+                         {"dim": 10, "nominal": 10, "bright": 10})
+        # One episode per scene, and the training scene is among them.
+        self.assertEqual(Counter(c.scene for c in panel if c.group == "scene"),
+                         {f"s{i:02d}": 1 for i in range(scenes)})
+        self.assertIn("s00", {c.scene for c in panel if c.group == "light"})
+
     def test_a_is_fixed_and_balanced_without_lighting(self):
         source = {}
         for i in range(5):

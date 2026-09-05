@@ -156,14 +156,26 @@ class ExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config["mshab_objects"], [])
         self.assertEqual(config["train_build_config_ids"], [SCENE])
 
-    def test_b_evaluates_over_every_configuration(self):
+    def test_b_evaluates_one_environment_per_selected_scene(self):
         """One environment per scene: reconfiguration_freq is 0, so a
         sub-scene keeps its configuration and the distinct-scene count is
-        bounded by the environment count rather than the episode count."""
+        bounded by the environment count rather than the episode count.
+
+        The two counts have to match, or the scene panel cannot allocate one
+        episode per scene and refuses to build."""
         config = self._config("b")
-        self.assertEqual(config["eval_num_build_configs"], 0)
-        self.assertEqual(config["eval_episode_num"], 63)
+        self.assertEqual(config["eval_num_build_configs"], 20)
+        self.assertEqual(config["eval_episode_num"], 20)
+        self.assertEqual(config["eval_episode_num"],
+                         config["eval_num_build_configs"])
         self.assertTrue(config["eval_even_build_configs"])
+
+    def test_b_evaluates_beyond_the_scene_it_trains_in(self):
+        """A held-out split is the whole point; one scene would measure fit."""
+        config = self._config("b")
+        self.assertEqual(len(config["train_build_config_ids"]), 1)
+        self.assertGreater(config["eval_num_build_configs"],
+                           len(config["train_build_config_ids"]))
 
     def test_a_does_not_ask_for_an_even_spread(self):
         """It evaluates one scene, so divisibility would be a constraint with

@@ -8,9 +8,9 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Experiment B -- one object, one training scene, evaluated on all 63.
+# Experiment B -- one object, one training scene, evaluated on 20 scenes.
 #
-# The evaluation panel is 63 scene environments plus 30 lighting environments
+# The evaluation panel is 20 scene environments plus 30 lighting environments
 # (10 each at 0.4 / 1.0 / 2.0), so C rides along with B rather than training a
 # third model. Illumination is applied while the evaluation scene is built.
 #

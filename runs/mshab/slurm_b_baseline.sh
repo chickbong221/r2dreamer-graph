@@ -21,7 +21,7 @@
 # The lighting panel still works -- C compares the policy's RGB, which this
 # arm renders exactly as the graph arm does.
 #
-# Same evaluation panel as the graph arm: 63 scenes plus 30 lighting envs.
+# Same evaluation panel as the graph arm: 20 scenes plus 30 lighting envs.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 

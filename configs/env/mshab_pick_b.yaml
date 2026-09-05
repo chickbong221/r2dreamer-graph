@@ -1,11 +1,19 @@
-# Experiment B -- one object, every scene.
+# Experiment B -- one object, twenty scenes.
 #
-# Trains 004_sugar_box in one apartment and evaluates in all 63, so what
+# Trains 004_sugar_box in one apartment and evaluates in the first 20, so what
 # varies is the room. A clean grasp on purpose: the measurement is scene
 # variance, not grasp difficulty.
 #
+# Twenty rather than all 63 to keep the panel affordable: 20 scene
+# environments plus C's 30 lighting environments is 50 in one simulator.
+# The selection is a prefix of the sorted build-config names, so the same
+# count always names the same scenes and two runs stay comparable -- but it
+# is a prefix, not an identity, and which scenes it means would move if the
+# installed build list ever changed. The training scene sorts first, so it
+# is always inside the prefix; the panel raises at construction if it is not.
+#
 # Checkpoint selection uses eval/success_once from the configured evaluation
-# set below (all 63 scenes); no separate same-scene selector is implemented.
+# set below (those 20 scenes); no separate same-scene selector is implemented.
 defaults:
   - mshab
   - _self_
@@ -18,8 +26,8 @@ train_build_config_ids:
 
 # Primary panel: one environment per scene. Lighting rows are added separately.
 eval_build_config_ids: []
-eval_num_build_configs: 0
-eval_episode_num: 63
+eval_num_build_configs: 20
+eval_episode_num: 20
 eval_even_build_configs: true
 eval_panel: scenes
 
