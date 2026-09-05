@@ -15,6 +15,7 @@ way ``test_maniskill_env_branch`` does.
 """
 
 import ast
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,23 +204,31 @@ class ExperimentConfigTest(unittest.TestCase):
 class LauncherTest(unittest.TestCase):
     """Launchers use approved settings and still validate supplied assets."""
 
-    def _script(self, name):
-        return Path(f"runs/mshab/experiment_{name}.sh").read_text(
+    EXPERIMENTS = ("a", "b")
+    ARMS = ("beta005", "baseline")
+
+    def _script(self, experiment, arm):
+        return Path(f"runs/mshab/slurm_{experiment}_{arm}.sh").read_text(
             encoding="utf-8")
 
-    def test_they_do_not_reuse_the_old_all_object_launcher(self):
-        for name in ("a", "b"):
-            with self.subTest(experiment=name):
-                self.assertIn(f"env=mshab_pick_{name}", self._script(name))
+    def _scripts(self, arm=None):
+        arms = self.ARMS if arm is None else (arm,)
+        return [(experiment, one, self._script(experiment, one))
+                for experiment in self.EXPERIMENTS for one in arms]
 
-    def test_they_refuse_an_asset_that_does_not_validate(self):
+    def test_every_arm_names_its_own_experiment_profile(self):
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn(f"env=mshab_pick_{experiment}", script)
+
+    def test_the_graph_arm_refuses_an_asset_that_does_not_validate(self):
         """Including a key-migrated one: the launcher used to grep for that
         single field, and a run has more ways to be unrunnable than one. The
         validator checks every gate the graph builder applies at
         construction, migration among them."""
-        for name in ("a", "b"):
-            with self.subTest(experiment=name):
-                self.assertIn("validate_task_assets", self._script(name))
+        for experiment, arm, script in self._scripts("beta005"):
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("validate_task_assets", script)
 
     def test_the_validator_checks_migration_and_the_required_bins(self):
         source = Path("tests/probes/validate_task_assets.py").read_text(
@@ -228,31 +237,60 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("required_bin_keys", source)
 
     def test_approved_capacity_and_asset_sized_vocabulary(self):
-        for name in ("a", "b"):
-            with self.subTest(experiment=name):
-                script = self._script(name)
-                self.assertIn('"${ENTITY_VOCAB:-}"', script)
+        for experiment, arm, script in self._scripts("beta005"):
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("model.graph.entity_vocab=19", script)
                 self.assertIn("model.graph.n_max=8", script)
                 self.assertIn("model.graph.e_max=168", script)
-                self.assertIn('"$@"', script)
-                self.assertIn('logdir="$REPO_ROOT/logdir/', script)
+                self.assertIn("model.progress.beta=0.05", script)
         probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
         self.assertIn("--n-max 8 --e-max 168", probe)
 
+    def test_the_baseline_arm_carries_no_graph_or_progress_override(self):
+        """size50M inherits both switches off; overriding them would say the
+        control was configured rather than structurally matched."""
+        for experiment, arm, script in self._scripts("baseline"):
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("model=size50M \\", script)
+                self.assertIn("env.obs_mode=rgb", script)
+                for absent in ("model.graph.", "model.progress.",
+                               "env.graph.whitelist_dir"):
+                    self.assertNotIn(absent, script)
+
+    def test_every_arm_writes_its_own_named_run(self):
+        seen = set()
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/",
+                              script)
+                self.assertIn(f"wandb.group=mshab_tidy_house_pick_"
+                              f"{experiment.upper()}", script)
+                name = re.search(r"wandb\.name=(\S+)", script).group(1)
+                self.assertIn(arm, name)
+                seen.add(name)
+        self.assertEqual(len(seen), 4)
+
     def test_the_approved_checkpoint_metric_is_success_once(self):
-        for name in ("a", "b"):
-            with self.subTest(experiment=name):
-                script = self._script(name)
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
                 self.assertIn("checkpoint.metric=eval/success_once", script)
                 self.assertIn("checkpoint.tiebreak=''", script)
                 self.assertNotIn("CKPT_METRIC", script)
                 self.assertNotIn("CKPT_TIEBREAK", script)
 
-    def test_neither_launcher_pins_the_old_entity_vocabulary(self):
-        for name in ("a", "b"):
-            script = self._script(name)
-            with self.subTest(experiment=name):
+    def test_no_launcher_pins_the_old_entity_vocabulary(self):
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
                 self.assertNotIn("entity_vocab=14", script)
+
+    def test_transfer_is_offered_but_never_the_active_command(self):
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("finetune.enabled=false", script)
+                active = [line for line in script.splitlines()
+                          if "finetune.enabled=true" in line
+                          and not line.lstrip().startswith("#")]
+                self.assertEqual(active, [])
 
 
 class CheckpointConfigBlockTest(unittest.TestCase):

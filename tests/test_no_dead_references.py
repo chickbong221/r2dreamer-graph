@@ -44,26 +44,38 @@ def tree_of(path):
     return ast.parse(path.read_text(encoding="utf-8"))
 
 
-def load_group(group, name):
-    """Compose one config file with its `defaults: - _base_` parent merged."""
+def _merge(base, extra):
+    merged = dict(base)
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_group(group, name, seen=None):
+    """Compose one config file with its `defaults:` parents merged.
+
+    Follows every named parent in the same group, not just `_base_`: the
+    MS-HAB experiment profiles inherit from `mshab`, and C inherits from B,
+    so a key declared once upstream would otherwise read as missing here.
+    """
     path = CONFIGS / group / f"{name}.yaml"
     if not path.exists():
         return None
+    seen = set() if seen is None else seen
+    if name in seen:
+        return {}
+    seen.add(name)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    parents = data.pop("defaults", None) or []
-    for parent in parents:
-        if parent != "_base_":
+    inherited = {}
+    for parent in (data.pop("defaults", None) or []):
+        # Hydra also allows dict entries such as `- override a/b: c`.
+        if not isinstance(parent, str) or parent == "_self_":
             continue
-        base = yaml.safe_load(
-            (CONFIGS / group / "_base_.yaml").read_text(encoding="utf-8"))
-        merged = dict(base)
-        for key, value in data.items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = {**merged[key], **value}
-            else:
-                merged[key] = value
-        data = merged
-    return data
+        inherited = _merge(inherited, load_group(group, parent, seen) or {})
+    return _merge(inherited, data)
 
 
 class ImportsResolveTest(unittest.TestCase):
