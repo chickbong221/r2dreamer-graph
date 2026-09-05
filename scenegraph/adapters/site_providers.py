@@ -55,6 +55,9 @@ def _np(value) -> np.ndarray:
 
 
 def _row(value, env_idx: int) -> np.ndarray:
+    # Outside the shared frame cache, transfer only the requested tensor row.
+    if hasattr(value, "detach") and value.ndim > 1:
+        value = value[min(env_idx, value.shape[0] - 1)]
     arr = _np(value)
     if arr.ndim == 0:
         return arr.reshape(1)
@@ -62,6 +65,9 @@ def _row(value, env_idx: int) -> np.ndarray:
 
 
 def _scalar(value, env_idx: int) -> float:
+    if hasattr(value, "detach"):
+        value = value.reshape(-1)
+        value = value[min(env_idx, value.numel() - 1)]
     arr = _np(value).reshape(-1)
     return float(arr[min(env_idx, arr.size - 1)])
 
@@ -458,27 +464,29 @@ _PICK_CFG_ATTR = "pick_cfg"
 _EE_REST_THRESH_ATTR = "ee_rest_thresh"
 
 
-def _rest_offset_xyz(offset, env_idx: int) -> np.ndarray:
-    """The rest offset's translation, whichever form the env stores it in.
-
-    MS-HAB builds ``ee_rest_pos_wrt_base`` with ``Pose.create_from_pq`` and
-    composes it against the base pose, so it is a batched Pose and not the
-    XYZ array it reads as. Handing that to the numeric row reader raises a
-    bare TypeError on the first sample, which is a poor way to find out.
-
-    A plain array is still accepted: only the translation is ever used, and
-    both forms carry it.
-    """
-    raw = getattr(offset, "raw_pose", None)
-    if raw is not None:
-        return _row(raw, env_idx).reshape(-1)[:3]
-    position = getattr(offset, "p", None)
-    if position is not None:
-        # The position component on its own, never a slice of the
-        # concatenated pose: a two-component p would otherwise take the
-        # quaternion's leading 1.0 as its z and read as a valid offset.
-        return _row(position, env_idx).reshape(-1)[:3]
-    return _row(offset, env_idx).reshape(-1)[:3]
+def _ee_rest_snapshot(base):
+    """Read the three batched inputs once; the owning graph frame scopes this."""
+    agent = getattr(base, "agent", None)
+    link = getattr(agent, "base_link", None)
+    if link is None:
+        raise SiteError("the MS-HAB rest site needs agent.base_link")
+    offset = getattr(base, _EE_REST_OFFSET_ATTR, None)
+    if offset is None:
+        raise SiteError(f"the environment exposes no {_EE_REST_OFFSET_ATTR!r}")
+    cfg = getattr(base, _PICK_CFG_ATTR, None)
+    tolerance = getattr(cfg, _EE_REST_THRESH_ATTR, None)
+    if tolerance is None:
+        raise SiteError(f"the environment exposes no pick_cfg.{_EE_REST_THRESH_ATTR}")
+    pose = link.pose
+    raw = getattr(pose, "raw_pose", None)
+    if raw is None:
+        raw = np.concatenate([_np(pose.p), _np(pose.q)], axis=-1)
+    else:
+        raw = _np(raw)
+    local = getattr(offset, "p", None)
+    if local is None:
+        local = getattr(offset, "raw_pose", offset)
+    return raw, _np(local)[..., :3], _np(tolerance)
 
 
 def ee_rest_geometry(env, env_idx: int) -> Tuple[np.ndarray, float]:
@@ -496,40 +504,20 @@ def ee_rest_geometry(env, env_idx: int) -> Tuple[np.ndarray, float]:
     The tolerance is read from the task config rather than written here: 0.05
     is its current value, not its definition.
     """
-    base = _unwrap(env)
-    agent = getattr(base, "agent", None)
-    # ``base_link`` by name, not ``get_links()[0]`` by position: the ordering
-    # is an implementation detail of the articulation loader.
-    base_link = getattr(agent, "base_link", None)
-    if base_link is None:
-        raise SiteError(
-            "the MS-HAB end-effector rest position needs agent.base_link; "
-            f"this environment exposes agent={type(agent).__name__ if agent else None!r}"
-        )
-    offset = getattr(base, _EE_REST_OFFSET_ATTR, None)
-    if offset is None:
-        raise SiteError(
-            f"the environment exposes no {_EE_REST_OFFSET_ATTR!r}, which is "
-            "where the rest position is defined relative to the robot base"
-        )
-    cfg = getattr(base, _PICK_CFG_ATTR, None)
-    tolerance = getattr(cfg, _EE_REST_THRESH_ATTR, None) if cfg else None
-    if tolerance is None:
-        raise SiteError(
-            f"the environment exposes no {_PICK_CFG_ATTR}."
-            f"{_EE_REST_THRESH_ATTR}, which is the distance its own success "
-            "predicate calls 'at rest'"
-        )
+    from .privileged_state import frame_cached
 
-    pose = _pose7(base_link.pose, env_idx)
-    local = _rest_offset_xyz(offset, env_idx)
+    base = _unwrap(env)
+    poses, offsets, tolerances = frame_cached(
+        "ee_rest", id(base), lambda: _ee_rest_snapshot(base))
+    pose = _row(poses, env_idx).reshape(-1)[:7]
+    local = _row(offsets, env_idx).reshape(-1)[:3]
     if local.size < 3:
         raise SiteError(
             f"{_EE_REST_OFFSET_ATTR} has {local.size} component(s) for "
             f"sub-scene {env_idx}, not 3"
         )
     world = pose[:3] + _rot(pose) @ local
-    tolerance = _scalar(tolerance, env_idx)
+    tolerance = _scalar(tolerances, env_idx)
     if not np.all(np.isfinite(world)) or not np.isfinite(tolerance):
         raise SiteError(
             "the MS-HAB rest position is not finite: "

@@ -288,6 +288,11 @@ class ManiSkillVecEnv:
         from scenegraph.adapters.graph_obs import build_graph_obs
 
         self._eval = bool(eval)
+        self.eval_cases = []
+        self.training_scenes = list(getattr(config, "train_build_config_ids", []) or [])
+        self._eval_seed = int(getattr(config, "eval_seed", config.seed))
+        self._lighting_controller = None
+        self.eval_reset_metrics = {}
         # The eval loop runs exactly one episode per env, so the env count is
         # the episode count.
         self._num_envs = int(
@@ -379,11 +384,12 @@ class ManiSkillVecEnv:
                     plan_data = plan_data or data
                     by_object[obj] = data.plans
                 plan_path = plan_dir
-                raw_plans = balance_objects(by_object, label=label)
+                raw_plans = [plan for plans in by_object.values() for plan in plans]
             else:
                 plan_path = plan_dir / f"{config.mshab_obj}.json"
                 plan_data = plan_data_from_file(plan_path)
                 raw_plans = plan_data.plans
+                by_object = {str(config.mshab_obj): raw_plans}
 
             # A named scene beats a count. See ``select_named_build_configs``.
             named = [str(n) for n in (
@@ -409,6 +415,29 @@ class ManiSkillVecEnv:
             if not task_plans:
                 raise ValueError(
                     f"MS-HAB task selection produced no plans: {plan_path}")
+            # Filter BEFORE balancing. A global balance can become skewed
+            # when a named scene is selected afterwards.
+            selected_ids = {id(plan) for plan in task_plans}
+            selected = {
+                obj: [p for p in plans if id(p) in selected_ids]
+                for obj, plans in by_object.items()
+            }
+            if any(not plans for plans in selected.values()):
+                raise ValueError("a requested object has no plans in the selected scenes")
+            if not self._eval and objects:
+                task_plans = balance_objects(selected, label=label)
+            else:
+                task_plans = [p for plans in selected.values() for p in plans]
+            if self._eval and getattr(config, "eval_panel", ""):
+                from envs.evaluation import build_panel, LightingController
+                self.eval_cases = build_panel(selected, config)
+                self._num_envs = len(self.eval_cases)
+                make_kwargs["num_envs"] = self._num_envs
+                self._lighting_controller = LightingController()
+                if any(c.group == "light" for c in self.eval_cases) and str(config.shader_dir) != "minimal":
+                    raise ValueError("lighting evaluation currently requires shader_dir=minimal")
+                print(f"[eval] fixed panel: {config.eval_episode_num} primary + "
+                      f"{self._num_envs - int(config.eval_episode_num)} lighting environments", flush=True)
             make_kwargs.update(
                 task_plans=task_plans,
                 scene_builder_cls=plan_data.dataset,
@@ -426,6 +455,7 @@ class ManiSkillVecEnv:
                 # configurations is one each.
                 require_build_configs_repeated_equally_across_envs=bool(
                     self._eval
+                    and not self.eval_cases
                     and getattr(config, "eval_even_build_configs", False)),
             )
 
@@ -502,7 +532,7 @@ class ManiSkillVecEnv:
             else None
         )
 
-        obs, _ = self._env.reset(seed=self._seed)
+        obs, _ = self._reset_simulator(initial=True)
         obs = self._obs_to_dict(obs)
         self._graph_obs = self._graph.reset() if self._graph is not None else {}
         self._graph_panel_env: Optional[int] = None
@@ -518,6 +548,48 @@ class ManiSkillVecEnv:
     @property
     def env_num(self):
         return self._num_envs
+
+    def _reset_simulator(self, initial=False):
+        """Pin actual build, task and spawn indices on every evaluation reset."""
+        if not self.eval_cases:
+            if initial:
+                return self._env.reset(seed=self._seed)
+            return self._env.reset(options={
+                "env_idx": torch.arange(self._num_envs, device=self._device)})
+        base = self._env.unwrapped
+        names = base.scene_builder.build_config_names_to_idxs
+        bcis = [int(names[c.scene]) for c in self.eval_cases]
+        spawns = []
+        for case, bci in zip(self.eval_cases, bcis):
+            plan = base.build_config_idx_to_task_plans[bci][case.plan_index]
+            subtask = plan.subtasks[0]
+            data = base.spawn_data[subtask.composite_subtask_uids[0]]
+            count = len(next(iter(data.values())))
+            if count <= 0:
+                raise ValueError("evaluation task has no premade spawns")
+            spawns.append(case.repetition % count)
+        options = {
+            "task_plan_idxs": torch.tensor([c.plan_index for c in self.eval_cases], device=self._device),
+            "spawn_selection_idxs": spawns,
+        }
+        if initial:
+            options.update(reconfigure=True, build_config_idxs=bcis)
+        elif list(base.build_config_idxs) != bcis:
+            raise RuntimeError("fixed evaluation scene assignment drifted")
+        # Apply illumination before reset renders the observation. Reconfigure
+        # rebuilds lights; apply afterwards and refresh sensors in that case.
+        if not initial:
+            self._lighting_controller.apply(base.scene, self.eval_cases)
+        obs, info = self._env.reset(seed=self._eval_seed, options=options)
+        if initial and any(c.group == "light" for c in self.eval_cases):
+            self._lighting_controller.apply(base.scene, self.eval_cases)
+            # A second reset refreshes the wrapper's raw segmentation cache,
+            # with identical plans/spawns and without another reconfiguration.
+            return self._reset_simulator(initial=False)
+        from envs.evaluation import check_lighting_reset, lighting_pixel_metrics
+        self.eval_reset_metrics = check_lighting_reset(base, self.eval_cases)
+        self.eval_reset_metrics.update(lighting_pixel_metrics(obs, self.eval_cases))
+        return obs, info
 
     @property
     def observation_space(self):
@@ -677,8 +749,7 @@ class ManiSkillVecEnv:
                     "MS-HAB vector resets became asynchronous. This compact "
                     "adapter assumes ignore_terminations=True and one shared horizon."
                 )
-            indices = torch.arange(self._num_envs, device=self._device)
-            obs, _ = self._env.reset(options={"env_idx": indices})
+            obs, _ = self._reset_simulator()
             obs = self._obs_to_dict(obs)
             self._graph_obs = (
                 self._graph.step(is_first=reset_np) if self._graph is not None else {}

@@ -180,11 +180,15 @@ class ExperimentConfigTest(unittest.TestCase):
             with self.subTest(experiment=name):
                 self.assertTrue(self._config(name)["graph"]["disable_object_object_relations"])
 
-    def test_c_declaration_leaves_lighting_unset(self):
+    def test_c_is_b_evaluation_with_approved_lighting(self):
         config = self._config("c")
-        text = Path("configs/env/mshab_pick_c.yaml").read_text(encoding="utf-8")
-        self.assertIn("PENDING", text)
+        self.assertEqual(config["defaults"][0], "mshab_pick_b")
         self.assertEqual(config["train_build_config_ids"], [SCENE])
+        base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
+        self.assertEqual(base["eval_lighting"]["envs_per_condition"], 10)
+        self.assertEqual(base["eval_lighting"]["conditions"],
+                         {"dim": 0.4, "nominal": 1.0, "bright": 2.0})
+        self.assertTrue(self._config("b")["eval_lighting"]["enabled"])
 
     def test_the_base_config_changes_nothing_by_default(self):
         """An ordinary MS-HAB run must behave as it did."""

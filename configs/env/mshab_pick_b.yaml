@@ -16,14 +16,16 @@ mshab_objects: []
 train_build_config_ids:
   - v3_sc0_staging_00.scene_instance.json
 
-# Every configuration, one evaluation environment each. reconfiguration_freq
-# is 0, so a sub-scene keeps its configuration for the whole run and the
-# number of distinct scenes is bounded by the environment count -- which is
-# eval_episode_num. 63 envs with the even-spread flag is one scene each.
+# Primary panel: one environment per scene. Lighting rows are added separately.
 eval_build_config_ids: []
 eval_num_build_configs: 0
 eval_episode_num: 63
 eval_even_build_configs: true
+eval_panel: scenes
+
+# One parallel B+C panel: nominal scenes and 10 matched cases per light setting.
+eval_lighting:
+  enabled: true
 
 progress_mode: task_schedule
 

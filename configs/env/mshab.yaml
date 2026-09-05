@@ -28,6 +28,15 @@ eval_build_config_ids: []
 # sub-scenes. Required to cover all 63 in one pass; it makes MS-HAB check
 # divisibility, so eval_episode_num must be a multiple of the scene count.
 eval_even_build_configs: false
+eval_panel: ''
+eval_seed: 42
+eval_lighting:
+  enabled: false
+  envs_per_condition: 10
+  conditions:
+    dim: 0.4
+    nominal: 1.0
+    bright: 2.0
 
 split: train
 eval_split: train

@@ -204,6 +204,7 @@ def wandb_scalars(scalars):
         for name, value in scalars
         if name.startswith("episode/")
         or name.startswith("eval/")
+        or name.startswith(("eval_object/", "eval_scene/", "eval_light/", "finetune/"))
         or name.startswith("train/loss/")
         or name.startswith("train/opt/")
         or name.startswith("system/process_")
@@ -286,6 +287,9 @@ class FPS:
     def step(self, amount=1):
         self._count += int(amount)
 
+    def exclude(self, seconds):
+        self._last_time += float(seconds)
+
     def result(self):
         now = self._clock()
         duration = now - self._last_time
@@ -293,6 +297,52 @@ class FPS:
         self._last_time = now
         self._count = 0
         return value
+
+
+def isolated_evaluation(fn):
+    """Evaluation must not consume training's Python, NumPy or torch RNG."""
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapped(self, agent, *args, **kwargs):
+        py_state, np_state = random.getstate(), np.random.get_state()
+        device = torch.device(agent.device)
+        devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+        try:
+            with torch.random.fork_rng(devices=devices):
+                seed = getattr(self.eval_envs, "_eval_seed", None)
+                if seed is not None:
+                    random.seed(int(seed))
+                    np.random.seed(int(seed) % 2**32)
+                    torch.random.default_generator.manual_seed(int(seed))
+                    if devices:
+                        with torch.cuda.device(devices[0]):
+                            torch.cuda.manual_seed(int(seed))
+                return fn(self, agent, *args, **kwargs)
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
+    return wrapped
+
+
+class StageLogger:
+    """Reuse one W&B run, but give transfer its own names and step axis."""
+
+    def __init__(self, parent, prefix, base_step):
+        self.parent, self.prefix, self.base_step = parent, prefix, int(base_step)
+
+    def scalar(self, name, value):
+        self.parent.scalar(f"{self.prefix}/{name}", value)
+
+    def video(self, name, value, fps=16):
+        self.parent.video(f"{self.prefix}/{name}", value, fps)
+
+    def histogram(self, name, value):
+        self.parent.histogram(f"{self.prefix}/{name}", value)
+
+    def write(self, step):
+        self.parent.scalar(f"{self.prefix}/step", step)
+        self.parent.write(self.base_step + int(step))
 
 
 class Logger:
@@ -320,6 +370,8 @@ class Logger:
             self._wandb = wandb
             self._wandb_run.define_metric("env_step")
             self._wandb_run.define_metric("*", step_metric="env_step")
+            self._wandb_run.define_metric("finetune/step")
+            self._wandb_run.define_metric("finetune/*", step_metric="finetune/step")
         self._scalars = {}
         self._images = {}
         self._videos = {}

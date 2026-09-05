@@ -1,3 +1,5 @@
+import time
+
 import torch
 
 import tools
@@ -170,6 +172,7 @@ class OnlineTrainer:
         self._should_video = tools.Every(config.video_every)
         self._action_repeat = config.action_repeat
 
+    @tools.isolated_evaluation
     def eval(self, agent, train_step):
         """Run evaluation episodes.
 
@@ -179,6 +182,12 @@ class OnlineTrainer:
         ``.to()`` is a no-op when source and target devices match.
         """
         print("Evaluating the policy...")
+        started = time.perf_counter()
+        if not hasattr(self, "_success_milestones"):
+            from envs.evaluation import SuccessMilestones
+            self._success_milestones = SuccessMilestones()
+        if torch.device(agent.device).type == "cuda":
+            torch.cuda.reset_peak_memory_stats(agent.device)
         envs = self.eval_envs
         agent.eval()
         # (B,)
@@ -237,10 +246,9 @@ class OnlineTrainer:
             # Store transition.
             # We keep the observation and the action that produced it together.
             trans["action"] = act
-            if len(cache) < self.batch_length:
-                # Each step returns fresh tensors. A shallow container copy is
-                # sufficient and supports uint16 graph entity IDs on CUDA.
-                cache.append(trans.copy())
+            if self.video_pred_log and len(cache) < self.batch_length:
+                # Clone one episode so a view cannot retain the full eval batch.
+                cache.append(trans[:1].clone())
             # (B, A)
             act, agent_state = agent.act(trans, agent_state, eval=True)
             returns += trans["reward"][:, 0] * ~once_done
@@ -272,8 +280,8 @@ class OnlineTrainer:
             metrics[key] = float(value)
             self.logger.scalar(key, value)
 
-        record("eval/score", returns.mean())
-        record("eval/length", steps.to(torch.float32).mean())
+        per_env = {"score": tools.to_np(returns),
+                   "length": tools.to_np(steps.to(torch.float32))}
         # Mirrors the training reduction in ``train()``: the target-missing
         # flag becomes the fraction of frames it was set, every other gauge
         # takes the episode max, so a "once" flag reads 1.0 if it ever fired.
@@ -281,7 +289,28 @@ class OnlineTrainer:
         for key, value in log_maxima.items():
             if key == "log_graph_target_missing":
                 value = log_sums[key] / length
-            record(f"eval/{key[4:]}", value.mean())
+            per_env[key[4:]] = tools.to_np(value)
+        cases = getattr(envs, "eval_cases", [])
+        if cases:
+            from envs.evaluation import panel_metrics
+            grouped = panel_metrics(cases, per_env, envs.training_scenes)
+        else:
+            grouped = {f"eval/{key}": float(value.mean()) for key, value in per_env.items()}
+        for key, value in grouped.items():
+            record(key, value)
+        for key, value in getattr(envs, "eval_reset_metrics", {}).items():
+            record(key, value)
+        for key, value in self._success_milestones.update(grouped, train_step).items():
+            record(key, value)
+        if torch.device(agent.device).type == "cuda":
+            torch.cuda.synchronize(agent.device)
+            record("eval/gpu_peak_allocated_gib", torch.cuda.max_memory_allocated(agent.device) / 2**30)
+            free, total = torch.cuda.mem_get_info(agent.device)
+            record("eval/gpu_free_gib", free / 2**30)
+            record("eval/gpu_total_gib", total / 2**30)
+        duration = time.perf_counter() - started
+        record("eval/duration_seconds", duration)
+        record("eval/environment_steps_per_second", float(steps.sum()) / max(duration, 1e-9))
         if video_frames:
             video = torch.stack(video_frames, dim=0)
             self.logger.video(
@@ -300,6 +329,7 @@ class OnlineTrainer:
             )
         self.logger.write(train_step)
         agent.train()
+        self._last_eval_step = int(train_step)
         return metrics
 
     def _maybe_checkpoint(self, agent, step, metrics) -> None:
@@ -366,8 +396,12 @@ class OnlineTrainer:
         while step < self.steps:
             # Evaluation
             if self._should_eval(step) and self.eval_episode_num > 0 and self.eval_envs is not None:
+                eval_started = time.perf_counter()
                 eval_metrics = self.eval(agent, step)
                 self._maybe_checkpoint(agent, step, eval_metrics)
+                eval_duration = time.perf_counter() - eval_started
+                policy_fps.exclude(eval_duration)
+                train_fps.exclude(eval_duration)
             # Save metrics
             if done.any():
                 finished = done & lengths.gt(0)
@@ -481,3 +515,9 @@ class OnlineTrainer:
             graph_builder.record_graph_env_indices = set()
             graph_builder.last_graph_by_env.clear()
             graph_builder.last_masks_by_env.clear()
+        # Normal completion gets a final evaluation, not an unconditional save.
+        if (getattr(self.eval_envs, "eval_cases", None)
+                and self.eval_episode_num > 0
+                and getattr(self, "_last_eval_step", None) != step):
+            self._maybe_checkpoint(agent, step, self.eval(agent, step))
+        return int(step)

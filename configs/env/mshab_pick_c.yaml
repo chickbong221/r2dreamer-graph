@@ -1,28 +1,11 @@
-# Experiment C -- lighting, evaluation only.
-#
-# Reuses Experiment B's checkpoint. No third model is trained.
-#
-# PENDING: the lighting conditions are NOT set here. Which presets to compare
-# is an unmade decision, and shader_dir is a renderer choice rather than a
-# lighting control -- changing it alters more than illumination.
-#
-# The prediction that makes this an ablation rather than a vague robustness
-# check: the graph is built from segmentation and privileged poses, so its
-# facts should be bit-identical across conditions while the pixel encoder
-# degrades. Log that identity as evidence.
+# C is part of B's regular evaluation, not a third independently trained model.
+# This alias runs B+C; disable lighting with env.eval_lighting.enabled=false.
 defaults:
-  - mshab
+  - mshab_pick_b
   - _self_
 
-mshab_task: tidy_house
-mshab_obj: 004_sugar_box
 train_build_config_ids:
   - v3_sc0_staging_00.scene_instance.json
-eval_build_config_ids:
-  - v3_sc0_staging_00.scene_instance.json
-eval_episode_num: 25
-
-progress_mode: task_schedule
 
 graph:
   # Must match the graph mode used by Experiment B's checkpoint.

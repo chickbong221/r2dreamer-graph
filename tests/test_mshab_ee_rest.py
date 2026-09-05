@@ -166,6 +166,29 @@ class VectorEnvTest(unittest.TestCase):
                 self.assertAlmostEqual(ee_rest_geometry(self._env(), idx)[1],
                                        expected)
 
+    def test_rest_inputs_are_read_once_per_frame_and_refresh_next_frame(self):
+        from unittest.mock import patch
+        from scenegraph.adapters import site_providers
+        from scenegraph.adapters.privileged_state import begin_frame_cache, end_frame_cache
+        env = self._env()
+        original = site_providers._ee_rest_snapshot
+        with patch.object(site_providers, "_ee_rest_snapshot", wraps=original) as read:
+            try:
+                begin_frame_cache()
+                before = [ee_rest_geometry(env, i)[0] for i in range(3)]
+                self.assertEqual(read.call_count, 1)
+                end_frame_cache()
+                env.agent.base_link.pose.p += 5
+                begin_frame_cache()
+                after = [ee_rest_geometry(env, i)[0] for i in range(3)]
+                self.assertEqual(read.call_count, 2)
+                np.testing.assert_allclose(np.asarray(after), np.asarray(before) + 5)
+            finally:
+                end_frame_cache()
+            ee_rest_geometry(env, 0)
+            ee_rest_geometry(env, 0)
+            self.assertEqual(read.call_count, 4)  # standalone callers never cache
+
 
 class MissingFieldTest(unittest.TestCase):
     """Raise, never substitute. A default rest position would be a plausible

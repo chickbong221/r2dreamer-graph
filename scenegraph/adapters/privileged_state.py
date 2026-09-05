@@ -298,6 +298,19 @@ def end_frame_cache() -> None:
     _FRAME_CACHE = None
 
 
+def frame_cached(namespace: str, key: Any, read):
+    """Read once during the current vector graph step, never across steps.
+
+    Standalone collectors/providers have no active frame and always read live.
+    """
+    if _FRAME_CACHE is None:
+        return read()
+    values = _FRAME_CACHE.setdefault(namespace, {})
+    if key not in values:
+        values[key] = read()
+    return values[key]
+
+
 def _cache_dicts(env_or_scene) -> List[dict]:
     """The ``__dict__``s carrying the scene-attached caches."""
     candidates = []

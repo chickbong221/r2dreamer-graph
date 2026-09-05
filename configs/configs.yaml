@@ -69,3 +69,14 @@ checkpoint:
   tiebreak: ''
   mode: max
   path: checkpoint_best.pt
+
+# Optional transfer after successful main training, for either model branch.
+# Best eligible main weights, fresh replay/optimizers; no extra checkpoint.
+finetune:
+  enabled: false
+  only: false
+  objects: [008_pudding_box]
+  steps: 3000000
+  eval_episode_num: 10
+  initialization: pretrained
+  checkpoint_path: ''
