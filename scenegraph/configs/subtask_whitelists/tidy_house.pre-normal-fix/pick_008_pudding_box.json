@@ -68,18 +68,6 @@
       0.20968173577646407,
       0.2795756477019521
     ],
-    "ee-structural-surface-height-offset": [
-      -0.3069345085535451,
-      -0.1023115028511817,
-      0.1023115028511817,
-      0.3069345085535451
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.06213971460992296,
-      -0.008630515918044855,
-      0.008630515918044855,
-      0.06213971460992296
-    ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
@@ -119,10 +107,10 @@
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.004695096995270159,
-      -0.0006520968048986331,
-      0.0006520968048986331,
-      0.004695096995270159
+      -1.2718719980049366e-05,
+      -1.7664888861179674e-06,
+      1.7664888861179674e-06,
+      1.2718719980049366e-05
     ]
   },
   "bin_stats_observed": {
@@ -136,8 +124,6 @@
     "ee_object_planar_distance_change": 0.3661224248295159,
     "ee_site_height_offset": 0.6167260811475561,
     "ee_site_planar_distance": 0.4904397400058276,
-    "ee_structural_surface_height_offset": 0.6226570123432268,
-    "ee_structural_surface_height_offset_change": 0.30741325093249156,
     "grasp_compatibility": 0.8402305176105141,
     "grasp_compatibility_change": 0.6091162322023045,
     "object_object_height_offset": 0.9413405883454942,
@@ -145,7 +131,7 @@
     "object_object_planar_distance": 1.7777317333637883,
     "object_object_planar_distance_change": 1.0651726974111344,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.3508256998691823
+    "support_compatibility_change": 0.3417266262679468
   },
   "bin_stats_robust": {
     "contact_compatibility": 1.0,
@@ -158,16 +144,14 @@
     "ee_object_planar_distance_change": 0.04891011813115048,
     "ee_site_height_offset": 0.5076432994078214,
     "ee_site_planar_distance": 0.34946955962744014,
-    "ee_structural_surface_height_offset": 0.5115575142559085,
-    "ee_structural_surface_height_offset_change": 0.10356619101653827,
     "grasp_compatibility": 0.617627846021022,
     "grasp_compatibility_change": 0.016823735877620295,
     "object_object_height_offset": 0.8156055339884778,
     "object_object_height_offset_change": 0.004198622757604093,
     "object_object_planar_distance": 0.8691733282305606,
     "object_object_planar_distance_change": 0.017145599389162457,
-    "support_compatibility": 0.8335504348089322,
-    "support_compatibility_change": 0.007825161658783598
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 2.1197866633415608e-05
   },
   "members": {
     "actor:008_pudding_box": {

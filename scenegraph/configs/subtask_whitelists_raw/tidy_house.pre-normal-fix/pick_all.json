@@ -92,18 +92,6 @@
       0.26438644065635014,
       0.35251525420846685
     ],
-    "ee-structural-surface-height-offset": [
-      -0.4104503924589634,
-      -0.13681679748632117,
-      0.13681679748632117,
-      0.4104503924589634
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.11633198365427928,
-      -0.016157219951983232,
-      0.016157219951983232,
-      0.11633198365427928
-    ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
@@ -143,10 +131,10 @@
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.03005287131597432,
-      -0.004174009904996434,
-      0.004174009904996434,
-      0.03005287131597432
+      -0.004100080861701663,
+      -0.0005694556752363422,
+      0.0005694556752363422,
+      0.004100080861701663
     ]
   },
   "bin_stats_robust": {
@@ -162,16 +150,14 @@
     "ee_receptacle_height_offset_change": 0.08266596794128417,
     "ee_site_height_offset": 0.710446639893788,
     "ee_site_planar_distance": 0.44064406776058357,
-    "ee_structural_surface_height_offset": 0.6840839874316058,
-    "ee_structural_surface_height_offset_change": 0.1938866394237988,
     "grasp_compatibility": 0.8419145669874327,
     "grasp_compatibility_change": 0.08782650377142785,
     "object_object_height_offset": 0.9413217291106082,
     "object_object_height_offset_change": 0.097769456262441,
     "object_object_planar_distance": 1.693524215616568,
     "object_object_planar_distance_change": 0.09208396976613692,
-    "support_compatibility": 0.9959981934687342,
-    "support_compatibility_change": 0.050088118859957204
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.006833468102836106
   },
   "members": {
     "actor:002_master_chef_can": {

@@ -170,10 +170,10 @@
       0.016228843500585798
     ],
     "support-compatibility-change": [
-      -0.03005287131597432,
-      -0.004174009904996434,
-      0.004174009904996434,
-      0.03005287131597432
+      -0.004100080861701663,
+      -0.0005694556752363422,
+      0.0005694556752363422,
+      0.004100080861701663
     ],
     "ee-object-planar-distance": [
       0.24268414793143456,
@@ -222,18 +222,6 @@
       -0.0017084316458168874,
       0.0017084316458168874,
       0.01230070784988159
-    ],
-    "ee-structural-surface-height-offset": [
-      -0.24369052935340232,
-      -0.0812301764511341,
-      0.0812301764511341,
-      0.24369052935340232
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.05846001929999754,
-      -0.00811944712499966,
-      0.00811944712499966,
-      0.05846001929999754
     ],
     "ee-manipuland-height-offset": [
       -0.23389786317944522,
@@ -285,16 +273,14 @@
     "ee_receptacle_height_offset_change": 0.08266596794128417,
     "ee_site_height_offset": 0.49531564554767105,
     "ee_site_planar_distance": 0.44064406776058357,
-    "ee_structural_surface_height_offset": 0.40615088225567053,
-    "ee_structural_surface_height_offset_change": 0.09743336549999591,
     "grasp_compatibility": 0.8419145669874327,
     "grasp_compatibility_change": 0.022792321089908755,
     "object_object_height_offset": 0.9253872931003571,
     "object_object_height_offset_change": 0.02050117974980265,
     "object_object_planar_distance": 0.9607605151091041,
     "object_object_planar_distance_change": 0.040423625385494266,
-    "support_compatibility": 0.8115673754394448,
-    "support_compatibility_change": 0.050088118859957204
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.006833468102836106
   },
   "bin_stats_observed": {
     "contact_compatibility": 1.0,
@@ -309,16 +295,14 @@
     "ee_receptacle_height_offset_change": 0.3611111640930176,
     "ee_site_height_offset": 1.1762773475599164,
     "ee_site_planar_distance": 0.6591147184459631,
-    "ee_structural_surface_height_offset": 0.8714760709111808,
-    "ee_structural_surface_height_offset_change": 0.3610208405281985,
     "grasp_compatibility": 1.0,
     "grasp_compatibility_change": 0.7512078817324193,
     "object_object_height_offset": 1.2742755199744367,
     "object_object_height_offset_change": 0.9434942783356777,
     "object_object_planar_distance": 1.50641317411088,
     "object_object_planar_distance_change": 0.7320945104574316,
-    "support_compatibility": 0.9306137779354695,
-    "support_compatibility_change": 0.4542106363715352
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.5894312809271731
   },
   "_n_successful_rollouts": 30
 }

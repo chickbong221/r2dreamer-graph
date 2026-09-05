@@ -68,18 +68,6 @@
       0.2158886671776472,
       0.287851556236863
     ],
-    "ee-structural-surface-height-offset": [
-      -0.3068998961096243,
-      -0.10229996536987478,
-      0.10229996536987478,
-      0.3068998961096243
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.09634790445213058,
-      -0.013381653396129248,
-      0.013381653396129248,
-      0.09634790445213058
-    ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
@@ -119,10 +107,10 @@
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.014555857625779583,
-      -0.0020216468924693864,
-      0.0020216468924693864,
-      0.014555857625779583
+      -1.5323599042993404e-08,
+      -2.128277644860195e-09,
+      2.128277644860195e-09,
+      1.5323599042993404e-08
     ]
   },
   "bin_stats_observed": {
@@ -136,8 +124,6 @@
     "ee_object_planar_distance_change": 0.3849955758096042,
     "ee_site_height_offset": 0.7665282561214894,
     "ee_site_planar_distance": 0.5079275381679509,
-    "ee_structural_surface_height_offset": 0.8256495254601115,
-    "ee_structural_surface_height_offset_change": 0.3148186488111448,
     "grasp_compatibility": 0.8442080642188282,
     "grasp_compatibility_change": 0.6462642939765146,
     "object_object_height_offset": 1.1451187698523442,
@@ -145,7 +131,7 @@
     "object_object_planar_distance": 1.6269310102980996,
     "object_object_planar_distance_change": 0.7273264050873954,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.48479579273106105
+    "support_compatibility_change": 0.33333333333333337
   },
   "bin_stats_robust": {
     "contact_compatibility": 0.7375182251633222,
@@ -158,16 +144,14 @@
     "ee_object_planar_distance_change": 0.08581124403170548,
     "ee_site_height_offset": 0.5009121048316842,
     "ee_site_planar_distance": 0.3598144452960787,
-    "ee_structural_surface_height_offset": 0.5114998268493739,
-    "ee_structural_surface_height_offset_change": 0.16057984075355097,
     "grasp_compatibility": 0.641150146951919,
     "grasp_compatibility_change": 0.04888100403195304,
     "object_object_height_offset": 0.8916003297579622,
     "object_object_height_offset_change": 0.053168042429602234,
     "object_object_planar_distance": 1.0656446735171534,
     "object_object_planar_distance_change": 0.04378861650860834,
-    "support_compatibility": 0.8424178518478673,
-    "support_compatibility_change": 0.024259762709632638
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 2.553933173832234e-08
   },
   "members": {
     "actor:005_tomato_soup_can": {

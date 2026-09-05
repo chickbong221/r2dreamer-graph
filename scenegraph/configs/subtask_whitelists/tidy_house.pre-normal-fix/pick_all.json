@@ -12,11 +12,6 @@
   ],
   "_n_successful_rollouts": 270,
   "_schema_version": 5,
-  "_unresolved_members": {
-    "actor:frl_apartment_sofa": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it",
-    "actor:scene_background": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it",
-    "link:fridge-0/top_door": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it"
-  },
   "bin_edges": {
     "contact-compatibility": [
       0.3333333333333333,
@@ -92,18 +87,6 @@
       0.26438644065635014,
       0.35251525420846685
     ],
-    "ee-structural-surface-height-offset": [
-      -0.4104503924589634,
-      -0.13681679748632117,
-      0.13681679748632117,
-      0.4104503924589634
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.11633198365427928,
-      -0.016157219951983232,
-      0.016157219951983232,
-      0.11633198365427928
-    ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
@@ -143,10 +126,10 @@
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.03005287131597432,
-      -0.004174009904996434,
-      0.004174009904996434,
-      0.03005287131597432
+      -0.004100080861701663,
+      -0.0005694556752363422,
+      0.0005694556752363422,
+      0.004100080861701663
     ]
   },
   "bin_stats_robust": {
@@ -162,16 +145,14 @@
     "ee_receptacle_height_offset_change": 0.08266596794128417,
     "ee_site_height_offset": 0.710446639893788,
     "ee_site_planar_distance": 0.44064406776058357,
-    "ee_structural_surface_height_offset": 0.6840839874316058,
-    "ee_structural_surface_height_offset_change": 0.1938866394237988,
     "grasp_compatibility": 0.8419145669874327,
     "grasp_compatibility_change": 0.08782650377142785,
     "object_object_height_offset": 0.9413217291106082,
     "object_object_height_offset_change": 0.097769456262441,
     "object_object_planar_distance": 1.693524215616568,
     "object_object_planar_distance_change": 0.09208396976613692,
-    "support_compatibility": 0.9959981934687342,
-    "support_compatibility_change": 0.050088118859957204
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.006833468102836106
   },
   "members": {
     "actor:002_master_chef_can": {
@@ -182,13 +163,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_002_master_chef_can-0",
-      "names": [
-        "env-0_002_master_chef_can-0",
-        "env-3_002_master_chef_can-0",
-        "env-7_002_master_chef_can-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -201,12 +176,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_003_cracker_box-0",
-      "names": [
-        "env-0_003_cracker_box-0",
-        "env-7_003_cracker_box-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -219,11 +189,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-5_004_sugar_box-0",
-      "names": [
-        "env-5_004_sugar_box-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -236,12 +202,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-3_005_tomato_soup_can-0",
-      "names": [
-        "env-3_005_tomato_soup_can-0",
-        "env-5_005_tomato_soup_can-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -254,13 +215,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_007_tuna_fish_can-0",
-      "names": [
-        "env-0_007_tuna_fish_can-0",
-        "env-4_007_tuna_fish_can-0",
-        "env-7_007_tuna_fish_can-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -273,12 +228,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_008_pudding_box-0",
-      "names": [
-        "env-0_008_pudding_box-0",
-        "env-3_008_pudding_box-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -291,12 +241,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_009_gelatin_box-0",
-      "names": [
-        "env-0_009_gelatin_box-0",
-        "env-3_009_gelatin_box-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -309,12 +254,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-1_010_potted_meat_can-0",
-      "names": [
-        "env-1_010_potted_meat_can-0",
-        "env-5_010_potted_meat_can-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -327,13 +267,7 @@
         "support"
       ],
       "kind": "actor",
-      "name": "env-0_024_bowl-0",
-      "names": [
-        "env-0_024_bowl-0",
-        "env-3_024_bowl-0",
-        "env-7_024_bowl-0",
-        "obj_0"
-      ],
+      "name": "obj_0",
       "roles": [
         "interacted"
       ]
@@ -356,8 +290,6 @@
         "actor:003_cracker_box",
         "actor:004_sugar_box",
         "actor:007_tuna_fish_can",
-        "actor:008_pudding_box",
-        "actor:009_gelatin_box",
         "actor:024_bowl"
       ]
     },
@@ -379,7 +311,6 @@
     },
     "actor:frl_apartment_sofa": {
       "family": "structural-surface",
-      "family_unresolved": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it",
       "interaction_types": [
         "contact",
         "support"
@@ -461,42 +392,11 @@
       "supports": [
         "actor:002_master_chef_can",
         "actor:003_cracker_box",
-        "actor:004_sugar_box",
         "actor:005_tomato_soup_can",
         "actor:007_tuna_fish_can",
         "actor:008_pudding_box",
         "actor:009_gelatin_box",
         "actor:024_bowl"
-      ]
-    },
-    "actor:scene_background": {
-      "family": "structural-surface",
-      "family_unresolved": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it",
-      "interaction_types": [
-        "contact",
-        "support"
-      ],
-      "kind": "actor",
-      "name": "scs-[0,1,2,3,4,5,6,7]_scene_background",
-      "roles": [
-        "interacted",
-        "support"
-      ],
-      "structural_surface": true,
-      "structural_surface_reason": "collision half-extent 1.554m horizontal >= 0.3m",
-      "supports": [
-        "actor:008_pudding_box"
-      ]
-    },
-    "link:fridge-0/top_door": {
-      "family_unresolved": "took part in interactions but is neither grasped, nor a holder, nor an extended surface, so no height-family rule reaches it",
-      "interaction_types": [
-        "contact"
-      ],
-      "kind": "link",
-      "name": "top_door",
-      "roles": [
-        "interacted"
       ]
     },
     "link:kitchen_counter-0/body": {
@@ -533,7 +433,7 @@
       ]
     }
   },
-  "membership_policy": "full-evidence",
+  "membership_policy": "target-supporters",
   "sites": {
     "spatial:ee_rest_site": {
       "metric": "euclidean",

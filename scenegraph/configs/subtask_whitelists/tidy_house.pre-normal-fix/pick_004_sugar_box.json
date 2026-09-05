@@ -68,18 +68,6 @@
       0.19334512180221383,
       0.2577934957362851
     ],
-    "ee-structural-surface-height-offset": [
-      -0.350328188814024,
-      -0.11677606293800799,
-      0.11677606293800799,
-      0.350328188814024
-    ],
-    "ee-structural-surface-height-offset-change": [
-      -0.06883438694329194,
-      -0.009560331519901656,
-      0.009560331519901656,
-      0.06883438694329194
-    ],
     "grasp-compatibility": [
       0.3333333333333333,
       0.6666666666666666
@@ -119,10 +107,10 @@
       0.6666666666666666
     ],
     "support-compatibility-change": [
-      -0.013019743361778035,
-      -0.0018082976891358384,
-      0.0018082976891358384,
-      0.013019743361778035
+      -0.000111512179768671,
+      -1.548780274564875e-05,
+      1.548780274564875e-05,
+      0.000111512179768671
     ]
   },
   "bin_stats_observed": {
@@ -136,8 +124,6 @@
     "ee_object_planar_distance_change": 0.36911751115552127,
     "ee_site_height_offset": 0.7240575395903845,
     "ee_site_planar_distance": 0.47678226177013566,
-    "ee_structural_surface_height_offset": 0.8220110620511334,
-    "ee_structural_surface_height_offset_change": 0.2873415987842498,
     "grasp_compatibility": 0.978494734107568,
     "grasp_compatibility_change": 0.759790343478594,
     "object_object_height_offset": 0.9601988127076145,
@@ -145,7 +131,7 @@
     "object_object_planar_distance": 1.475169667498542,
     "object_object_planar_distance_change": 0.6491459996757474,
     "support_compatibility": 1.0,
-    "support_compatibility_change": 0.6560744738651485
+    "support_compatibility_change": 0.33333333333333337
   },
   "bin_stats_robust": {
     "contact_compatibility": 0.735315305082477,
@@ -158,16 +144,14 @@
     "ee_object_planar_distance_change": 0.07371764374975405,
     "ee_site_height_offset": 0.5903521541726771,
     "ee_site_planar_distance": 0.3222418696703564,
-    "ee_structural_surface_height_offset": 0.58388031469004,
-    "ee_structural_surface_height_offset_change": 0.11472397823881988,
     "grasp_compatibility": 0.8050458153238991,
     "grasp_compatibility_change": 0.004351754769788725,
     "object_object_height_offset": 0.653606873881045,
     "object_object_height_offset_change": 0.09736585152658463,
     "object_object_planar_distance": 0.970701787905079,
     "object_object_planar_distance_change": 0.06417133811021118,
-    "support_compatibility": 0.9959981934687342,
-    "support_compatibility_change": 0.02169957226963006
+    "support_compatibility": 1.0,
+    "support_compatibility_change": 0.00018585363294778502
   },
   "members": {
     "actor:004_sugar_box": {

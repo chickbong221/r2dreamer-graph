@@ -4858,12 +4858,10 @@
             -0.032515
           ],
           "surface_normal": [
-            0.001335,
-            0.998628,
-            -0.052346
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 31 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.198166,
           "partner": "actor:002_master_chef_can",
           "n_samples": 31
@@ -4875,12 +4873,10 @@
             0.163933
           ],
           "surface_normal": [
-            -0.002619,
-            0.999997,
-            -0.00024
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 33 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.194013,
           "partner": "actor:003_cracker_box",
           "n_samples": 33
@@ -4892,12 +4888,10 @@
             -0.297117
           ],
           "surface_normal": [
-            0.000614,
-            1.0,
-            0.000131
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.267914,
           "partner": "actor:004_sugar_box",
           "n_samples": 5
@@ -4909,12 +4903,10 @@
             0.550634
           ],
           "surface_normal": [
-            -0.006761,
-            0.999976,
-            0.001239
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 19 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.192052,
           "partner": "actor:005_tomato_soup_can",
           "n_samples": 19
@@ -4926,12 +4918,10 @@
             0.797202
           ],
           "surface_normal": [
-            -0.002759,
-            0.999995,
-            0.00176
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 39 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.220333,
           "partner": "actor:010_potted_meat_can",
           "n_samples": 39
@@ -4943,12 +4933,10 @@
             0.144496
           ],
           "surface_normal": [
-            -0.002159,
-            0.999994,
-            0.002787
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 18 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.308876,
           "partner": "actor:007_tuna_fish_can",
           "n_samples": 18
@@ -4960,12 +4948,10 @@
             0.427557
           ],
           "surface_normal": [
-            -0.000334,
-            1.0,
-            0.00017
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 30 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.401211,
           "partner": "actor:024_bowl",
           "n_samples": 30
@@ -4977,12 +4963,10 @@
             0.269334
           ],
           "surface_normal": [
-            0.011061,
-            0.999931,
-            0.004002
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 23 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.136687,
           "partner": "actor:008_pudding_box",
           "n_samples": 23
@@ -4994,12 +4978,10 @@
             0.249775
           ],
           "surface_normal": [
-            -0.00205,
-            0.999994,
-            -0.002682
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 19 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.257844,
           "partner": "actor:009_gelatin_box",
           "n_samples": 19
@@ -5013,12 +4995,12 @@
           0.252589
         ],
         "outward_normal": [
-          -0.000408,
-          0.999987,
-          -0.005021
+          0.0,
+          0.0,
+          1.0
         ],
         "n_samples": 9,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_chair_01": {
@@ -5074,12 +5056,10 @@
             -0.156752
           ],
           "surface_normal": [
-            -5.5e-05,
-            0.999851,
-            -0.017279
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 6 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:003_cracker_box",
           "n_samples": 6
@@ -5091,12 +5071,10 @@
             -0.288608
           ],
           "surface_normal": [
-            0.011533,
-            0.999234,
-            -0.037385
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 4 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.019239,
           "partner": "actor:004_sugar_box",
           "n_samples": 4
@@ -5108,12 +5086,10 @@
             -0.23159
           ],
           "surface_normal": [
-            -0.019713,
-            0.999779,
-            -0.007351
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 6 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:007_tuna_fish_can",
           "n_samples": 6
@@ -5125,12 +5101,10 @@
             -0.292692
           ],
           "surface_normal": [
-            9e-06,
-            0.999674,
-            -0.025514
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 3 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:008_pudding_box",
           "n_samples": 3
@@ -5142,12 +5116,10 @@
             0.12173
           ],
           "surface_normal": [
-            5.6e-05,
-            0.999777,
-            0.021115
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 2 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:009_gelatin_box",
           "n_samples": 2
@@ -5159,12 +5131,10 @@
             -0.131657
           ],
           "surface_normal": [
-            0.051785,
-            0.997779,
-            -0.04189
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 3 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.069163,
           "partner": "actor:024_bowl",
           "n_samples": 3
@@ -5178,12 +5148,12 @@
           -0.163261
         ],
         "outward_normal": [
-          0.007273,
-          0.99981,
-          -0.018059
+          0.0,
+          0.0,
+          1.0
         ],
         "n_samples": 6,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:scene_background": {
@@ -5226,11 +5196,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            -0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 1 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:008_pudding_box",
           "n_samples": 1
@@ -5245,11 +5213,11 @@
         ],
         "outward_normal": [
           0.0,
-          1.0,
-          0.0
+          0.0,
+          1.0
         ],
         "n_samples": 1,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_table_02": {
@@ -5319,12 +5287,10 @@
             0.362795
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 9 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.020413,
           "partner": "actor:003_cracker_box",
           "n_samples": 9
@@ -5336,12 +5302,10 @@
             0.224303
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 4 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.037001,
           "partner": "actor:004_sugar_box",
           "n_samples": 4
@@ -5353,12 +5317,10 @@
             0.271815
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 10 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.480998,
           "partner": "actor:005_tomato_soup_can",
           "n_samples": 10
@@ -5370,12 +5332,10 @@
             0.116516
           ],
           "surface_normal": [
-            5e-06,
-            0.999843,
-            -0.017727
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 8 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.22093,
           "partner": "actor:008_pudding_box",
           "n_samples": 8
@@ -5387,12 +5347,10 @@
             0.18929
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 8 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.327623,
           "partner": "actor:010_potted_meat_can",
           "n_samples": 8
@@ -5404,12 +5362,10 @@
             0.160837
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 2 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.010026,
           "partner": "actor:009_gelatin_box",
           "n_samples": 2
@@ -5421,12 +5377,10 @@
             0.360488
           ],
           "surface_normal": [
-            -0.0,
-            1.0,
-            -0.0
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 3 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.020781,
           "partner": "actor:024_bowl",
           "n_samples": 3
@@ -5440,12 +5394,12 @@
           0.240863
         ],
         "outward_normal": [
-          1e-06,
-          0.999997,
-          -0.002532
+          0.0,
+          0.0,
+          1.0
         ],
         "n_samples": 7,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_tvstand": {
@@ -5502,11 +5456,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            1e-06
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 9 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.645322,
           "partner": "actor:002_master_chef_can",
           "n_samples": 9
@@ -5518,12 +5470,10 @@
             -0.058965
           ],
           "surface_normal": [
-            3e-06,
-            0.999995,
-            -0.003204
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.37873,
           "partner": "actor:003_cracker_box",
           "n_samples": 5
@@ -5536,11 +5486,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 13 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.628476,
           "partner": "actor:005_tomato_soup_can",
           "n_samples": 13
@@ -5553,11 +5501,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            1e-06
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.270674,
           "partner": "actor:007_tuna_fish_can",
           "n_samples": 5
@@ -5570,11 +5516,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            1e-06
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 11 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.641327,
           "partner": "actor:008_pudding_box",
           "n_samples": 11
@@ -5586,12 +5530,10 @@
             0.095717
           ],
           "surface_normal": [
-            -7e-06,
-            0.999964,
-            0.00848
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 10 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.283563,
           "partner": "actor:009_gelatin_box",
           "n_samples": 10
@@ -5604,11 +5546,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            1e-06
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 4 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.030343,
           "partner": "actor:024_bowl",
           "n_samples": 4
@@ -5621,11 +5561,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            1e-06
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 2 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:004_sugar_box",
           "n_samples": 2
@@ -5639,12 +5577,12 @@
           -0.020455
         ],
         "outward_normal": [
-          -1e-06,
-          1.0,
-          0.00066
+          0.0,
+          0.0,
+          1.0
         ],
         "n_samples": 8,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_rug_01": {
@@ -5673,11 +5611,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 1 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:010_potted_meat_can",
           "n_samples": 1
@@ -5692,11 +5628,11 @@
         ],
         "outward_normal": [
           0.0,
-          1.0,
-          0.0
+          0.0,
+          1.0
         ],
         "n_samples": 1,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_table_01": {
@@ -5710,11 +5646,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 1 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:002_master_chef_can",
           "n_samples": 1
@@ -5726,12 +5660,10 @@
             -0.261497
           ],
           "surface_normal": [
-            2e-06,
-            0.999993,
-            -0.00365
+            0.0,
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.397874,
           "partner": "actor:004_sugar_box",
           "n_samples": 5
@@ -5744,11 +5676,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 1 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:005_tomato_soup_can",
           "n_samples": 1
@@ -5761,11 +5691,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            -0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.012206,
           "partner": "actor:007_tuna_fish_can",
           "n_samples": 5
@@ -5779,12 +5707,12 @@
           0.047092
         ],
         "outward_normal": [
-          1e-06,
-          1.0,
-          -0.000913
+          0.0,
+          0.0,
+          1.0
         ],
         "n_samples": 4,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     },
     "actor:frl_apartment_sofa": {
@@ -5798,11 +5726,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 4 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.010565,
           "partner": "actor:005_tomato_soup_can",
           "n_samples": 4
@@ -5815,11 +5741,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 5 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.029756,
           "partner": "actor:009_gelatin_box",
           "n_samples": 5
@@ -5832,11 +5756,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 1 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.01,
           "partner": "actor:010_potted_meat_can",
           "n_samples": 1
@@ -5849,11 +5771,9 @@
           ],
           "surface_normal": [
             0.0,
-            1.0,
-            0.0
+            0.0,
+            1.0
           ],
-          "surface_normal_points": "outward",
-          "surface_normal_provenance": "mean of 7 support-force direction(s), negated to point away from the surface and expressed in the supporter's object frame",
           "footprint_radius": 0.031084,
           "partner": "actor:024_bowl",
           "n_samples": 7
@@ -5868,11 +5788,11 @@
         ],
         "outward_normal": [
           0.0,
-          1.0,
-          0.0
+          0.0,
+          1.0
         ],
         "n_samples": 4,
-        "provenance": "mean of mined support-surface anchors and normals, in the object's own frame; kept: the miner declares them outward"
+        "provenance": "mean of mined support-surface anchors, normal forced outward (support normals are mined from contact forces and point into the supporter)"
       }
     }
   }
