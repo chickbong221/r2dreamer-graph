@@ -54,11 +54,51 @@ class PanelTest(unittest.TestCase):
         success = np.zeros(93)
         success[0] = 1  # only training scene succeeds
         success[63:] = 1  # C cannot improve B's checkpoint score
-        result = evaluation.panel_metrics(panel, {"success_once": success}, ["s00"])
+        result = evaluation.panel_metrics(panel, {
+            "success_once": success, "graph_cache_entries": np.ones(93)}, ["s00"])
         self.assertAlmostEqual(result["eval/success_once"], 1 / 63)
         self.assertEqual(result["eval_scene/training/success_once"], 1)
         self.assertEqual(result["eval_scene/held_out/success_once"], 0)
         self.assertEqual(result["eval_light/dim/episodes"], 10)
+        self.assertFalse(any("/per_scene/" in key for key in result))
+        self.assertIn("eval/graph_cache_entries", result)
+        self.assertFalse(any(key.endswith("graph_cache_entries") and not key.startswith("eval/")
+                             for key in result))
+
+    def test_no_scene_is_reported_on_its_own_and_selection_is_unaffected(self):
+        panel = evaluation.build_panel(plans(), config())
+        success = np.zeros(93)
+        success[:32] = 1
+        values = {"success_once": success, "success_at_end": success,
+                  "fail_once": np.zeros(93), "score": np.arange(93.0),
+                  "length": np.ones(93), "graph_cache_entries": np.ones(93)}
+        result = evaluation.panel_metrics(panel, values, ["s00"])
+        self.assertEqual(
+            {key.rsplit("/", 1)[0] for key in result},
+            {"eval", "eval_scene/all", "eval_scene/training", "eval_scene/held_out",
+             "eval_light/dim", "eval_light/nominal", "eval_light/bright"})
+        for scene in {c.scene for c in panel}:
+            self.assertFalse([k for k in result if scene.rstrip(".json") in k])
+        # Sub-groups carry outcomes only; the full gauge set stays on eval/.
+        self.assertFalse([k for k in result
+                          if k.endswith("graph_cache_entries") and not k.startswith("eval/")])
+        # The checkpoint metric is the 63-case aggregate, and lighting rows
+        # cannot move it whatever they score.
+        self.assertAlmostEqual(result["eval/success_once"], 32 / 63)
+        for filler in (0.0, 1.0):
+            shifted = dict(values)
+            shifted["success_once"] = np.concatenate([success[:63], np.full(30, filler)])
+            self.assertEqual(
+                evaluation.panel_metrics(panel, shifted, ["s00"])["eval/success_once"],
+                result["eval/success_once"])
+
+    def test_milestones_track_every_reported_aggregate(self):
+        tracker = evaluation.SuccessMilestones()
+        crossed = tracker.update(
+            {"eval/success_once": .9, "eval_scene/held_out/success_once": .6}, 400)
+        self.assertEqual(crossed, {
+            "eval/steps_to_50": 400, "eval/steps_to_70": 400, "eval/steps_to_80": 400,
+            "eval_scene/held_out/steps_to_50": 400})
 
     def test_invalid_counts_conditions_and_missing_scene_are_refused(self):
         bad = config(count=62)
@@ -243,6 +283,47 @@ class TransferConfigTest(unittest.TestCase):
 
 
 class EvaluationLoopTest(unittest.TestCase):
+    def test_only_scheduled_episodes_render_without_changing_rollout(self):
+        import torch
+        import trainer as trainer_module
+
+        class Batch(dict):
+            def to(self, *args, **kwargs):
+                return self
+
+            def detach(self):
+                return self
+
+        rollouts = []
+        for period in (100, 0):
+            with self.subTest(video_every=period):
+                builder = NS(record_graph_env_indices=set(), last_graph_by_env={}, last_masks_by_env={})
+                tick, capture, replayed, videos = 0, [], [], []
+                def env_step(action, reset):
+                    nonlocal tick
+                    tick = 0 if reset[0] else tick + 1
+                    capture.append(bool(builder.record_graph_env_indices))
+                    return Batch(reward=torch.full((1, 1), float(tick)), is_first=reset[:, None]), torch.tensor([tick == 2])
+                cfg = NS(steps=6, pretrain=0, eval_every=0, eval_episode_num=0,
+                         video_pred_log=False, video_fps=15, params_hist_log=False,
+                         batch_length=64, batch_size=1, train_ratio=1, update_log_every=10,
+                         video_every=period, action_repeat=1)
+                replay = NS(count=lambda: 0, add_transition=lambda trans: replayed.append(float(trans["reward"].item())))
+                logger = NS(scalar=lambda *a: None, write=lambda *a: None,
+                            video=lambda *a, **kw: videos.append(a[0]))
+                env = NS(env_num=1, step=env_step)
+                agent = NS(device="cpu", get_initial_state=lambda n: {"prev_action": torch.zeros(n, 1)},
+                           act=lambda trans, state, eval: (torch.zeros(1, 1), state))
+                runner = trainer_module.OnlineTrainer(cfg, replay, logger, None, env, None)
+                with patch.object(trainer_module, "_graph_builder", return_value=builder), \
+                     patch.object(trainer_module, "_observation_frame", return_value=torch.zeros(2, 2, 3)) as render:
+                    runner.begin(agent)
+                    self.assertEqual(render.call_count, 3 if period else 0)
+                self.assertEqual(capture, [bool(period)] * 3 + [False] * 6)
+                self.assertEqual(videos, ["train_video"] if period else [])
+                rollouts.append(replayed)
+        self.assertEqual(rollouts[0], rollouts[1])
+
     def test_final_panel_eval_runs_only_after_normal_budget_completion(self):
         import torch
         import trainer as trainer_module
@@ -331,14 +412,18 @@ class EvaluationLoopTest(unittest.TestCase):
         runner = trainer_module.OnlineTrainer.__new__(trainer_module.OnlineTrainer)
         runner.eval_envs, runner.logger = Env(), logger
         runner.video_pred_log, runner.batch_length, runner.video_fps = False, 64, 15
+        runner.eval_video_log, runner.profile_timing = False, True
         agent = Agent()
         torch.manual_seed(12)
         before = torch.get_rng_state().clone()
         with patch.dict(sys.modules, {"envs.evaluation": evaluation}), \
              patch.object(trainer_module, "_graph_builder", return_value=None), \
-             patch.object(trainer_module, "_render_frame", return_value=None), \
-             patch.object(trainer_module, "_observation_frame", return_value=None):
+             patch.object(trainer_module, "_render_frame", return_value=None) as render, \
+             patch.object(trainer_module, "_observation_frame", return_value=None) as fallback:
             result = runner.eval(agent, 50000)
+        render.assert_not_called()
+        fallback.assert_not_called()
+        self.assertGreaterEqual(result["eval_timing/env_step_ms"], 0)
         self.assertEqual(agent.batch_sizes, [93, 93, 93])
         self.assertEqual(result["eval/success_once"], 0)
         self.assertEqual(result["eval_light/bright/success_once"], 1)

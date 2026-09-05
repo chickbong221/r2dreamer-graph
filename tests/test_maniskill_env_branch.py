@@ -9,6 +9,7 @@ flattening, the schedule source -- are exercised directly.
 
 import ast
 import re
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +88,7 @@ class BranchTest(unittest.TestCase):
         "task_plans", "scene_builder_cls", "spawn_data_fp",
         "plan_data_from_file", "FetchActionWrapper", "mshab_obj",
         "require_build_configs_repeated_equally_across_envs",
+        "balance_objects", "build_panel", "LightingController", "eval_panel",
     )
 
     def setUp(self):
@@ -863,6 +865,77 @@ class ScheduleSourceLayoutTest(unittest.TestCase):
                 outer = SimpleNamespace(**{attr: self._mshab()})
                 source = mod.task_schedule_source(outer, self.SCHEDULES)
                 self.assertEqual(source.label, "set_table/pick")
+
+
+class _Frames:
+    """Tensor stand-in that records the shape reaching the CPU transfer."""
+
+    def __init__(self, shape, log):
+        self.shape, self.log, self.dtype = tuple(shape), log, "uint8"
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    def __getitem__(self, key):
+        if key is None:
+            return _Frames((1,) + self.shape, self.log)
+        return _Frames(self.shape[1:], self.log)
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        self.log.append(self.shape)
+        return self
+
+
+class RenderSelectionTest(unittest.TestCase):
+    """A 93-env eval batch of 512x512 frames must not cross the bus per step."""
+
+    def _namespace(self):
+        fake_torch = SimpleNamespace(
+            is_tensor=lambda value: isinstance(value, _Frames),
+            as_tensor=lambda value: value,
+            uint8="uint8")
+        namespace = {"torch": fake_torch,
+                     "np": SimpleNamespace(asarray=lambda value: value)}
+        body = [_node("render"), _node("render_one")]
+        exec(compile(ast.Module(body=body, type_ignores=[]), "<render>", "exec"),
+             namespace)
+        return namespace
+
+    def _actor(self, log, frames=(93, 512, 512, 3)):
+        namespace = self._namespace()
+        actor = SimpleNamespace(
+            _env=SimpleNamespace(render=lambda: _Frames(frames, log)))
+        for name in ("render", "render_one"):
+            setattr(actor, name, types.MethodType(namespace[name], actor))
+        return actor
+
+    def test_render_one_selects_the_row_before_the_cpu_transfer(self):
+        log = []
+        frame = self._actor(log).render_one(7)
+        self.assertEqual(frame.shape, (512, 512, 3))
+        self.assertEqual(log, [(512, 512, 3)])
+
+    def test_the_whole_batch_is_still_available_without_an_index(self):
+        log = []
+        self.assertEqual(self._actor(log).render().shape, (93, 512, 512, 3))
+        self.assertEqual(log, [(93, 512, 512, 3)])
+
+    def test_a_single_frame_is_batched_before_the_row_is_taken(self):
+        log = []
+        self.assertEqual(self._actor(log, (512, 512, 3)).render_one(0).shape,
+                         (512, 512, 3))
+
+    def test_a_renderer_that_returns_nothing_stays_none(self):
+        namespace, actor = self._namespace(), SimpleNamespace()
+        actor._env = SimpleNamespace(render=lambda: None)
+        for name in ("render", "render_one"):
+            setattr(actor, name, types.MethodType(namespace[name], actor))
+        self.assertIsNone(actor.render())
+        self.assertIsNone(actor.render_one(3))
 
 
 if __name__ == "__main__":

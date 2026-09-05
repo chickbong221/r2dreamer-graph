@@ -95,6 +95,10 @@ def build_panel(by_object, config):
 def panel_metrics(cases, values, training_scenes):
     """Separate primary B/A scores from lighting; never pool them together."""
     values = {k: np.asarray(v, dtype=float) for k, v in values.items()}
+    for key, arr in values.items():
+        if arr.shape != (len(cases),) or not np.isfinite(arr).all():
+            raise ValueError(f"invalid per-environment evaluation metric: {key}")
+    outcomes = {"score", "length", "success_once", "success_at_end", "fail_once"}
     groups = defaultdict(list)
     for i, case in enumerate(cases):
         if case.group != "light":
@@ -105,21 +109,20 @@ def panel_metrics(cases, values, training_scenes):
             groups["eval_scene/all"].append(i)
             split = "training" if case.scene in training_scenes else "held_out"
             groups[f"eval_scene/{split}"].append(i)
-            groups[f"eval_scene/per_scene/{case.scene.removesuffix('.scene_instance.json')}"].append(i)
         elif case.group == "light":
             groups[f"eval_light/{case.condition}"].append(i)
     result = {}
     for group, indices in groups.items():
         result[f"{group}/episodes"] = len(indices)
         for key, arr in values.items():
-            if arr.shape != (len(cases),) or not np.isfinite(arr).all():
-                raise ValueError(f"invalid per-environment evaluation metric: {key}")
-            if "/per_scene/" in group and key not in ("success_once", "success_at_end"):
+            if group != "eval" and key not in outcomes:
                 continue
             result[f"{group}/{key}"] = float(arr[indices].mean())
     nominal = result.get("eval_light/nominal/success_once")
     if nominal is not None:
         for condition in sorted({c.condition for c in cases if c.group == "light"}):
+            if condition == "nominal":
+                continue
             result[f"eval_light/{condition}/success_delta_vs_nominal"] = (
                 result[f"eval_light/{condition}/success_once"] - nominal)
     return result
@@ -168,7 +171,7 @@ class SuccessMilestones:
 
     def update(self, metrics, step):
         for key, value in list(metrics.items()):
-            if not key.endswith("/success_once") or "/per_scene/" in key:
+            if not key.endswith("/success_once"):
                 continue
             for threshold in (50, 70, 80):
                 name = key.rsplit("/", 1)[0] + f"/steps_to_{threshold}"

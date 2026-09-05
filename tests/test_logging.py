@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -7,7 +8,9 @@ from unittest import mock
 
 import numpy as np
 
-from tools import FPS, Logger, prepare_video, process_memory_stats, wandb_scalars
+from tools import (
+    FPS, Logger, StageTimer, prepare_video, process_memory_stats, wandb_scalars,
+)
 
 
 class _FakeRun:
@@ -80,6 +83,63 @@ class LoggingTest(unittest.TestCase):
         self.assertEqual(fps.result(), 50.0)
         fps.step(60)
         self.assertEqual(fps.result(), 20.0)
+
+    def test_console_line_is_compact_while_json_keeps_every_metric(self):
+        values = {
+            "train/loss/dyn": 11.2,
+            "train/graph_align_mse": 0.61,
+            "train/opt/updates": 375.0,
+            "train/graph_real_edges": 20.7,
+            "eval/success_once": 0.25,
+            "eval_scene/held_out/success_once": 0.5,
+            "eval_scene/held_out/graph_cache_entries": 3.0,
+            "eval_light/dim/reset_rgb_mae": 0.00034,
+            "eval_light/dim/success_delta_vs_nominal": -0.125,
+            "eval_light/dim/intensity_multiplier": 0.4,
+            "fps/policy": 5.5,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            logger = Logger(Path(directory))
+            for name, value in values.items():
+                logger.scalar(name, value)
+            with mock.patch("builtins.print") as printed:
+                logger.write(1764)
+            logger.close()
+            record = json.loads(
+                (Path(directory) / "metrics.jsonl").read_text().strip())
+        line = printed.call_args_list[0][0][1]
+        self.assertEqual(record["step"], 1764)
+        self.assertEqual({key: record[key] for key in values}, values)
+        for kept in ("train/opt/updates", "train/graph_real_edges", "fps/policy",
+                     "eval/success_once", "eval_scene/held_out/success_once",
+                     "eval_light/dim/success_delta_vs_nominal"):
+            self.assertIn(kept, line)
+        for dropped in ("train/loss/dyn", "train/graph_align_mse",
+                        "eval_scene/held_out/graph_cache_entries",
+                        "eval_light/dim/intensity_multiplier"):
+            self.assertNotIn(dropped, line)
+        # The old one-decimal console printed this reading as 0.0.
+        self.assertIn("eval_light/dim/reset_rgb_mae 0.00034", line)
+
+    def test_disabled_timing_never_synchronises_or_reports(self):
+        calls = []
+        timer = StageTimer(enabled=False, device="cuda")
+        with mock.patch("torch.cuda.synchronize",
+                        side_effect=lambda *args, **kwargs: calls.append(1)):
+            with timer.measure("update"):
+                pass
+        self.assertEqual(calls, [])
+        self.assertEqual(timer.metrics(), {})
+
+    def test_enabled_timing_averages_each_stage_then_clears_it(self):
+        clock = iter((0.0, 0.5, 2.0, 2.5)).__next__
+        timer = StageTimer(enabled=True, device="cpu", clock=clock)
+        for _ in range(2):
+            with timer.measure("update"):
+                pass
+        self.assertEqual(timer.metrics("eval_timing"),
+                         {"eval_timing/update_ms": 500.0})
+        self.assertEqual(timer.metrics(), {})
 
     def test_video_is_tiled_into_wandb_layout(self):
         video = np.zeros((2, 3, 4, 5, 3), np.uint8)

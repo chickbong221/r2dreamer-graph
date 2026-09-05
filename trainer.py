@@ -98,17 +98,20 @@ def _render_frame(envs, env_idx, panel_fn=None):
     at whatever `env.eval_render_size` asks for. None when the suite has no
     such camera, and the caller falls back to the observations.
     """
-    render = getattr(envs, "render", None)
-    if render is None:
-        return None
+    render_one = getattr(envs, "render_one", None)
     try:
-        frames = render()
+        if render_one is not None:
+            frame = render_one(env_idx)
+        else:
+            render = getattr(envs, "render", None)
+            if render is None:
+                return None
+            frames = render()
+            frame = frames[env_idx] if frames is not None and len(frames) > env_idx else None
     except Exception:
         # Diagnostic only; a renderer that refuses must not end an eval run.
         return None
-    if frames is None or len(frames) <= env_idx:
-        return None
-    return _with_panel([frames[env_idx]], panel_fn)
+    return _with_panel([frame], panel_fn) if frame is not None else None
 
 
 def _observation_frame(trans, panel_fn=None):
@@ -159,6 +162,8 @@ class OnlineTrainer:
         self.eval_every = int(config.eval_every)
         self.eval_episode_num = int(config.eval_episode_num)
         self.video_pred_log = bool(config.video_pred_log)
+        self.eval_video_log = bool(getattr(config, "eval_video_log", True))
+        self.profile_timing = bool(getattr(config, "profile_timing", False))
         self.video_fps = int(config.video_fps)
         self.params_hist_log = bool(config.params_hist_log)
         self.batch_length = int(config.batch_length)
@@ -189,6 +194,8 @@ class OnlineTrainer:
         if torch.device(agent.device).type == "cuda":
             torch.cuda.reset_peak_memory_stats(agent.device)
         envs = self.eval_envs
+        timer = tools.StageTimer(getattr(self, "profile_timing", False), agent.device)
+        record_video = getattr(self, "eval_video_log", True)
         agent.eval()
         # (B,)
         done = torch.ones(envs.env_num, dtype=torch.bool, device=agent.device)
@@ -206,7 +213,7 @@ class OnlineTrainer:
         video_frames = []
         # Graph panel: masks are only built for envs listed here, so recording
         # is scoped to the one env whose video is logged.
-        graph_builder = _graph_builder(envs)
+        graph_builder = _graph_builder(envs) if record_video else None
         colormap = None
         if graph_builder is not None:
             try:
@@ -225,21 +232,20 @@ class OnlineTrainer:
             # on GPU).  The .to() calls below are no-ops when the data is
             # already on agent.device.
             # (B, A), (B,)
-            trans, step_done = envs.step(act.detach(), done)
-            # dict of (B, 1, *)
-            trans = trans.to(agent.device, non_blocking=True)
-            panel_fn = (
-                (lambda h: _graph_panel(graph_builder, 0, h, colormap))
-                if graph_builder is not None else None
-            )
-            # The render camera when the suite has one, the observation strip
-            # otherwise. Not both: two videos of the same episode at different
-            # resolutions is worse than one.
-            frame = _render_frame(envs, 0, panel_fn)
-            if frame is None:
-                frame = _observation_frame(trans, panel_fn)
-            if frame is not None:
-                video_frames.append(frame)
+            with timer.measure("env_step"):
+                trans, step_done = envs.step(act.detach(), done)
+                trans = trans.to(agent.device, non_blocking=True)
+            if record_video:
+                with timer.measure("video"):
+                    panel_fn = (
+                        (lambda h: _graph_panel(graph_builder, 0, h, colormap))
+                        if graph_builder is not None else None
+                    )
+                    frame = _render_frame(envs, 0, panel_fn)
+                    if frame is None:
+                        frame = _observation_frame(trans, panel_fn)
+                    if frame is not None:
+                        video_frames.append(frame)
             # (B,)
             done = step_done.to(agent.device)
 
@@ -250,7 +256,8 @@ class OnlineTrainer:
                 # Clone one episode so a view cannot retain the full eval batch.
                 cache.append(trans[:1].clone())
             # (B, A)
-            act, agent_state = agent.act(trans, agent_state, eval=True)
+            with timer.measure("policy"):
+                act, agent_state = agent.act(trans, agent_state, eval=True)
             returns += trans["reward"][:, 0] * ~once_done
             for key, value in trans.items():
                 if key.startswith("log_"):
@@ -311,6 +318,8 @@ class OnlineTrainer:
         duration = time.perf_counter() - started
         record("eval/duration_seconds", duration)
         record("eval/environment_steps_per_second", float(steps.sum()) / max(duration, 1e-9))
+        for key, value in timer.metrics("eval_timing").items():
+            record(key, value)
         if video_frames:
             video = torch.stack(video_frames, dim=0)
             self.logger.video(
@@ -364,6 +373,8 @@ class OnlineTrainer:
         """
         envs = self.train_envs
         video_cache = []
+        record_video = False
+        timer = tools.StageTimer(self.profile_timing, agent.device)
         # Keep the same graph panel beside the observation cameras in training
         # videos that evaluation already uses.  Only env 0 is cached because
         # that is the environment selected by ``_observation_frame``.
@@ -373,7 +384,7 @@ class OnlineTrainer:
             try:
                 from scenegraph.viz.palette import ColorMap
                 colormap = ColorMap()
-                graph_builder.record_graph_env_indices = {0}
+                graph_builder.record_graph_env_indices = set()
             except Exception:
                 graph_builder = None
         step = self.replay_buffer.count() * self._action_repeat
@@ -402,18 +413,24 @@ class OnlineTrainer:
                 eval_duration = time.perf_counter() - eval_started
                 policy_fps.exclude(eval_duration)
                 train_fps.exclude(eval_duration)
+            # Decide at the recorded environment's reset, not after rendering
+            # an entire episode that will be discarded.
+            if done[0]:
+                if video_cache:
+                    with timer.measure("video"):
+                        video = torch.stack(video_cache, axis=0)
+                        self.logger.video("train_video", tools.to_np(video[None]), fps=self.video_fps)
+                video_cache = []
+                record_video = bool(self._should_video(step))
+                if graph_builder is not None:
+                    graph_builder.record_graph_env_indices = {0} if record_video else set()
+                    if not record_video:
+                        graph_builder.last_graph_by_env.clear()
+                        graph_builder.last_masks_by_env.clear()
             # Save metrics
             if done.any():
                 finished = done & lengths.gt(0)
                 if finished.any():
-                    if len(video_cache) > 0:
-                        if self._should_video(step):
-                            video = torch.stack(video_cache, axis=0)
-                            self.logger.video(
-                                "train_video", tools.to_np(video[None]),
-                                fps=self.video_fps,
-                            )
-                        video_cache = []
                     self.logger.scalar("episode/score", returns[finished].mean())
                     self.logger.scalar(
                         "episode/length", lengths[finished].float().mean()
@@ -428,7 +445,8 @@ class OnlineTrainer:
                         )
                         episode_log_sums[key][finished] = 0
                         episode_log_maxima[key][finished] = 0
-                    self.logger.write(step)
+                    with timer.measure("logging"):
+                        self.logger.write(step)
                     returns[finished] = 0
                     lengths[finished] = 0
             env_steps = int((~done).sum()) * self._action_repeat
@@ -441,16 +459,17 @@ class OnlineTrainer:
             # on GPU).  The .to() calls below are no-ops when the data is
             # already on agent.device.
             # (B, A), (B,)
-            trans, step_done = envs.step(act.detach(), done)
-            # dict of (B, 1, *)
-            trans = trans.to(agent.device, non_blocking=True)
+            with timer.measure("env_step"):
+                trans, step_done = envs.step(act.detach(), done)
+                trans = trans.to(agent.device, non_blocking=True)
             # (B,)
             done = step_done.to(agent.device)
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
             # (B, A)
-            act, agent_state = agent.act(trans, agent_state, eval=False)
+            with timer.measure("policy"):
+                act, agent_state = agent.act(trans, agent_state, eval=False)
 
             # Store transition.
             # We keep the observation and the action that produced it together.
@@ -460,13 +479,15 @@ class OnlineTrainer:
                 if key in agent_state:
                     trans[key] = agent_state[key]
             trans["episode"] = episode_ids  # Don't lift dim
-            panel_fn = (
-                (lambda h: _graph_panel(graph_builder, 0, h, colormap))
-                if graph_builder is not None else None
-            )
-            frame = _observation_frame(trans, panel_fn)
-            if frame is not None:
-                video_cache.append(frame)
+            if record_video:
+                with timer.measure("video"):
+                    panel_fn = (
+                        (lambda h: _graph_panel(graph_builder, 0, h, colormap))
+                        if graph_builder is not None else None
+                    )
+                    frame = _observation_frame(trans, panel_fn)
+                    if frame is not None:
+                        video_cache.append(frame)
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
             active = ~trans["is_first"][:, 0].bool()
@@ -490,7 +511,8 @@ class OnlineTrainer:
                 for _ in range(update_num):
                     # `step` is environment steps; the agent uses it for
                     # the progress-beta warm-up only.
-                    _metrics = agent.update(self.replay_buffer, step)
+                    with timer.measure("update"):
+                        _metrics = agent.update(self.replay_buffer, step)
                     train_metrics = _metrics
                     train_fps.step(self._batch_steps)
                 update_count += update_num
@@ -510,7 +532,10 @@ class OnlineTrainer:
                     self.logger.scalar("fps/train", train_fps.result())
                     for name, value in tools.process_memory_stats().items():
                         self.logger.scalar(name, value)
-                    self.logger.write(step)
+                    for name, value in timer.metrics().items():
+                        self.logger.scalar(name, value)
+                    with timer.measure("logging"):
+                        self.logger.write(step)
         if graph_builder is not None:
             graph_builder.record_graph_env_indices = set()
             graph_builder.last_graph_by_env.clear()

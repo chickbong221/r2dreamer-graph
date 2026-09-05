@@ -208,9 +208,32 @@ def wandb_scalars(scalars):
         or name.startswith("train/loss/")
         or name.startswith("train/opt/")
         or name.startswith("system/process_")
+        or name.startswith(("timing/", "eval_timing/"))
         or name in ("fps/policy", "fps/train")
         or name in _WANDB_DIAGNOSTICS
     }
+
+
+def console_scalars(scalars):
+    """Keep the terminal readable; JSON/TensorBoard retain the full metrics."""
+    train_keys = {
+        "train/opt/updates", "train/opt/loss", "train/opt/lr",
+        "train/opt/skipped_updates", "train/progress_beta",
+        "train/progress/valid_fraction", "train/graph_nodes_per_frame",
+        "train/graph_real_edges",
+    }
+    # The lighting delta is C's result, not a per-condition detail.
+    outcome_keys = {"episodes", "score", "success_once", "success_at_end",
+                    "success_delta_vs_nominal"}
+    for name, value in scalars:
+        key = name.removeprefix("finetune/")
+        if key.startswith("train/") and key not in train_keys:
+            continue
+        if key.startswith(("eval_scene/", "eval_object/", "eval_light/")):
+            tail = key.rsplit("/", 1)[-1]
+            if tail not in outcome_keys and not tail.startswith("reset_"):
+                continue
+        yield name, value
 
 
 def _linux_process_rss_bytes(path="/proc/self/status"):
@@ -297,6 +320,38 @@ class FPS:
         self._last_time = now
         self._count = 0
         return value
+
+
+class StageTimer:
+    """Opt-in synchronized timings; disabled runs never synchronize for profiling."""
+
+    def __init__(self, enabled=False, device="cpu", clock=time.perf_counter):
+        self.enabled, self.device, self.clock = enabled, torch.device(device), clock
+        self.samples = {}
+
+    def _sync(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    @contextlib.contextmanager
+    def measure(self, name):
+        if not self.enabled:
+            yield
+            return
+        self._sync()
+        start = self.clock()
+        try:
+            yield
+        finally:
+            self._sync()
+            elapsed, count = self.samples.get(name, (0.0, 0))
+            self.samples[name] = (elapsed + self.clock() - start, count + 1)
+
+    def metrics(self, prefix="timing"):
+        result = {f"{prefix}/{name}_ms": 1000 * elapsed / count
+                  for name, (elapsed, count) in self.samples.items()}
+        self.samples.clear()
+        return result
 
 
 def isolated_evaluation(fn):
@@ -391,7 +446,7 @@ class Logger:
 
     def write(self, step):
         scalars = list(self._scalars.items())
-        print(f"[{step}]", " / ".join(f"{k} {v:.1f}" for k, v in scalars))
+        print(f"[{step}]", " / ".join(f"{k} {v:.4g}" for k, v in console_scalars(scalars)))
         with (self._logdir / self._filename).open("a") as f:
             f.write(json.dumps({"step": step, **dict(scalars)}) + "\n")
         for name, value in scalars:

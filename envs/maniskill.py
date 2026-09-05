@@ -781,15 +781,8 @@ class ManiSkillVecEnv:
         )
         return trans, done_t.to(self._device)
 
-    def render(self):
-        """Human-render camera for every env, ``[N, H, W, 3]`` uint8 on CPU.
-
-        Not an observation: this is the separate third-person camera the eval
-        video is made from, so it carries no obligation to match the encoder's
-        resolution. CPU because the frames are only ever stacked and encoded,
-        and a 200-step eval at 512x512 is a third of a gigabyte the training
-        step would otherwise be sharing a device with.
-        """
+    def render(self, env_idx=None):
+        """Human-render images on CPU; select a row before transferring when requested."""
         frames = self._env.render()
         if frames is None:
             return None
@@ -797,11 +790,16 @@ class ManiSkillVecEnv:
             frames = torch.as_tensor(np.asarray(frames))
         if frames.ndim == 3:
             frames = frames[None]
+        if env_idx is not None:
+            frames = frames[int(env_idx)]
         if frames.dtype != torch.uint8:
             # A float render is in [0, 1]; anything already 0-255 stays put.
             scale = 255.0 if float(frames.max()) <= 1.0 else 1.0
             frames = (frames * scale).clamp(0, 255).to(torch.uint8)
         return frames.detach().cpu()
+
+    def render_one(self, env_idx=0):
+        return self.render(env_idx=env_idx)
 
     def close(self):
         self._env.close()
