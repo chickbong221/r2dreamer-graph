@@ -2,9 +2,11 @@
 
 import ast
 from collections import Counter
+import contextlib
 import importlib.util
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
@@ -121,30 +123,179 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(result, {"eval/steps_to_50": 200, "eval/steps_to_70": 200})
 
 
-class LightingTest(unittest.TestCase):
-    def scene(self, count):
-        light_type = type("RenderPointLightComponent", (), {})
-        scenes = []
-        for _ in range(count):
-            light = light_type()
-            light.color = np.array([2., 1.6, 1.])
-            scenes.append(NS(render_system=NS(ambient_light=np.array([.3] * 3)),
-                             entities=[NS(components=[light])]))
-        return NS(sub_scenes=scenes, parallel_in_single_scene=False)
+AMBIENT = np.array([.3] * 3)
+LIGHT = np.array([2., 1.6, 1.])
+POSITIONS = ([-1.1, 2.775, 2.3], [2.4, -1.6, 2.3])
 
-    def test_only_intensity_changes_and_reset_does_not_compound_it(self):
+
+def scene_class():
+    """Stand-in for the ManiSkill scene class ``construction_lighting`` patches."""
+
+    class ManiSkillScene:
+        def __init__(self, count):
+            self.sub_scenes = [NS(render_system=NS(ambient_light=None), entities=[])
+                               for _ in range(count)]
+            self.parallel_in_single_scene = False
+
+        def build(self):
+            """ReplicaCADSceneBuilder.build's call shape, nothing more."""
+            self.set_ambient_light(list(AMBIENT))
+            for position in POSITIONS:
+                self.add_point_light(position, color=LIGHT.copy())
+
+        def clear(self):
+            for sub in self.sub_scenes:
+                sub.entities = []
+
+        def add_point_light(self, position, color, shadow=False, scene_idxs=None):
+            chosen = range(len(self.sub_scenes)) if scene_idxs is None else scene_idxs
+            for index in chosen:
+                light = type("RenderPointLightComponent", (), {})()
+                light.color = np.asarray(color, float)
+                light.position = tuple(position)
+                light.shadow = shadow
+                self.sub_scenes[index].entities.append(
+                    NS(name="point_light", components=[light]))
+
+        def add_directional_light(self, direction, color, shadow=False, scene_idxs=None):
+            self.add_point_light(direction, color=color, shadow=shadow,
+                                 scene_idxs=scene_idxs)
+
+        def set_ambient_light(self, color):
+            for sub in self.sub_scenes:
+                sub.render_system.ambient_light = np.asarray(color, float)
+
+    return ManiSkillScene
+
+
+@contextlib.contextmanager
+def maniskill_scene_module(cls):
+    modules = {}
+    for name in ("mani_skill", "mani_skill.envs", "mani_skill.envs.scene"):
+        module = types.ModuleType(name)
+        module.__path__ = []
+        modules[name] = module
+    modules["mani_skill.envs.scene"].ManiSkillScene = cls
+    with patch.dict(sys.modules, modules):
+        yield
+
+
+class LightingTest(unittest.TestCase):
+    def setUp(self):
+        self.cls = scene_class()
+        self.saved = {name: getattr(self.cls, name)
+                      for name in ("add_point_light", "add_directional_light",
+                                   "set_ambient_light")}
+
+    def assert_restored(self):
+        for name, function in self.saved.items():
+            self.assertIs(getattr(self.cls, name), function)
+
+    def built(self, panel, intensities=None):
+        scene = self.cls(len(panel))
+        with maniskill_scene_module(self.cls):
+            if intensities is None:
+                scene.build()
+                return scene, {}
+            with evaluation.construction_lighting(intensities) as created:
+                scene.build()
+        return scene, created
+
+    def assert_scaled(self, scene, panel):
+        for sub, case in zip(scene.sub_scenes, panel):
+            np.testing.assert_allclose(sub.render_system.ambient_light,
+                                       AMBIENT * case.intensity)
+            self.assertEqual(len(sub.entities), len(POSITIONS))
+            for entity, position in zip(sub.entities, POSITIONS):
+                light = entity.components[0]
+                np.testing.assert_allclose(light.color, LIGHT * case.intensity)
+                # Only the colour moves.
+                self.assertEqual(light.position, tuple(position))
+                self.assertFalse(light.shadow)
+
+    def test_construction_scales_each_sub_scene_and_restores_the_class(self):
         panel = evaluation.build_panel(plans(1), config(count=1))
-        scene = self.scene(len(panel))
-        controller = evaluation.LightingController()
+        scene, created = self.built(panel, evaluation.case_intensities(panel))
+        self.assert_scaled(scene, panel)
+        self.assertEqual(created, {"point": 2 * len(panel), "directional": 0,
+                                   "ambient": len(panel)})
+        self.assert_restored()
+
+    def test_a_rebuild_rescales_the_original_rather_than_compounding(self):
+        panel = evaluation.build_panel(plans(1), config(count=1))
+        intensities = evaluation.case_intensities(panel)
+        scene, _ = self.built(panel, intensities)
         for _ in range(2):
-            controller.apply(scene, panel)
-            for sub, case in zip(scene.sub_scenes, panel):
-                np.testing.assert_allclose(sub.render_system.ambient_light, [.3 * case.intensity] * 3)
-                np.testing.assert_allclose(sub.entities[0].components[0].color,
-                                           np.array([2., 1.6, 1.]) * case.intensity)
+            scene.clear()
+            with maniskill_scene_module(self.cls), \
+                 evaluation.construction_lighting(intensities):
+                scene.build()
+            self.assert_scaled(scene, panel)
+
+    def test_selected_scene_and_positional_colour_preserve_other_arguments(self):
+        scene = self.cls(3)
+        with maniskill_scene_module(self.cls), \
+             evaluation.construction_lighting([1.0, 0.4, 2.0]):
+            scene.add_point_light(POSITIONS[0], LIGHT, True, scene_idxs=[1])
+        self.assertEqual([len(s.entities) for s in scene.sub_scenes], [0, 1, 0])
+        light = scene.sub_scenes[1].entities[0].components[0]
+        np.testing.assert_allclose(light.color, LIGHT * 0.4)
+        self.assertEqual(light.position, tuple(POSITIONS[0]))
+        self.assertTrue(light.shadow)
+        np.testing.assert_array_equal(LIGHT, [2.0, 1.6, 1.0])
+        self.assert_restored()
+
+    def test_a_failed_construction_still_restores_the_class(self):
+        panel = evaluation.build_panel(plans(1), config(count=1))
+        with maniskill_scene_module(self.cls):
+            with self.assertRaises(RuntimeError):
+                with evaluation.construction_lighting(
+                        evaluation.case_intensities(panel)):
+                    raise RuntimeError("scene build blew up")
+        self.assert_restored()
+        # A later environment -- training, or another task -- is unaffected.
+        after = self.cls(3)
+        after.build()
+        for sub in after.sub_scenes:
+            np.testing.assert_allclose(sub.render_system.ambient_light, AMBIENT)
+            np.testing.assert_allclose(sub.entities[0].components[0].color, LIGHT)
+
+    def test_a_scene_reaching_past_the_panel_is_refused(self):
+        with maniskill_scene_module(self.cls):
+            with evaluation.construction_lighting([1.0, 0.4]):
+                with self.assertRaises(RuntimeError):
+                    self.cls(3).build()
+        self.assert_restored()
+
+    def test_an_all_nominal_panel_opens_no_window(self):
+        """A's object panel and the training env are never patched at all."""
+        objects = {}
+        for i in range(5):
+            objects.update(plans(1, f"object{i}"))
+        panel = evaluation.build_panel(objects, config("objects", 25, False))
+        self.assertEqual(evaluation.case_intensities(panel), [])
+        for bad in ([], [1.0, 0.0], [1.0, float("nan")]):
+            with self.subTest(intensities=bad), maniskill_scene_module(self.cls):
+                with self.assertRaises(ValueError):
+                    with evaluation.construction_lighting(bad):
+                        pass
+        self.assert_restored()
+
+    def test_verification_reads_the_built_scene_not_the_intent(self):
+        panel = evaluation.build_panel(plans(1), config(count=1))
+        scene, _ = self.built(panel, evaluation.case_intensities(panel))
+        result = evaluation.verify_construction_lighting(scene, panel)
+        self.assertLess(result["eval_light/construction_intensity_max_error"], 1e-9)
+        # An unscaled build is exactly the failure this has to catch.
+        plain, _ = self.built(panel)
+        with self.assertRaises(RuntimeError):
+            evaluation.verify_construction_lighting(plain, panel)
         scene.parallel_in_single_scene = True
         with self.assertRaises(RuntimeError):
-            controller.apply(scene, panel)
+            evaluation.verify_construction_lighting(scene, panel)
+        # Nominal-only panels have nothing to verify.
+        self.assertEqual(evaluation.verify_construction_lighting(
+            scene, [c for c in panel if c.group != "light"]), {})
 
     def test_unmatched_state_and_unchanged_rgb_do_not_pass(self):
         import torch
@@ -165,6 +316,37 @@ class LightingTest(unittest.TestCase):
         values = evaluation.lighting_pixel_metrics({"image_head": image}, panel)
         self.assertEqual(values["eval_light/dim/reset_rgb_mae"], 60)
         self.assertEqual(values["eval_light/bright/reset_rgb_mae"], 100)
+        self.assertEqual(values["eval_light/dim/reset_changed_pixel_fraction"], 1)
+        self.assertEqual(values["eval_light/nominal/reset_mean_brightness"], 100)
+        self.assertEqual(values["eval_light/dim/reset_mean_brightness"], 40)
+
+    def test_a_sub_scene_sized_difference_is_not_accepted_as_illumination(self):
+        """The measured cross-sub-scene artifact: ~0.008 MAE over ~2% of pixels."""
+        import torch
+        panel = evaluation.build_panel(plans(1), config(count=1))
+        image = torch.full((len(panel), 40, 40, 3), 100.0)
+        for i, case in enumerate(panel):
+            if case.condition != "nominal":
+                image[i, 0, :2] = 130  # a few pixels move a lot, the scene does not
+        with self.assertRaises(RuntimeError) as caught:
+            evaluation.lighting_pixel_metrics({"image_head": image}, panel)
+        self.assertIn("not illumination", str(caught.exception))
+        # Enough pixels, but each barely moving, is refused too.
+        image = torch.full((len(panel), 40, 40, 3), 100.0)
+        for i, case in enumerate(panel):
+            if case.condition != "nominal":
+                image[i] += 0.5
+        with self.assertRaises(RuntimeError):
+            evaluation.lighting_pixel_metrics({"image_head": image}, panel)
+        # The response actually measured at build time clears both thresholds.
+        for i, case in enumerate(panel):
+            image[i] = 100.0 * case.intensity
+        values = evaluation.lighting_pixel_metrics({"image_head": image}, panel)
+        self.assertGreaterEqual(values["eval_light/dim/reset_rgb_mae"],
+                                evaluation.LIGHTING_MIN_RGB_MAE)
+        self.assertGreaterEqual(
+            values["eval_light/bright/reset_changed_pixel_fraction"],
+            evaluation.LIGHTING_MIN_CHANGED_PIXEL_FRACTION)
 
 
 class ResetIntegrationTest(unittest.TestCase):
@@ -184,9 +366,8 @@ class ResetIntegrationTest(unittest.TestCase):
                   spawn_data={"uid": {"robot_qpos": np.zeros((20, 5))}}, build_config_idxs=[7])
         calls = []
         env = NS(unwrapped=base, reset=lambda **kwargs: calls.append(kwargs) or ({}, {}))
-        controller = NS(apply=lambda *args: None)
         base.scene = None
-        actor = NS(_env=env, _eval_seed=42, _device="cpu", _lighting_controller=controller,
+        actor = NS(_env=env, _eval_seed=42, _device="cpu", _light_intensities=[],
                    eval_cases=evaluation.build_panel(plans(1), config(count=1, lighting=False)))
         with patch.dict(sys.modules, {"envs.evaluation": evaluation}):
             namespace["_reset_simulator"](actor, initial=True)
@@ -196,6 +377,80 @@ class ResetIntegrationTest(unittest.TestCase):
         self.assertEqual(calls[1]["options"]["spawn_selection_idxs"], [0])
         self.assertEqual(calls[1]["options"]["task_plan_idxs"].tolist(), [0])
         self.assertEqual(calls[0]["seed"], calls[1]["seed"])
+        # One reset per call now: the extra refresh reset is gone.
+        self.assertEqual(len(calls), 2)
+
+    def test_only_a_reconfiguring_reset_opens_the_lighting_window(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not installed")
+        tree = ast.parse(Path("envs/maniskill.py").read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                   and n.name == "ManiSkillVecEnv")
+        reset = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                     and n.name == "_reset_simulator")
+        namespace = {"torch": torch}
+        exec(compile(ast.Module(body=[reset], type_ignores=[]), "<adapter>", "exec"),
+             namespace)
+        panel = evaluation.build_panel(plans(1), config(count=1))
+        rows = [NS(subtasks=[NS(composite_subtask_uids=["uid"])]) for _ in range(12)]
+        base = NS(scene_builder=NS(build_config_names_to_idxs={"s00": 7}),
+                  build_config_idx_to_task_plans={7: rows}, scene=None,
+                  spawn_data={"uid": {"robot_qpos": np.zeros((20, 5))}},
+                  build_config_idxs=[7] * len(panel))
+        scene_type = scene_class()
+        base.scene = scene_type(len(panel))
+        poses = torch.zeros(len(panel), 7)
+        poses[:, 3] = 1
+        base.agent = NS(robot=NS(pose=NS(raw_pose=poses), qpos=poses, qvel=poses))
+        base.subtask_objs = [NS(pose=NS(raw_pose=poses))]
+        windows, calls = [], []
+
+        def simulator_reset(**kwargs):
+            calls.append(kwargs)
+            if kwargs["options"].get("reconfigure"):
+                base.scene.clear()
+                base.scene.build()
+            levels = [float(s.render_system.ambient_light[0]) / 0.3 * 100
+                      for s in base.scene.sub_scenes]
+            image = torch.tensor(levels)[:, None, None, None].expand(-1, 2, 2, 3)
+            return {"image_head": image}, {}
+
+        env = NS(unwrapped=base, reset=simulator_reset)
+        actor = NS(_env=env, _eval_seed=42, _device="cpu", eval_cases=panel,
+                   _light_intensities=evaluation.case_intensities(panel))
+
+        @contextlib.contextmanager
+        def spy(intensities):
+            windows.append(list(intensities))
+            with evaluation.construction_lighting(intensities) as created:
+                yield created
+
+        stub = types.SimpleNamespace(
+            construction_lighting=spy, check_lighting_reset=evaluation.check_lighting_reset,
+            lighting_pixel_metrics=evaluation.lighting_pixel_metrics,
+            verify_construction_lighting=evaluation.verify_construction_lighting)
+        with maniskill_scene_module(scene_type), \
+             patch.dict(sys.modules, {"envs.evaluation": stub}):
+            namespace["_reset_simulator"](actor, initial=True)
+            self.assertEqual(len(windows), 1)
+            self.assertEqual(windows[0], evaluation.case_intensities(panel))
+            initial_metrics = dict(actor.eval_reset_metrics)
+            light_ids = [id(s.entities[0].components[0]) for s in base.scene.sub_scenes]
+            # An ordinary reset rescales nothing and rebuilds nothing.
+            for _ in range(2):
+                namespace["_reset_simulator"](actor, initial=False)
+                self.assertEqual(actor.eval_reset_metrics, initial_metrics)
+                self.assertEqual(
+                    [id(s.entities[0].components[0]) for s in base.scene.sub_scenes],
+                    light_ids)
+            self.assertEqual(len(windows), 1)
+            self.assertEqual(len(calls), 3)
+            # An explicit later reconfigure applies original intensities again.
+            namespace["_reset_simulator"](actor, initial=True)
+            self.assertEqual(len(windows), 2)
+            self.assertEqual(actor.eval_reset_metrics, initial_metrics)
 
 
 class TransferConfigTest(unittest.TestCase):

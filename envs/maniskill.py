@@ -291,7 +291,8 @@ class ManiSkillVecEnv:
         self.eval_cases = []
         self.training_scenes = list(getattr(config, "train_build_config_ids", []) or [])
         self._eval_seed = int(getattr(config, "eval_seed", config.seed))
-        self._lighting_controller = None
+        # Per sub-scene light scale, empty unless a condition changes it.
+        self._light_intensities = []
         self.eval_reset_metrics = {}
         # The eval loop runs exactly one episode per env, so the env count is
         # the episode count.
@@ -429,11 +430,11 @@ class ManiSkillVecEnv:
             else:
                 task_plans = [p for plans in selected.values() for p in plans]
             if self._eval and getattr(config, "eval_panel", ""):
-                from envs.evaluation import build_panel, LightingController
+                from envs.evaluation import build_panel, case_intensities
                 self.eval_cases = build_panel(selected, config)
                 self._num_envs = len(self.eval_cases)
                 make_kwargs["num_envs"] = self._num_envs
-                self._lighting_controller = LightingController()
+                self._light_intensities = case_intensities(self.eval_cases)
                 if any(c.group == "light" for c in self.eval_cases) and str(config.shader_dir) != "minimal":
                     raise ValueError("lighting evaluation currently requires shader_dir=minimal")
                 print(f"[eval] fixed panel: {config.eval_episode_num} primary + "
@@ -576,18 +577,21 @@ class ManiSkillVecEnv:
             options.update(reconfigure=True, build_config_idxs=bcis)
         elif list(base.build_config_idxs) != bcis:
             raise RuntimeError("fixed evaluation scene assignment drifted")
-        # Apply illumination before reset renders the observation. Reconfigure
-        # rebuilds lights; apply afterwards and refresh sensors in that case.
-        if not initial:
-            self._lighting_controller.apply(base.scene, self.eval_cases)
-        obs, info = self._env.reset(seed=self._eval_seed, options=options)
-        if initial and any(c.group == "light" for c in self.eval_cases):
-            self._lighting_controller.apply(base.scene, self.eval_cases)
-            # A second reset refreshes the wrapper's raw segmentation cache,
-            # with identical plans/spawns and without another reconfiguration.
-            return self._reset_simulator(initial=False)
-        from envs.evaluation import check_lighting_reset, lighting_pixel_metrics
-        self.eval_reset_metrics = check_lighting_reset(base, self.eval_cases)
+        from envs.evaluation import (
+            check_lighting_reset, construction_lighting, lighting_pixel_metrics,
+            verify_construction_lighting)
+
+        # Illumination is set as the scene is built, so the window is exactly
+        # the reset that reconfigures. An ordinary reset rescales nothing and
+        # rebuilds nothing, which is also why it cannot compound.
+        if self._light_intensities and options.get("reconfigure"):
+            with construction_lighting(self._light_intensities):
+                obs, info = self._env.reset(seed=self._eval_seed, options=options)
+        else:
+            obs, info = self._env.reset(seed=self._eval_seed, options=options)
+        self.eval_reset_metrics = verify_construction_lighting(
+            base.scene, self.eval_cases)
+        self.eval_reset_metrics.update(check_lighting_reset(base, self.eval_cases))
         self.eval_reset_metrics.update(lighting_pixel_metrics(obs, self.eval_cases))
         return obs, info
 

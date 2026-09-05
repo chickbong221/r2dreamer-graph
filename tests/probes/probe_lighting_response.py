@@ -29,7 +29,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from envs.evaluation import EvalCase, LightingController, check_lighting_reset
+from envs.evaluation import (
+    EvalCase, check_lighting_reset, construction_lighting,
+    verify_construction_lighting)
 
 CONDITIONS = (("dim", 0.4), ("nominal", 1.0), ("bright", 2.0))
 NOMINAL = [name for name, _ in CONDITIONS].index("nominal")
@@ -112,65 +114,22 @@ def reset_fixed(env, args):
     return base
 
 
-@contextlib.contextmanager
-def construction_time_intensities(intensities):
-    """Scale the lights as the scene builder creates them, per sub-scene.
+def runtime_mutate(scene, intensities):
+    """Write new light colours into a built scene, the way production used to.
 
-    ReplicaCAD builds its own lighting inside ``scene_builder.build``, so the
-    env's ``_load_lighting`` hook returns early and patching it would do
-    nothing. These two ``ManiSkillScene`` calls are the creation path.
-    Positions, materials and every other setting are passed through unchanged.
+    Kept only so this probe can keep demonstrating that the renderer ignores
+    it. Production sets illumination at construction instead.
     """
-    from mani_skill.envs.scene import ManiSkillScene
-
-    original_point = ManiSkillScene.add_point_light
-    original_directional = ManiSkillScene.add_directional_light
-    original_ambient = ManiSkillScene.set_ambient_light
-    seen = {"point": 0, "directional": 0, "ambient": 0}
-
-    def per_scene(add, kind):
-        # Colour is positional in ManiSkill's own default lighting and keyword
-        # in ReplicaCAD's; accept either and touch nothing else.
-        def patched(self, *args, **kwargs):
-            seen[kind] += 1
-            scene_idxs = kwargs.pop("scene_idxs", None)
-            indices = (list(range(len(self.sub_scenes)))
-                       if scene_idxs is None else list(scene_idxs))
-            if "color" in kwargs:
-                colour, position = kwargs.pop("color"), None
-            elif len(args) >= 2:
-                colour, position = args[1], 1
-            else:
-                raise TypeError(f"{kind} light created without a colour")
-            result = None
-            for index in indices:
-                scaled = np.asarray(colour, float) * intensities[index]
-                call = list(args)
-                if position is None:
-                    result = add(self, *call, color=scaled, scene_idxs=[index],
-                                 **kwargs)
-                else:
-                    call[position] = scaled
-                    result = add(self, *call, scene_idxs=[index], **kwargs)
-            return result
-        return patched
-
-    def patched_ambient(self, color):
-        seen["ambient"] += 1
-        for index, sub in enumerate(self.sub_scenes):
-            sub.render_system.ambient_light = (
-                np.asarray(color, float) * intensities[index])
-
-    ManiSkillScene.add_point_light = per_scene(original_point, "point")
-    ManiSkillScene.add_directional_light = per_scene(
-        original_directional, "directional")
-    ManiSkillScene.set_ambient_light = patched_ambient
-    try:
-        yield seen
-    finally:
-        ManiSkillScene.add_point_light = original_point
-        ManiSkillScene.add_directional_light = original_directional
-        ManiSkillScene.set_ambient_light = original_ambient
+    written = 0
+    for sub, scale in zip(scene.sub_scenes, intensities):
+        render = sub.render_system
+        render.ambient_light = np.asarray(render.ambient_light, float) * scale
+        for entity in sub.entities:
+            for component in entity.components:
+                if type(component).__name__.endswith("LightComponent"):
+                    component.color = np.asarray(component.color, float) * scale
+                    written += 1
+    return written
 
 
 def read_lights(scene):
@@ -316,11 +275,8 @@ def run_runtime(args, out):
         baseline_repeat = capture(base)
 
         before = read_lights(base.scene)
-        cases = [EvalCase(scene=args.scene, object=args.object, plan_index=0,
-                          group="light", condition=name, intensity=value,
-                          repetition=0)
-                 for name, value in CONDITIONS]
-        LightingController().apply(base.scene, cases)
+        cases = panel_cases(args)
+        runtime_mutate(base.scene, INTENSITIES)
         after = read_lights(base.scene)
 
         images = capture(base)
@@ -358,18 +314,29 @@ def run_runtime(args, out):
         env.close()
 
 
-def build_and_capture(args, intensities, label):
+def panel_cases(args):
+    return [EvalCase(scene=args.scene, object=args.object, plan_index=0,
+                     group="light", condition=name, intensity=value,
+                     repetition=0)
+            for name, value in CONDITIONS]
+
+
+def build_and_capture(args, intensities, label, cases=None):
     """One env whose lights are already scaled when the scene is built."""
     import gc
     import torch
 
     print(f"[probe] constructing {label} build with intensities {intensities}",
           flush=True)
-    with construction_time_intensities(intensities) as seen:
+    verified = {}
+    # The production hook, not a copy of it.
+    with construction_lighting(intensities) as seen:
         env = build_env(args)
         try:
             base = reset_fixed(env, args)
             lights = read_lights(base.scene)
+            if cases is not None:
+                verified = verify_construction_lighting(base.scene, cases)
             fingerprint = state_fingerprint(base)
             images = capture(base)
             repeat = capture(base)
@@ -382,12 +349,12 @@ def build_and_capture(args, intensities, label):
     print(f"[probe] {label}: intercepted {seen} creation call(s), "
           f"lights/sub-scene={[len(row['lights']) for row in lights]}", flush=True)
     return {"images": images, "repeat": repeat, "lights": lights,
-            "state": fingerprint, "intercepted": dict(seen)}
+            "state": fingerprint, "intercepted": dict(seen), "verified": verified}
 
 
 def run_construction(args, out):
     """Scaled-at-build against a separately built, all-nominal scene."""
-    scaled = build_and_capture(args, INTENSITIES, "scaled")
+    scaled = build_and_capture(args, INTENSITIES, "scaled", panel_cases(args))
     save_strips(scaled["images"], out)
     np.savez_compressed(out / "images.npz", **scaled["images"])
     # Patched the same way with 1.0 everywhere, so the only difference between
@@ -417,6 +384,7 @@ def run_construction(args, out):
         "light_colors_nominal": [[light["color"] for light in row["lights"]]
                                  for row in reference["lights"]],
         "state_difference_between_builds": drift,
+        "construction_verification": scaled["verified"],
         "cameras": report,
     }
     print(f"\n[probe] lights/sub-scene={summary['lights_per_sub_scene']}  "

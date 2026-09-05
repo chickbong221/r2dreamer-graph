@@ -5,10 +5,18 @@ evaluation is constructed. The panel is also the source of metric grouping.
 """
 
 from collections import defaultdict
+import contextlib
 from dataclasses import dataclass
 import re
 
 import numpy as np
+
+# Two sub-scenes at a matched state, with no illumination difference at all,
+# were measured to differ by ~0.008 MAE over ~2% of pixels; a working
+# 0.4x/2.0x build moves ~40 MAE over ~100%. These sit far above the first and
+# far below the second, so neither noise nor a real change is near them.
+LIGHTING_MIN_RGB_MAE = 1.0
+LIGHTING_MIN_CHANGED_PIXEL_FRACTION = 0.5
 
 
 @dataclass(frozen=True)
@@ -128,39 +136,140 @@ def panel_metrics(cases, values, training_scenes):
     return result
 
 
-class LightingController:
-    """Scale native lights, not pixels/materials/renderers; never compound scales."""
+def case_intensities(cases):
+    """Per sub-scene intensity, or empty when no condition changes the light."""
+    scales = [float(c.intensity) for c in cases]
+    return [] if all(v == 1.0 for v in scales) else scales
 
-    def __init__(self):
-        self._signature = None
-        self._original = []
 
-    def apply(self, scene, cases):
-        if not any(c.group == "light" for c in cases):
-            return
-        sub_scenes = list(scene.sub_scenes)
-        if getattr(scene, "parallel_in_single_scene", False) or len(sub_scenes) != len(cases):
-            raise RuntimeError("lighting evaluation requires isolated per-env render scenes")
-        signature = tuple(id(s) for s in sub_scenes)
-        if signature != self._signature:
-            original = []
-            for sub in sub_scenes:
-                render = sub.render_system
-                ambient = np.asarray(render.ambient_light, float).copy()
-                entities = sub.entities
-                lights = []
-                for entity in entities:
-                    for component in entity.components:
-                        if type(component).__name__.endswith("LightComponent"):
-                            lights.append((component, np.asarray(component.color, float).copy()))
-                if not lights:
-                    raise RuntimeError("no native lights found; refusing an inert lighting evaluation")
-                original.append((render, ambient, lights))
-            self._signature, self._original = signature, original
-        for case, (render, ambient, lights) in zip(cases, self._original):
-            render.ambient_light = ambient * case.intensity
-            for light, color in lights:
-                light.color = color * case.intensity
+@contextlib.contextmanager
+def construction_lighting(intensities):
+    """Scale each sub-scene's lights as the scene builder creates them.
+
+    Not afterwards: the GPU render group binds lights when it is built and
+    refreshes only poses from then on, so a colour written after the first
+    render is never read. ReplicaCAD also creates its own lighting inside
+    ``scene_builder.build``, so the env's ``_load_lighting`` hook never runs
+    and is not the place either.
+
+    Positions, shadows and every other argument pass through untouched.
+    Scaling happens once per created light, from the dataset's own value, so
+    a later rebuild rescales the original rather than compounding. The patch
+    lives on the scene class for one construction and is always restored.
+    """
+    from mani_skill.envs.scene import ManiSkillScene
+
+    scales = [float(v) for v in intensities]
+    if not scales or any(not np.isfinite(v) or v <= 0 for v in scales):
+        raise ValueError(f"invalid construction light intensities: {intensities}")
+    created = {"point": 0, "directional": 0, "ambient": 0}
+    originals = {name: getattr(ManiSkillScene, name)
+                 for name in ("add_point_light", "add_directional_light",
+                              "set_ambient_light")}
+
+    def scale_for(index):
+        if index >= len(scales):
+            raise RuntimeError(
+                f"construction lighting has {len(scales)} intensities but the "
+                f"scene reached sub-scene {index}; the hook is not scoped to "
+                "the environment it was opened for")
+        return scales[index]
+
+    def per_scene(add, kind):
+        # Colour is a keyword in ReplicaCAD's calls and positional in
+        # ManiSkill's own default lighting. Accept either.
+        def patched(self, *args, **kwargs):
+            chosen = kwargs.pop("scene_idxs", None)
+            indices = (list(range(len(self.sub_scenes)))
+                       if chosen is None else list(chosen))
+            if "color" in kwargs:
+                colour, slot = kwargs.pop("color"), None
+            elif len(args) >= 2:
+                colour, slot = args[1], 1
+            else:
+                raise TypeError(f"{kind} light created without a colour")
+            result = None
+            for index in indices:
+                created[kind] += 1
+                scaled = np.asarray(colour, float) * scale_for(index)
+                call = list(args)
+                if slot is None:
+                    result = add(self, *call, color=scaled,
+                                 scene_idxs=[index], **kwargs)
+                else:
+                    call[slot] = scaled
+                    result = add(self, *call, scene_idxs=[index], **kwargs)
+            return result
+        return patched
+
+    def patched_ambient(self, color):
+        for index, sub in enumerate(self.sub_scenes):
+            created["ambient"] += 1
+            sub.render_system.ambient_light = (
+                np.asarray(color, float) * scale_for(index))
+
+    ManiSkillScene.add_point_light = per_scene(
+        originals["add_point_light"], "point")
+    ManiSkillScene.add_directional_light = per_scene(
+        originals["add_directional_light"], "directional")
+    ManiSkillScene.set_ambient_light = patched_ambient
+    try:
+        yield created
+    finally:
+        for name, function in originals.items():
+            setattr(ManiSkillScene, name, function)
+
+
+def _sub_scene_lights(sub):
+    """This sub-scene's ambient colour and every light colour on it."""
+    ambient = np.asarray(sub.render_system.ambient_light, float).reshape(-1)
+    colours = []
+    for entity in sub.entities:
+        for component in entity.components:
+            if type(component).__name__.endswith("LightComponent"):
+                colours.append(np.asarray(component.color, float).reshape(-1))
+    return ambient, colours
+
+
+def verify_construction_lighting(scene, cases):
+    """The built scene carries the intended intensities, relative to nominal.
+
+    Ratios against a nominal sub-scene, so this needs no record of the
+    dataset's original colours and cannot be fooled by a rebuild. It reads
+    the scene rather than the pixels; ``lighting_pixel_metrics`` is what says
+    the renderer used them.
+    """
+    scales = case_intensities(cases)
+    if not scales:
+        return {}
+    sub_scenes = list(scene.sub_scenes)
+    if getattr(scene, "parallel_in_single_scene", False) or len(sub_scenes) != len(cases):
+        raise RuntimeError("lighting evaluation requires isolated per-env render scenes")
+    reference = next((i for i, v in enumerate(scales) if v == 1.0), None)
+    if reference is None:
+        raise RuntimeError("lighting evaluation has no nominal sub-scene to measure against")
+    ambient, colours = _sub_scene_lights(sub_scenes[reference])
+    if not colours:
+        raise RuntimeError("no native lights found; refusing an inert lighting evaluation")
+    worst = 0.0
+    for index, scale in enumerate(scales):
+        built_ambient, built_colours = _sub_scene_lights(sub_scenes[index])
+        if not built_colours or len(built_colours) != len(colours):
+            raise RuntimeError(
+                f"sub-scene {index} carries {len(built_colours)} light(s), "
+                f"nominal carries {len(colours)}")
+        for want, got in zip([ambient] + colours, [built_ambient] + built_colours):
+            usable = np.abs(want) > 1e-6
+            if not usable.any():
+                continue
+            ratio = got[usable] / want[usable]
+            worst = max(worst, float(np.max(np.abs(ratio - scale))))
+    if worst > 1e-3:
+        raise RuntimeError(
+            f"the built scene does not carry the intended light intensities "
+            f"(worst relative error {worst:.4g}); construction-time lighting "
+            "did not apply")
+    return {"eval_light/construction_intensity_max_error": worst}
 
 
 class SuccessMilestones:
@@ -219,20 +328,39 @@ def lighting_pixel_metrics(obs, cases):
     images = [v for k, v in obs.items() if k.startswith("image_")]
     if not images:
         raise RuntimeError("lighting evaluation has no policy RGB images")
-    differences = defaultdict(list)
+    differences, changed, brightness = (defaultdict(list) for _ in range(3))
     for i, case in enumerate(cases):
-        if case.group != "light" or case.condition == "nominal":
+        if case.group != "light":
             continue
+        ref = nominal[case.repetition]
         for image in images:
-            ref = nominal[case.repetition]
-            delta = (image[i].float() - image[ref].float()).abs().mean().item()
-            differences[case.condition].append(delta)
+            frame = image[i].float()
+            brightness[case.condition].append(frame.mean().item())
+            if case.intensity == 1.0:
+                continue
+            delta = (frame - image[ref].float()).abs()
+            differences[case.condition].append(delta.mean().item())
+            changed[case.condition].append(
+                (delta >= 1).any(dim=-1).float().mean().item())
     result = {}
+    for condition, values in brightness.items():
+        result[f"eval_light/{condition}/reset_mean_brightness"] = float(np.mean(values))
     for condition, values in differences.items():
         change = float(np.mean(values))
-        if not np.isfinite(change) or change <= 0:
-            raise RuntimeError(f"lighting condition {condition!r} did not change policy RGB")
+        fraction = float(np.mean(changed[condition]))
         result[f"eval_light/{condition}/reset_rgb_mae"] = change
+        result[f"eval_light/{condition}/reset_changed_pixel_fraction"] = fraction
+        # A positive MAE is too weak: two sub-scenes differ slightly whatever
+        # the lighting does. Demand a change no cross-sub-scene artifact
+        # reaches.
+        if (not np.isfinite(change) or change < LIGHTING_MIN_RGB_MAE
+                or fraction < LIGHTING_MIN_CHANGED_PIXEL_FRACTION):
+            raise RuntimeError(
+                f"lighting condition {condition!r} barely changed policy RGB: "
+                f"mae={change:.4g} (needs >= {LIGHTING_MIN_RGB_MAE}), changed "
+                f"pixels={fraction:.4g} (needs >= "
+                f"{LIGHTING_MIN_CHANGED_PIXEL_FRACTION}). A difference this "
+                "small is sub-scene variation, not illumination.")
     for case in cases:
         if case.group == "light":
             result[f"eval_light/{case.condition}/intensity_multiplier"] = case.intensity

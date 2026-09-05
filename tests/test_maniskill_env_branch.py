@@ -88,7 +88,7 @@ class BranchTest(unittest.TestCase):
         "task_plans", "scene_builder_cls", "spawn_data_fp",
         "plan_data_from_file", "FetchActionWrapper", "mshab_obj",
         "require_build_configs_repeated_equally_across_envs",
-        "balance_objects", "build_panel", "LightingController", "eval_panel",
+        "balance_objects", "build_panel", "case_intensities", "eval_panel",
     )
 
     def setUp(self):
