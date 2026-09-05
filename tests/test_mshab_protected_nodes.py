@@ -16,6 +16,7 @@ whitelist key and therefore an entity id, which no scan can tell apart.
 """
 
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import numpy as np
@@ -98,6 +99,96 @@ def _spec(decl=None, pose=None, tolerance=0.05):
     return SiteSpec(declaration=decl or _decl(),
                     pose_world=np.asarray(pose or _pose(), float),
                     tolerance=tolerance)
+
+
+class PickContextBudgetTest(unittest.TestCase):
+    """The reported 13-node scene must fit while its task nodes survive."""
+
+    TARGET_ID = "actor:024_bowl-0"
+    CONTEXT = [
+        "actor:024_bowl-1", "actor:024_bowl-3", "actor:024_bowl-4",
+        "actor:024_bowl-5", "actor:frl_apartment_chair_01-15",
+        "actor:frl_apartment_chair_01-16", "actor:frl_apartment_sofa-7",
+        "actor:frl_apartment_table_02-5", "actor:frl_apartment_tvstand-2",
+        "link:kitchen_counter-0/body",
+    ]
+
+    def _builder(self):
+        from scenegraph.core.graph_builder import GraphBuilder
+        from scenegraph.core.whitelist import load_whitelist
+        builder = GraphBuilder(None, {
+            "selection": {"n_max": 8}, "temporal": {"K": 5},
+            "task_group": "tidy_house", "disable_object_object_relations": True,
+        })
+        builder.selector.set_whitelist(load_whitelist(
+            "scenegraph/configs/subtask_whitelists/tidy_house/pick_024_bowl.json"))
+        return builder
+
+    def _step(self, builder, context, frame=0, is_mshab=True):
+        from scenegraph.core.entity_identity import normalize_asset_key
+        actor = type("Actor", (), {"name": "024_bowl-0"})()
+        state = SimpleNamespace(
+            is_mshab=is_mshab, active_subtask_type="pick", active_obj=actor,
+            active_obj_merged=None, active_obj_id="024_bowl", env_idx=0,
+        )
+        fresh = {"ee": _ee()}
+        for key in [self.TARGET_ID, *context]:
+            fresh[key] = _obj(key, normalize_asset_key(key))
+
+        def emit(graph, *_args, **_kwargs):
+            graph.edges.append(Edge("ee", self.TARGET_ID, "grasp", "holds"))
+
+        with (patch("scenegraph.core.graph_builder.get_privileged_state", return_value=state),
+              patch("scenegraph.core.graph_builder.build_nodes",
+                    return_value=(fresh, None, "fetch_head", None)),
+              patch("scenegraph.core.graph_builder.build_absolute_edges", side_effect=emit),
+              patch.object(builder, "_resolve_and_bind_whitelist"),
+              patch.object(builder, "_site_specs", return_value=[_spec()]),
+              patch.object(builder, "_refresh_live_state") as refresh):
+            graph, *_ = builder.step({}, frame, need_masks=False)
+        # Admission must bound live pose/projection work as well as packing.
+        self.assertLessEqual(len(refresh.call_args.args[0]), 8)
+        return graph
+
+    def test_overflow_keeps_task_rows_and_does_not_reinject_fifo_victims(self):
+        from scenegraph.adapters.graph_pack import pack_graph
+        from scenegraph.adapters.graph_vocab import build_graph_vocab
+        builder = self._builder()
+        vocab = build_graph_vocab("scenegraph/configs/subtask_whitelists/tidy_house")
+        self._step(builder, self.CONTEXT[:5])
+        victim = self.CONTEXT[0]
+        builder.temporal._values[("ee", victim, "height-offset")] = [0.0]
+        self._step(builder, self.CONTEXT[:6], frame=1)
+        self.assertIn(victim, builder.registry.evicted_ids)
+        self.assertNotIn(victim, builder.selector._history)
+        self.assertNotIn(("ee", victim, "height-offset"), builder.temporal._values)
+
+        graph = self._step(builder, self.CONTEXT, frame=2)
+        packed = pack_graph(graph, vocab, n_max=8, e_max=168, n_cams=1)
+        self.assertEqual(len(graph.nodes), 8)
+        self.assertEqual(graph.meta["n_nodes_dropped"], 5)
+        self.assertEqual(list(packed["graph_node_target"][:3]), [0, 1, 0])
+        rows, _ = _row_assignment(graph, 8, self.TARGET_ID, True, SITE_EE_REST)
+        self.assertEqual({row: node.node_id for row, node in rows if row < 3},
+                         {0: "ee", 1: self.TARGET_ID, 2: SITE_EE_REST})
+        retained = {node.node_id: node.index for node in graph.nodes}
+        again = self._step(builder, self.CONTEXT, frame=3)
+        self.assertEqual({node.node_id: node.index for node in again.nodes}, retained)
+        self.assertEqual(builder.registry.evicted_ids, [])
+        hidden = builder.selector.merge_retained({}, 4)
+        self.assertNotIn(victim, hidden)
+        # Reset forgets old arrival order and starts an independent budget.
+        builder.reset_episode()
+        restarted = self._step(builder, self.CONTEXT[:5])
+        self.assertIn(victim, {node.node_id for node in restarted.nodes})
+
+    def test_non_mshab_overflow_and_missing_protected_nodes_still_raise(self):
+        builder = self._builder()
+        with self.assertRaisesRegex(RuntimeError, "graph capacity exceeded"):
+            self._step(builder, self.CONTEXT, is_mshab=False)
+        with self.assertRaisesRegex(RuntimeError, "protected graph nodes are missing"):
+            builder._select_pick_context({"ee": _ee(), SITE_EE_REST: _site()},
+                                         self.TARGET_ID, SITE_EE_REST)
 
 
 class RowAssignmentTest(unittest.TestCase):

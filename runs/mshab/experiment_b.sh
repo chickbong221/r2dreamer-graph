@@ -7,12 +7,10 @@
 #   1. The tidy_house Pick assets must validate. The nine-object schema-v9
 #      collection is mined; what a run still needs is every bin the graph
 #      builder demands, which is what validate_task_assets checks below.
-#   2. entity_vocab comes from the mined asset. Approved V1 capacity: 12 nodes
-#      (EE + rest site + up to 10 physical instances), 384 stored edges.
-#      With object_object_spatial=false, a conservative edge bound is
-#      10*6 + C(10,2)*6 + 3 = 333 with OO restored; the default EE-only
-#      mode needs at most 63 edges. Keep capacity for either flag setting.
-#      Node overflow still raises; 12 is not a proven 63-scene node bound.
+#   2. entity_vocab comes from the mined asset. Capacity: 8 nodes, 168 edges.
+#      EE + target + rest site are protected; five context rows use FIFO.
+#      With object_object_spatial=false, six physical nodes need at most
+#      6*6 + C(6,2)*6 + 3 = 129 edges with OO restored, or 39 EE-only.
 #        python -m scenegraph.tools.audit_graph_capacity #          --whitelist-dir scenegraph/configs/subtask_whitelists/tidy_house
 #   3. Checkpoints use eval/success_once (higher is better), with no tiebreak.
 #      Best-only saving still starts at 8M environment steps.
@@ -42,7 +40,7 @@ TS=$(date +%Y%m%d_%H%M%S)
 # divisibility and hands one configuration to each evaluation sub-scene.
 python train.py env=mshab_pick_b model=size50M_graph_simple \
     env.graph.whitelist_dir="$WL" model.graph.entity_vocab="$ENTITY_VOCAB" \
-    model.graph.n_max=12 model.graph.e_max=384 \
+    model.graph.n_max=8 model.graph.e_max=168 \
     checkpoint.enabled=true checkpoint.metric=eval/success_once checkpoint.tiebreak='' \
     wandb.group=mshab_tidy_house_pick_B wandb.name=B-one-object-scene-generalisation \
     logdir="$REPO_ROOT/logdir/$TS/experiment_B" "$@"

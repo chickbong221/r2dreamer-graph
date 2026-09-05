@@ -158,7 +158,8 @@ class FixedRowTest(unittest.TestCase):
         graph = _graph(nodes, target_id=None)
         with self.assertRaises(RuntimeError) as cm:
             _row_assignment(graph, N_MAX, None, False)
-        self.assertIn("Retention never evicts", str(cm.exception))
+        self.assertIn("node budget exceeded", str(cm.exception))
+        self.assertIn("n_max=8", str(cm.exception))
 
 
 # --------------------------------------------------------------------------- #

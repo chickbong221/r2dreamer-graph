@@ -4,9 +4,9 @@ Pipeline: build_nodes -> apply_whitelist -> merge_retained -> live pose
 refresh -> visibility policy -> registry.assign -> absolute facts -> temporal
 labels.
 
-Retention is unconditional: a whitelisted object seen once stays a vertex until
-episode reset. Capacity is therefore a configuration error, not a runtime
-decision, and overflow raises rather than evicting.
+Ordinary tasks retain admitted objects until reset and raise on overflow.
+MS-HAB Pick with an EE rest site protects its three task nodes and uses FIFO
+for the remaining context capacity.
 """
 
 from __future__ import annotations
@@ -493,11 +493,9 @@ class GraphBuilder:
         )
 
     def _check_capacity(self, nodes: Dict[str, Node], frame: int, state) -> None:
-        """Retention makes capacity a configuration fact, not a runtime choice.
+        """Check the final node set after any permitted Pick FIFO selection.
 
-        Nothing is evicted any more, so an overflowing scene has no correct
-        behaviour left: dropping a vertex would silently delete facts the
-        progress target reads. Raise instead, naming what would have to grow.
+        Packing must not truncate a frame that still exceeds capacity.
         """
         objects = [n for n in nodes.values() if n.node_type == "object"]
         capacity = self.registry.n_max - 1
@@ -513,6 +511,21 @@ class GraphBuilder:
             "Raise model.graph.n_max (and e_max with it) or tighten the "
             "whitelist -- retention never evicts."
         )
+
+    def _select_pick_context(self, nodes, target_id, site_id):
+        """Bound Pick context before refreshing poses or emitting relations."""
+        if target_id is None or "ee" not in nodes:
+            raise RuntimeError(
+                "MS-HAB Pick FIFO requires the end effector and a named active target")
+        selected = self.registry.assign(
+            nodes, overflow="fifo", protected=(target_id, site_id))
+        removed = set(self.registry.evicted_ids) | set(self.registry.rejected_ids)
+        self.selector.evict(removed)
+        self.temporal.purge(removed)
+        for node_id in removed:
+            self._last_seen.pop(node_id, None)
+            self._entities.pop(node_id, None)
+        return selected
 
     def _entity_for(self, node: Node, state):
         """Cached simulator entity for one node, resolved on first sight.
@@ -558,7 +571,7 @@ class GraphBuilder:
         re-read every frame and the snapshot is never trusted for geometry.
         """
         for node in nodes.values():
-            if node.node_type != "object":
+            if node.node_type != "object" or node.source == "site":
                 continue
             ent = self._entity_for(node, state)
             if ent is None:
@@ -580,6 +593,10 @@ class GraphBuilder:
         """
         keep = self.visibility_policy == VISIBILITY_KEEP
         for node in nodes.values():
+            if node.source == "site":
+                # Virtual sites are refreshed by their provider and have no
+                # simulator body to resolve or project.
+                continue
             if keep or node.node_type == "ee" or node.visible:
                 node.in_frame = True
             else:
@@ -658,6 +675,17 @@ class GraphBuilder:
         nodes = self.selector.apply_whitelist(nodes)
         self._check_admission(built, nodes)
         nodes = self.selector.merge_retained(nodes, frame)
+        specs = self._site_specs(state)
+        protected_site_id = self._protected_site_id(specs)
+        bounded_pick = (
+            self.use_target_flag and bool(getattr(state, "is_mshab", False))
+            and state.active_subtask_type == "pick"
+            and protected_site_id is not None
+        )
+        if bounded_pick:
+            self._merge_site_nodes(nodes, specs)
+            nodes = self._select_pick_context(
+                nodes, active_target_node_id, protected_site_id)
         self._refresh_live_state(nodes, state)
         self._apply_visibility(nodes, state)
 
@@ -668,12 +696,13 @@ class GraphBuilder:
         # Sites join before capacity and registry assignment: they are
         # ordinary vertices from here on, and a scene that cannot fit them has
         # to say so rather than dropping the goal it is scored against.
-        specs = self._site_specs(state)
-        self._merge_site_nodes(nodes, specs)
+        if not bounded_pick:
+            self._merge_site_nodes(nodes, specs)
         self.cfg["site_specs"] = specs
 
         self._check_capacity(nodes, frame, state)
-        nodes = self.registry.assign(nodes)
+        if not bounded_pick:
+            nodes = self.registry.assign(nodes)
 
         ordered = sorted(nodes.values(), key=lambda n: n.index)
 
@@ -692,7 +721,10 @@ class GraphBuilder:
                 # the robot, and the schedule's terminal fact names it. A
                 # site measured against an object (a hole, a goal region) is
                 # an ordinary vertex and keeps arrival order.
-                protected_site_node_id=self._protected_site_id(specs),
+                protected_site_node_id=protected_site_id,
+                node_overflow_policy="protected_fifo" if bounded_pick else "error",
+                n_context_dropped=len(self.registry.rejected_ids),
+                n_context_evicted=len(self.registry.evicted_ids),
                 n_objects=sum(1 for n in ordered if n.node_type == "object"),
                 n_visible=sum(1 for n in ordered if n.visible),
                 n_in_frame=sum(1 for n in ordered if n.in_frame),

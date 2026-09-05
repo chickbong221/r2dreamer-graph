@@ -111,6 +111,10 @@ def checkpoint_identity(config, envs):
         n_cams=len(list(config.env.cameras or [])),
         disable_object_object_relations=bool(
             config.env.graph.get("disable_object_object_relations", False)),
+        protected_pick_fifo=bool(
+            getattr(envs, "_is_mshab", False)
+            and getattr(envs, "_mshab_subtask", "") == "pick"
+            and config.env.graph.get("use_target_flag", True)),
         entity_ids=build_entity_vocab(whitelist_dir).token_to_id
         if whitelist_dir else {},
         relation_ids=build_relation_vocab().token_to_id,

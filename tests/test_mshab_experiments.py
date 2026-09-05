@@ -180,7 +180,7 @@ class ExperimentConfigTest(unittest.TestCase):
             with self.subTest(experiment=name):
                 self.assertTrue(self._config(name)["graph"]["disable_object_object_relations"])
 
-    def test_c_trains_nothing_and_leaves_lighting_unset(self):
+    def test_c_declaration_leaves_lighting_unset(self):
         config = self._config("c")
         text = Path("configs/env/mshab_pick_c.yaml").read_text(encoding="utf-8")
         self.assertIn("PENDING", text)
@@ -228,12 +228,12 @@ class LauncherTest(unittest.TestCase):
             with self.subTest(experiment=name):
                 script = self._script(name)
                 self.assertIn('"${ENTITY_VOCAB:-}"', script)
-                self.assertIn("model.graph.n_max=12", script)
-                self.assertIn("model.graph.e_max=384", script)
+                self.assertIn("model.graph.n_max=8", script)
+                self.assertIn("model.graph.e_max=168", script)
                 self.assertIn('"$@"', script)
                 self.assertIn('logdir="$REPO_ROOT/logdir/', script)
         probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
-        self.assertIn("--n-max 12 --e-max 384", probe)
+        self.assertIn("--n-max 8 --e-max 168", probe)
 
     def test_the_approved_checkpoint_metric_is_success_once(self):
         for name in ("a", "b"):
@@ -244,11 +244,10 @@ class LauncherTest(unittest.TestCase):
                 self.assertNotIn("CKPT_METRIC", script)
                 self.assertNotIn("CKPT_TIEBREAK", script)
 
-    def test_neither_launcher_reuses_the_old_small_defaults(self):
+    def test_neither_launcher_pins_the_old_entity_vocabulary(self):
         for name in ("a", "b"):
             script = self._script(name)
             with self.subTest(experiment=name):
-                self.assertNotIn("n_max=8", script)
                 self.assertNotIn("entity_vocab=14", script)
 
 

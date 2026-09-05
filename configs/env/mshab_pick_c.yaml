@@ -4,8 +4,7 @@
 #
 # PENDING: the lighting conditions are NOT set here. Which presets to compare
 # is an unmade decision, and shader_dir is a renderer choice rather than a
-# lighting control -- changing it alters more than illumination. See
-# docs/lighting_controls.md for what the stack exposes.
+# lighting control -- changing it alters more than illumination.
 #
 # The prediction that makes this an ablation rather than a vague robustness
 # check: the graph is built from segmentation and privileged poses, so its

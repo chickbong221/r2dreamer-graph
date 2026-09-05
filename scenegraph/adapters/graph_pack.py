@@ -66,17 +66,16 @@ def _row_assignment(graph, n_max: int, target_id, fixed_rows: bool,
     first admitted -- and the encoder needs the target at a fixed row so an
     occluded one keeps the same identity frame to frame.
 
-    Row 1 stays padding until the target is admitted. Reserving these rows
-    costs object rows, so a scene that fills ``n_max`` without them raises
-    here -- a silently truncated vertex is a fact the model never learns to
-    predict, and retention leaves no vertex that is safe to lose.
+    Required nodes must have been admitted by the builder. MS-HAB Pick bounds
+    its optional context before packing; a graph that still exceeds capacity
+    here is a builder error, not an invitation to truncate required facts.
     """
     nodes = list(graph.nodes)
     if len(nodes) > n_max:
         raise RuntimeError(
             f"node budget exceeded: {len(nodes)} vertices against n_max="
             f"{n_max}. env={graph.env_id} frame={graph.frame} "
-            f"nodes={[n.node_id for n in nodes]}. Retention never evicts."
+            f"nodes={[n.node_id for n in nodes]}. Apply the node budget before packing."
         )
     if not fixed_rows:
         return list(enumerate(nodes[:n_max])), max(0, len(nodes) - n_max)
@@ -332,7 +331,7 @@ def pack_graph(
     # Counts stay on the graph for logging and truncation warnings rather than
     # riding along in every replay transition.
     graph.meta["n_nodes_packed"] = n_nodes
-    graph.meta["n_nodes_dropped"] = n_dropped
+    graph.meta["n_nodes_dropped"] = n_dropped + int(graph.meta.get("n_context_dropped", 0))
     graph.meta["n_edges_packed"] = len(kept)
     graph.meta["n_edges_dropped"] = len(candidates) - len(kept)
     graph.meta["target_packed"] = bool(node_target.any())

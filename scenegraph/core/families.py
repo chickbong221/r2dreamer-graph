@@ -263,8 +263,7 @@ def reference_surface_from_supports(entry: Dict[str, Any]) -> Optional[Dict]:
 
     The anchor is the mean of the mined support anchors, each the supported
     object's centre in this supporter's frame. It is on the supporter's
-    surface only up to the supported object's own half-height; see
-    ``docs/structural_surface_anchor.md``.
+    surface only up to the supported object's own half-height.
 
     Emitted for any object with support components, not only for classified
     surfaces: the runtime reads it only when the whitelist marks that member

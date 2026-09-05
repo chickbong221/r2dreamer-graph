@@ -180,7 +180,7 @@ class EmissionTest(unittest.TestCase):
                     "support-compatibility", "contain-compatibility"):
             self.assertNotIn(key, keys)
 
-    def test_mshab_twelve_node_edge_bound_includes_physical_pairs_and_site(self):
+    def test_mshab_eight_node_edge_bound_includes_physical_pairs_and_site(self):
         cfg = _cfg()
         cfg["object_object_spatial"] = False
         per_ee = sum(_by_relation(_emit(1, _ROLES, cfg=cfg), ee=True).values())
@@ -214,10 +214,11 @@ class EmissionTest(unittest.TestCase):
         cfg["disable_object_object_relations"] = True
         graph.edges.clear()
         self.assertEqual(_emit(0, nodes=graph, cfg=cfg), site_edges)
-        # EE + one empty-token virtual site leave at most ten physical nodes.
-        bound = 10 * per_ee + (10 * 9 // 2) * sum(pairs.values()) + len(site_edges)
-        self.assertEqual(bound, 333)
-        self.assertLessEqual(bound, 384)
+        # EE + one empty-token virtual site leave at most six physical nodes.
+        bound = 6 * per_ee + (6 * 5 // 2) * sum(pairs.values()) + len(site_edges)
+        self.assertEqual(bound, 129)
+        self.assertLessEqual(bound, 168)
+        self.assertEqual(6 * per_ee + len(site_edges), 39)
 
     def test_saturated_graph_needs_more_than_configured_e_max(self):
         """n_max=8 is one end effector plus seven objects, so a saturated

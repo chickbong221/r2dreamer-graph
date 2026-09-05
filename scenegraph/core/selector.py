@@ -4,11 +4,11 @@ Pipeline per frame:
 
     apply_whitelist(candidates)   # hard eligibility gate
     -> merge_retained(...)        # re-inject every node seen this episode
-    -> EntityRegistry.assign(...) # stable index, diversity-aware overflow
+    -> EntityRegistry.assign(...) # stable index, explicit overflow policy
 
-No scoring or secondary contact-based admission path exists. Capacity is a hard
-ceiling: a scene that needs more rows than ``n_max`` raises rather than choosing
-a vertex to lose.
+No scoring or secondary contact-based admission path exists. Ordinary tasks
+raise on overflow. MS-HAB Pick reserves its task nodes and retains a bounded
+FIFO of context nodes.
 """
 
 from __future__ import annotations
@@ -22,10 +22,9 @@ from .whitelist import Whitelist, match_key
 class EntityRegistry:
     """Bounded vertex index. One instance per episode.
 
-    ``ee`` always holds index 0. Object indices are handed out on first sight
-    and held until reset -- nothing displaces a resident, and no slot is
-    reclaimed inside an episode. A scene needing more rows than ``n_max`` is a
-    configuration error and raises.
+    ``ee`` always holds index 0. The default retains indices until reset and
+    raises on overflow. Explicit FIFO mode can replace unprotected residents,
+    reusing their rows without disturbing the surviving nodes.
     """
 
     def __init__(self, n_max: int):
@@ -35,6 +34,8 @@ class EntityRegistry:
         self._ever_seen: Set[str] = set()
         self._seen_clock = 0
         self._next = 1  # 0 is reserved for the end effector
+        self.evicted_ids: List[str] = []
+        self.rejected_ids: List[str] = []
 
     def reset_episode(self) -> None:
         self._index.clear()
@@ -42,6 +43,8 @@ class EntityRegistry:
         self._ever_seen.clear()
         self._seen_clock = 0
         self._next = 1
+        self.evicted_ids.clear()
+        self.rejected_ids.clear()
 
     def __len__(self) -> int:
         return len(self._index)
@@ -53,20 +56,19 @@ class EntityRegistry:
     def episode_entities(self) -> int:
         """Distinct object instances presented to ``assign`` this episode.
 
-        Under retention this equals live occupancy: every instance admitted
-        this episode still holds its row.
+        With FIFO this can exceed current occupancy; it is not a row count.
         """
         return len(self._ever_seen)
 
-    def assign(self, nodes: Dict[str, Node]) -> Dict[str, Node]:
-        """Index every object. Overflow raises; nothing is ever displaced.
-
-        Under unconditional retention a slot is held for the whole episode, so
-        there is no resident whose eviction would be correct -- dropping one
-        deletes facts the progress target reads. The graph builder checks
-        capacity first and raises with scene detail; this is the backstop for
-        callers that do not.
-        """
+    def assign(self, nodes: Dict[str, Node], *, overflow: str = "error",
+               protected: Iterable[str] = ()) -> Dict[str, Node]:
+        """Index objects with strict retention or protected FIFO."""
+        self.evicted_ids.clear()
+        self.rejected_ids.clear()
+        if overflow == "fifo":
+            return self._assign_fifo(nodes, protected)
+        if overflow != "error":
+            raise ValueError(f"unknown node overflow policy {overflow!r}")
         admitted: Dict[str, Node] = {}
         pending: List[str] = []
         for ent_id, node in nodes.items():
@@ -101,6 +103,52 @@ class EntityRegistry:
             self._index[ent_id] = idx
             node.index = idx
             admitted[ent_id] = node
+        return admitted
+
+    def _assign_fifo(self, nodes: Dict[str, Node],
+                     protected: Iterable[str]) -> Dict[str, Node]:
+        """Protect task instances and keep the newest context arrivals.
+
+        First-seen order survives eviction. A discarded instance still visible
+        on the next frame must not masquerade as a new arrival and rotate all
+        the slots. A new episode clears that order along with the registry.
+        """
+        keep = {key for key in protected if key and key != "ee"}
+        objects = {key for key, node in nodes.items() if node.node_type != "ee"}
+        missing = keep - objects
+        if missing:
+            raise RuntimeError(f"protected graph nodes are missing: {sorted(missing)}")
+        capacity = max(0, self.n_max - 1)
+        if len(keep) > capacity:
+            raise RuntimeError(
+                f"n_max={self.n_max} cannot hold the end effector and "
+                f"protected nodes {sorted(keep)}")
+        self._ever_seen.update(objects)
+        for key in sorted(objects):
+            if key not in self._first_seen:
+                self._first_seen[key] = self._seen_clock
+                self._seen_clock += 1
+        context = sorted(objects - keep, key=self._first_seen.get, reverse=True)
+        chosen = keep | set(context[:capacity - len(keep)])
+        self.evicted_ids = sorted(set(self._index) - chosen)
+        self.rejected_ids = sorted(objects - chosen)
+        for key in self.evicted_ids:
+            del self._index[key]
+        free = [row for row in range(1, self.n_max)
+                if row not in self._index.values()]
+        pending = sorted(chosen - set(self._index),
+                         key=lambda key: (key not in keep, self._first_seen[key]))
+        for key, row in zip(pending, free):
+            self._index[key] = row
+        admitted = {}
+        for key, node in nodes.items():
+            if node.node_type == "ee":
+                node.index = 0
+            elif key in chosen:
+                node.index = self._index[key]
+            else:
+                continue
+            admitted[key] = node
         return admitted
 
 class NodeSelector:
@@ -212,5 +260,11 @@ class NodeSelector:
             if n.visible:
                 self._last_seen[ent_id] = frame
                 self._history[ent_id] = _snapshot(n)
+
+    def evict(self, node_ids: Iterable[str]) -> None:
+        """Stop history from re-injecting FIFO victims on the next frame."""
+        for node_id in node_ids:
+            self._history.pop(node_id, None)
+            self._last_seen.pop(node_id, None)
 
 

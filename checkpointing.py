@@ -267,6 +267,7 @@ def run_identity(*, whitelist_dir: str, schedule_path: str = "",
                  schedule_label: str = "", n_max: int = 0, e_max: int = 0,
                  n_cams: int = 0,
                  disable_object_object_relations: bool = False,
+                 protected_pick_fifo: bool = False,
                  entity_ids: Optional[Mapping[str, int]] = None,
                  relation_ids: Optional[Mapping[str, int]] = None,
                  absolute_ids: Optional[Mapping[str, int]] = None,
@@ -286,7 +287,8 @@ def run_identity(*, whitelist_dir: str, schedule_path: str = "",
         "absolute_vocab": _vocab_digest(absolute_ids),
         "temporal_vocab": _vocab_digest(temporal_ids),
         "graph_schema": (f"n{int(n_max)}e{int(e_max)}c{int(n_cams)}"
-                         + (":ee-only" if disable_object_object_relations else "")),
+                         + (":ee-only" if disable_object_object_relations else "")
+                         + (":pick-fifo-v1" if protected_pick_fifo else "")),
         "schedule": f"{schedule_label}:{_file_digest(schedule_path)}",
         "assets": _asset_digest(whitelist_dir, affordance_path),
     }

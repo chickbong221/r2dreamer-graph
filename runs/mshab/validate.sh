@@ -43,7 +43,7 @@ else
     run_check probe_tests python -m unittest tests.test_potential_probe -v
 fi
 
-# Exercise the approved V1 training capacities, including overflow checks.
+# Exercise the training capacities and protected-node/FIFO packing.
 # The collector wrapper's incidental files stay in this validation directory.
 run_check potential python tests/probes/probe_policy_potential.py \
     --whitelist-dir scenegraph/configs/subtask_whitelists/tidy_house \
@@ -54,7 +54,7 @@ run_check potential python tests/probes/probe_policy_potential.py \
     --task tidy_house --subtask pick --obj 004_sugar_box --algo rl \
     --build-config v3_sc0_staging_00.scene_instance.json \
     --num-envs 4 --max-episode-steps 200 --max-total-steps 4000 \
-    --n-max 12 --e-max 384 \
+    --n-max 8 --e-max 168 \
     --disable-object-object-relations \
     --out "$MSHAB_CHECK_DIR/pick_trace.json"
 
@@ -63,5 +63,5 @@ run_check capacity python -m scenegraph.tools.audit_graph_capacity \
     --subtask pick \
     --occupancy-json "$MSHAB_CHECK_DIR/pick_trace.occupancy.json"
 
-printf '\nThis is a one-scene observed-capacity check, not a 63-scene bound.\n'
+printf '\nThis is a one-scene probe; FIFO bounds context on every scene.\n'
 printf 'V1 keeps the existing mined support-plane proxy; exact-surface refinement is deferred.\n'

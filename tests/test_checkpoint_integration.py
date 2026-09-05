@@ -157,7 +157,8 @@ class IdentityIsAboutTheModelNotTheSceneTest(unittest.TestCase):
 
     def test_a_moved_capacity_is_a_mismatch(self):
         """Packed shapes and the enabled relation set are part of the contract."""
-        for override in ({"n_max": 11}, {"disable_object_object_relations": True}):
+        for override in ({"n_max": 11}, {"disable_object_object_relations": True},
+                         {"protected_pick_fifo": True}):
             with self.subTest(override=override):
                 moved = self._identity(**override)
                 self.assertTrue(identity_mismatches(moved, self._identity()))

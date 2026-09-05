@@ -40,9 +40,6 @@ python3 train.py env=dmc_vision model=size50M model.rep_loss=r2dreamer
 python3 train.py env=dmc_vision model=size50M model.rep_loss=dreamerpro
 ```
 
-For easier code reading, inline tensor shape annotations are provided. See [`docs/tensor_shapes.md`](docs/tensor_shapes.md).
-
-
 ## Available Benchmarks
 At the moment, the following benchmarks are available in this repository.
 
@@ -91,10 +88,7 @@ pre-commit run --all-files
 ## Compact scene-graph extension
 
 This fork includes an optional DreamerV3 semantic scene-graph branch using
-compact real-edge PyTorch message passing. See
-[`docs/graph_extension.md`](docs/graph_extension.md) for the observation
-contract, the single `model.graph.enabled` method switch, correctness tests,
-and the CUDA padding-width benchmark.
+compact real-edge PyTorch message passing, enabled with `model.graph.enabled`.
 
 ## Troubleshooting
 
