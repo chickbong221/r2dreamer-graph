@@ -231,7 +231,8 @@ def console_scalars(scalars):
             continue
         if key.startswith(("eval_scene/", "eval_object/", "eval_light/")):
             tail = key.rsplit("/", 1)[-1]
-            if tail not in outcome_keys and not tail.startswith("reset_"):
+            if (tail not in outcome_keys
+                    and not tail.startswith(("reset_", "construction_"))):
                 continue
         yield name, value
 
