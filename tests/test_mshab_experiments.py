@@ -269,23 +269,58 @@ class LauncherTest(unittest.TestCase):
                                "env.graph.whitelist_dir"):
                     self.assertNotIn(absent, script)
 
-    @staticmethod
-    def _active(script):
-        """The one uncommented `python train.py` block, continuations included.
+    MERGED = {"beta005": "runs/mshab/slurm_beta005.sh",
+              "baseline": "runs/mshab/slurm_baseline.sh"}
 
-        Read the active command, never the whole file: every launcher also
-        carries a commented variant, and asserting against both at once is how
-        a disabled command gets mistaken for the one that runs.
+    @staticmethod
+    def _active_blocks(script):
+        """Every uncommented `python train.py` block, continuations included.
+
+        Read the active commands, never the whole file: the single-arm
+        launchers also carry a commented variant, and asserting against both
+        at once is how a disabled command gets mistaken for the one that runs.
         """
-        block, started = [], False
+        blocks, current = [], None
         for line in script.splitlines():
-            started = started or line.startswith("python train.py")
-            if not started:
+            if line.startswith("python train.py"):
+                current = [line]
+            elif current is not None:
+                current.append(line)
+            else:
                 continue
-            block.append(line)
-            if not line.rstrip().endswith("\\"):
-                break
-        return "\n".join(block)
+            if not current[-1].rstrip().endswith("\\"):
+                blocks.append("\n".join(current))
+                current = None
+        return blocks
+
+    def _active(self, script):
+        return self._active_blocks(script)[0]
+
+    def _merged(self, arm):
+        return Path(self.MERGED[arm]).read_text(encoding="utf-8")
+
+    def test_each_merged_launcher_runs_a_then_b(self):
+        for arm in self.ARMS:
+            with self.subTest(arm=arm):
+                merged = self._merged(arm)
+                blocks = self._active_blocks(merged)
+                self.assertEqual(len(blocks), 2)
+                self.assertIn("env=mshab_pick_a", blocks[0])
+                self.assertIn("env=mshab_pick_b", blocks[1])
+                self.assertIn("CKPT_DIR=$MS_ASSET_DIR/mshab_transfer_checkpoint",
+                              merged)
+                self.assertIn('mkdir -p $HOME/output "$CKPT_DIR"', merged)
+
+    def test_the_merged_launchers_repeat_the_single_arm_commands_verbatim(self):
+        """Six files, one set of commands. A copy that drifts from its source
+        is a silently different experiment, which is the whole risk of keeping
+        both shapes."""
+        for arm in self.ARMS:
+            blocks = self._active_blocks(self._merged(arm))
+            for experiment, block in zip(self.EXPERIMENTS, blocks):
+                with self.subTest(experiment=experiment, arm=arm):
+                    self.assertEqual(
+                        block, self._active(self._script(experiment, arm)))
 
     def test_each_launcher_has_exactly_one_active_training_command(self):
         for experiment, arm, script in self._scripts():
@@ -371,9 +406,10 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("check_launchers", probe)
         self.assertIn("bash -n", probe)
         self.assertIn("^python train\\.py", probe)
-        for experiment in self.EXPERIMENTS:
-            for arm in self.ARMS:
-                self.assertIn(f"runs/mshab/slurm_{experiment}_{arm}.sh", probe)
+        for arm in self.ARMS:
+            self.assertIn(f"runs/mshab/slurm_{arm}.sh:2", probe)
+            for experiment in self.EXPERIMENTS:
+                self.assertIn(f"runs/mshab/slurm_{experiment}_{arm}.sh:1", probe)
         # Reading only: validation never executes a launcher.
         for line in probe.splitlines():
             stripped = line.strip()

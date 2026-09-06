@@ -31,23 +31,26 @@ run_check() {
 # Each launcher parses, and carries exactly one active `python train.py`.
 # Reading only: nothing here executes a launcher or starts training.
 check_launchers() {
-    local rc=0
-    for script in runs/mshab/slurm_a_beta005.sh runs/mshab/slurm_a_baseline.sh \
-                  runs/mshab/slurm_b_beta005.sh runs/mshab/slurm_b_baseline.sh; do
+    local rc=0 script expected active
+    # One command per single-arm launcher; two per merged one, A then B.
+    for entry in runs/mshab/slurm_a_beta005.sh:1 runs/mshab/slurm_a_baseline.sh:1 \
+                 runs/mshab/slurm_b_beta005.sh:1 runs/mshab/slurm_b_baseline.sh:1 \
+                 runs/mshab/slurm_beta005.sh:2 runs/mshab/slurm_baseline.sh:2; do
+        script=${entry%:*}
+        expected=${entry##*:}
         if ! bash -n "$script"; then
             printf '%s: bash syntax error\n' "$script"
             rc=1
             continue
         fi
-        local active
         active=$(grep -c '^python train\.py' "$script" || true)
-        if [[ "$active" -ne 1 ]]; then
-            printf '%s: %s active training command(s), expected exactly 1\n' \
-                "$script" "$active"
+        if [[ "$active" -ne "$expected" ]]; then
+            printf '%s: %s active training command(s), expected %s\n' \
+                "$script" "$active" "$expected"
             rc=1
             continue
         fi
-        printf '%s: syntax ok, 1 active training command\n' "$script"
+        printf '%s: syntax ok, %s active training command(s)\n' "$script" "$active"
     done
     return "$rc"
 }
