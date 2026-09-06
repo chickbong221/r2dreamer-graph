@@ -210,16 +210,18 @@ class OnlineTrainer:
         log_maxima = {}
         # cache is only used for video logging / open-loop prediction.
         cache = []
-        video_frames = []
-        # Graph panel: masks are only built for envs listed here, so recording
-        # is scoped to the one env whose video is logged.
+        from envs.evaluation import evaluation_video_rows
+        video_rows = evaluation_video_rows(
+            getattr(envs, "eval_cases", []), getattr(envs, "training_scenes", [])) if record_video else {}
+        video_frames = {key: [] for key in video_rows}
+        # Only selected video environments need graph masks.
         graph_builder = _graph_builder(envs) if record_video else None
         colormap = None
         if graph_builder is not None:
             try:
                 from scenegraph.viz.palette import ColorMap
                 colormap = ColorMap()      # shared, so colours stay stable
-                graph_builder.record_graph_env_indices = {0}
+                graph_builder.record_graph_env_indices = set(video_rows.values())
             except Exception:
                 graph_builder = None
         agent_state = agent.get_initial_state(envs.env_num)
@@ -237,15 +239,26 @@ class OnlineTrainer:
                 trans = trans.to(agent.device, non_blocking=True)
             if record_video:
                 with timer.measure("video"):
-                    panel_fn = (
-                        (lambda h: _graph_panel(graph_builder, 0, h, colormap))
-                        if graph_builder is not None else None
-                    )
-                    frame = _render_frame(envs, 0, panel_fn)
-                    if frame is None:
-                        frame = _observation_frame(trans, panel_fn)
-                    if frame is not None:
-                        video_frames.append(frame)
+                    active = [(key, i) for key, i in video_rows.items() if not once_done[i]]
+                    selected = None
+                    render_selected = getattr(envs, "render_selected", None)
+                    if render_selected is not None and active:
+                        try:
+                            selected = render_selected([i for _, i in active])
+                        except Exception:
+                            pass
+                    for position, (key, i) in enumerate(active):
+                        panel_fn = (
+                            (lambda h, i=i: _graph_panel(graph_builder, i, h, colormap))
+                            if graph_builder is not None else None)
+                        frame = (_with_panel([selected[position]], panel_fn)
+                                 if selected is not None else _render_frame(envs, i, panel_fn))
+                        if frame is None:
+                            images = {k: v[i:i + 1] for k, v in trans.items()
+                                      if k == "image" or k.startswith("image_")}
+                            frame = _observation_frame(images, panel_fn)
+                        if frame is not None:
+                            video_frames[key].append(frame)
             # (B,)
             done = step_done.to(agent.device)
 
@@ -320,10 +333,10 @@ class OnlineTrainer:
         record("eval/environment_steps_per_second", float(steps.sum()) / max(duration, 1e-9))
         for key, value in timer.metrics("eval_timing").items():
             record(key, value)
-        if video_frames:
-            video = torch.stack(video_frames, dim=0)
-            self.logger.video(
-                "eval/video", tools.to_np(video[None]), fps=self.video_fps)
+        for key, frames in video_frames.items():
+            if frames:
+                video = torch.stack(frames, dim=0)
+                self.logger.video(key, tools.to_np(video[None]), fps=self.video_fps)
         if self.video_pred_log and cache is not None:
             initial = agent.get_initial_state(1)
             latent_keys = [key for key in LATENT_STATE_KEYS if key in initial]

@@ -795,7 +795,7 @@ class ManiSkillVecEnv:
         if frames.ndim == 3:
             frames = frames[None]
         if env_idx is not None:
-            frames = frames[int(env_idx)]
+            frames = frames[env_idx]
         if frames.dtype != torch.uint8:
             # A float render is in [0, 1]; anything already 0-255 stays put.
             scale = 255.0 if float(frames.max()) <= 1.0 else 1.0
@@ -803,7 +803,10 @@ class ManiSkillVecEnv:
         return frames.detach().cpu()
 
     def render_one(self, env_idx=0):
-        return self.render(env_idx=env_idx)
+        return self.render(env_idx=int(env_idx))
+
+    def render_selected(self, env_indices):
+        return self.render(env_idx=list(env_indices))
 
     def close(self):
         self._env.close()

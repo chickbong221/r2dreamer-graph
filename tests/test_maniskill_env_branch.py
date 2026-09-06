@@ -576,7 +576,7 @@ class SweepScriptTest(unittest.TestCase):
             env = yaml.safe_load(f)
         self.assertEqual(root["batch_size"], 32)
         self.assertEqual(root["batch_length"], 64)
-        self.assertIs(root["trainer"]["video_pred_log"], True)
+        self.assertIs(root["trainer"]["video_pred_log"], False)
         self.assertEqual(env["env_num"], 200)
         self.assertEqual(float(env["steps"]), 4e6)
 
@@ -708,10 +708,10 @@ class EvalRenderTest(unittest.TestCase):
         """Suites with no render camera -- dmc, atari -- must still get the
         observation strip."""
         body = self.trainer
-        self.assertIn("frame = _render_frame(envs, 0, panel_fn)", body)
-        self.assertIn("frame = _observation_frame(trans, panel_fn)", body)
-        self.assertLess(body.index("_render_frame(envs, 0, panel_fn)"),
-                        body.index("_observation_frame(trans, panel_fn)"))
+        self.assertIn("_render_frame(envs, i, panel_fn)", body)
+        self.assertIn("frame = _observation_frame(images, panel_fn)", body)
+        self.assertLess(body.index("_render_frame(envs, i, panel_fn)"),
+                        body.index("_observation_frame(images, panel_fn)"))
 
     def test_the_graph_panel_joins_the_render_frame(self):
         """The whole point: one video, graph beside the high-resolution view."""
@@ -880,6 +880,8 @@ class _Frames:
     def __getitem__(self, key):
         if key is None:
             return _Frames((1,) + self.shape, self.log)
+        if isinstance(key, list):
+            return _Frames((len(key),) + self.shape[1:], self.log)
         return _Frames(self.shape[1:], self.log)
 
     def detach(self):
@@ -900,7 +902,7 @@ class RenderSelectionTest(unittest.TestCase):
             uint8="uint8")
         namespace = {"torch": fake_torch,
                      "np": SimpleNamespace(asarray=lambda value: value)}
-        body = [_node("render"), _node("render_one")]
+        body = [_node(name) for name in ("render", "render_one", "render_selected")]
         exec(compile(ast.Module(body=body, type_ignores=[]), "<render>", "exec"),
              namespace)
         return namespace
@@ -909,7 +911,7 @@ class RenderSelectionTest(unittest.TestCase):
         namespace = self._namespace()
         actor = SimpleNamespace(
             _env=SimpleNamespace(render=lambda: _Frames(frames, log)))
-        for name in ("render", "render_one"):
+        for name in ("render", "render_one", "render_selected"):
             setattr(actor, name, types.MethodType(namespace[name], actor))
         return actor
 
@@ -923,6 +925,14 @@ class RenderSelectionTest(unittest.TestCase):
         log = []
         self.assertEqual(self._actor(log).render().shape, (93, 512, 512, 3))
         self.assertEqual(log, [(93, 512, 512, 3)])
+
+    def test_selected_videos_transfer_only_three_rows_in_one_render(self):
+        log = []
+        actor = self._actor(log)
+        with unittest.mock.patch.object(actor._env, "render", wraps=actor._env.render) as render:
+            self.assertEqual(actor.render_selected([0, 1, 63]).shape, (3, 512, 512, 3))
+        render.assert_called_once()
+        self.assertEqual(log, [(3, 512, 512, 3)])
 
     def test_a_single_frame_is_batched_before_the_row_is_taken(self):
         log = []

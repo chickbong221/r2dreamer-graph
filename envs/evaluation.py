@@ -100,6 +100,25 @@ def build_panel(by_object, config):
     return cases
 
 
+def evaluation_video_rows(cases, training_scenes):
+    rows = {"eval/video": 0}
+    if not cases:
+        return rows
+    training = set(training_scenes)
+    nominal = [i for i, c in enumerate(cases)
+               if c.group != "light" and c.intensity == 1.0]
+    rows["eval/video"] = next(
+        (i for i in nominal if cases[i].scene in training), 0)
+    unseen = next((i for i in nominal if cases[i].scene not in training), None)
+    if unseen is not None:
+        rows["eval/unseen_scene"] = unseen
+    dim = [i for i, c in enumerate(cases)
+           if c.group == "light" and c.intensity < 1.0 and c.scene in training]
+    if dim:
+        rows["eval/dim_light"] = min(dim, key=lambda i: cases[i].intensity)
+    return rows
+
+
 def panel_metrics(cases, values, training_scenes):
     """Separate primary B/A scores from lighting; never pool them together."""
     values = {k: np.asarray(v, dtype=float) for k, v in values.items()}

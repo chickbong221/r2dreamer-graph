@@ -367,6 +367,20 @@ class LightingTest(unittest.TestCase):
 
 
 class ResetIntegrationTest(unittest.TestCase):
+    def test_video_rows_use_scene_identity_not_row_zero(self):
+        panel = evaluation.build_panel(plans(), config())
+        panel[0], panel[2] = panel[2], panel[0]
+        rows = evaluation.evaluation_video_rows(panel, ["s00"])
+        self.assertEqual(panel[rows["eval/video"]].scene, "s00")
+        self.assertEqual(panel[rows["eval/video"]].intensity, 1.0)
+        self.assertNotEqual(panel[rows["eval/unseen_scene"]].scene, "s00")
+        self.assertEqual(panel[rows["eval/dim_light"]].intensity, 0.4)
+        self.assertEqual(panel[rows["eval/dim_light"]].scene, "s00")
+        self.assertEqual(evaluation.evaluation_video_rows([], []), {"eval/video": 0})
+        same_scene = evaluation.build_panel(plans(1), config(count=1, lighting=False))
+        self.assertEqual(evaluation.evaluation_video_rows(same_scene, ["s00"]),
+                         {"eval/video": 0})
+
     def test_actual_adapter_reset_passes_fixed_plans_spawns_and_scenes(self):
         try:
             import torch
@@ -703,6 +717,27 @@ class EvaluationLoopTest(unittest.TestCase):
         self.assertTrue(agent.training)
         self.assertTrue(torch.equal(before, torch.get_rng_state()))
         self.assertEqual(runner._last_eval_step, 50000)
+
+        videos, selected_rows = {}, []
+        runner.eval_video_log = True
+        runner.eval_envs.ticks = 0
+        runner.logger.video = lambda key, value, **kw: videos.update({key: value})
+
+        def render_selected(indices):
+            selected_rows.append(indices)
+            return torch.stack([torch.full((2, 2, 3), i, dtype=torch.uint8)
+                                for i in indices])
+
+        runner.eval_envs.render_selected = render_selected
+        with patch.dict(sys.modules, {"envs.evaluation": evaluation}), \
+             patch.object(trainer_module, "_graph_builder", return_value=None):
+            runner.eval(agent, 51000)
+        rows = evaluation.evaluation_video_rows(Env.eval_cases, Env.training_scenes)
+        self.assertEqual(selected_rows, [list(rows.values())] * 3)
+        self.assertEqual(set(videos), set(rows))
+        for key, index in rows.items():
+            self.assertEqual(videos[key].shape, (1, 3, 2, 2, 3))
+            self.assertTrue((videos[key] == index).all())
 
         parent = NS(scalar=lambda k, v: logged.update({k: v}), write=lambda step: logged.update(global_step=step))
         stage = tools.StageLogger(parent, "finetune", 10_000_000)
