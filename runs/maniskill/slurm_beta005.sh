@@ -65,15 +65,15 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-python train.py \
-  env=maniskill \
-  model=size50M_graph_simple \
-  env.task=maniskill_PullCubeTool-v1 \
-  env.graph.whitelist_dir=$WL/PullCubeTool-v1 \
-  model.progress.beta=0.05 \
-  wandb.group=maniskill_PullCubeTool-v1 \
-  wandb.name=PullCubeTool-v1-beta005 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-beta005
+# python train.py \
+#   env=maniskill \
+#   model=size50M_graph_simple \
+#   env.task=maniskill_PullCubeTool-v1 \
+#   env.graph.whitelist_dir=$WL/PullCubeTool-v1 \
+#   model.progress.beta=0.05 \
+#   wandb.group=maniskill_PullCubeTool-v1 \
+#   wandb.name=PullCubeTool-v1-beta005 \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/PullCubeTool-v1-beta005
 
 python train.py \
   env=maniskill \
