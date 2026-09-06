@@ -28,7 +28,32 @@ run_check() {
     return "$rc"
 }
 
+# Each launcher parses, and carries exactly one active `python train.py`.
+# Reading only: nothing here executes a launcher or starts training.
+check_launchers() {
+    local rc=0
+    for script in runs/mshab/slurm_a_beta005.sh runs/mshab/slurm_a_baseline.sh \
+                  runs/mshab/slurm_b_beta005.sh runs/mshab/slurm_b_baseline.sh; do
+        if ! bash -n "$script"; then
+            printf '%s: bash syntax error\n' "$script"
+            rc=1
+            continue
+        fi
+        local active
+        active=$(grep -c '^python train\.py' "$script" || true)
+        if [[ "$active" -ne 1 ]]; then
+            printf '%s: %s active training command(s), expected exactly 1\n' \
+                "$script" "$active"
+            rc=1
+            continue
+        fi
+        printf '%s: syntax ok, 1 active training command\n' "$script"
+    done
+    return "$rc"
+}
+
 if [[ "$MODE" == full ]]; then
+    run_check launchers check_launchers
     run_check tests python -m unittest discover -s tests -t .
     run_check assets python tests/probes/validate_task_assets.py \
         --task tidy_house --disable-object-object-relations --targets \

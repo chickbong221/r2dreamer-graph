@@ -14,6 +14,9 @@
 # (10 each at 0.4 / 1.0 / 2.0), so C rides along with B rather than training a
 # third model. Illumination is applied while the evaluation scene is built.
 #
+# B is the generalization experiment and has no transfer stage: the
+# held-out object belongs to A. 10M steps, evaluated throughout.
+#
 # Everything else is the shipped default: 10M steps, 126 training envs,
 # batch 32 x 64, train_ratio 64, evaluation every 50k steps.
 #
@@ -100,25 +103,6 @@ python train.py \
   wandb.group=mshab_tidy_house_pick_B \
   wandb.name=B-scenes-and-lighting-beta005 \
   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta005
-
-# Transfer arm: the same run, then 3M more steps on a held-out object from
-# B's best eligible checkpoint. Uncomment instead of the command above.
-#
-# python train.py \
-#   env=mshab_pick_b \
-#   model=size50M_graph_simple \
-#   env.graph.whitelist_dir=$WL/tidy_house \
-#   model.graph.entity_vocab=19 \
-#   model.graph.n_max=8 \
-#   model.graph.e_max=168 \
-#   model.progress.beta=0.05 \
-#   checkpoint.enabled=true \
-#   checkpoint.metric=eval/success_once \
-#   checkpoint.tiebreak='' \
-#   finetune.enabled=true \
-#   wandb.group=mshab_tidy_house_pick_B \
-#   wandb.name=B-scenes-and-lighting-beta005-transfer \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta005-transfer
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

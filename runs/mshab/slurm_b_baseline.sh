@@ -21,7 +21,8 @@
 # The lighting panel still works -- C compares the policy's RGB, which this
 # arm renders exactly as the graph arm does.
 #
-# Same evaluation panel as the graph arm: 20 scenes plus 30 lighting envs.
+# Same evaluation panel as the graph arm: 20 scenes plus 30 lighting envs,
+# and the same 10M budget with no transfer stage.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 
@@ -90,21 +91,6 @@ python train.py \
   wandb.group=mshab_tidy_house_pick_B \
   wandb.name=B-scenes-and-lighting-baseline \
   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-baseline
-
-# Transfer arm: the same run, then 3M more steps on a held-out object from
-# B's best eligible checkpoint. Uncomment instead of the command above.
-#
-# python train.py \
-#   env=mshab_pick_b \
-#   model=size50M \
-#   env.obs_mode=rgb \
-#   checkpoint.enabled=true \
-#   checkpoint.metric=eval/success_once \
-#   checkpoint.tiebreak='' \
-#   finetune.enabled=true \
-#   wandb.group=mshab_tidy_house_pick_B \
-#   wandb.name=B-scenes-and-lighting-baseline-transfer \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-baseline-transfer
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

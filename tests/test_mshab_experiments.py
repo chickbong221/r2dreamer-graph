@@ -269,15 +269,41 @@ class LauncherTest(unittest.TestCase):
                                "env.graph.whitelist_dir"):
                     self.assertNotIn(absent, script)
 
+    @staticmethod
+    def _active(script):
+        """The one uncommented `python train.py` block, continuations included.
+
+        Read the active command, never the whole file: every launcher also
+        carries a commented variant, and asserting against both at once is how
+        a disabled command gets mistaken for the one that runs.
+        """
+        block, started = [], False
+        for line in script.splitlines():
+            started = started or line.startswith("python train.py")
+            if not started:
+                continue
+            block.append(line)
+            if not line.rstrip().endswith("\\"):
+                break
+        return "\n".join(block)
+
+    def test_each_launcher_has_exactly_one_active_training_command(self):
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                active = [line for line in script.splitlines()
+                          if line.startswith("python train.py")]
+                self.assertEqual(len(active), 1)
+
     def test_every_arm_writes_its_own_named_run(self):
         seen = set()
         for experiment, arm, script in self._scripts():
             with self.subTest(experiment=experiment, arm=arm):
+                active = self._active(script)
                 self.assertIn("logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/",
-                              script)
+                              active)
                 self.assertIn(f"wandb.group=mshab_tidy_house_pick_"
-                              f"{experiment.upper()}", script)
-                name = re.search(r"wandb\.name=(\S+)", script).group(1)
+                              f"{experiment.upper()}", active)
+                name = re.search(r"wandb\.name=(\S+)", active).group(1)
                 self.assertIn(arm, name)
                 seen.add(name)
         self.assertEqual(len(seen), 4)
@@ -295,14 +321,46 @@ class LauncherTest(unittest.TestCase):
             with self.subTest(experiment=experiment, arm=arm):
                 self.assertNotIn("entity_vocab=14", script)
 
-    def test_transfer_is_offered_but_never_the_active_command(self):
-        for experiment, arm, script in self._scripts():
-            with self.subTest(experiment=experiment, arm=arm):
-                self.assertIn("finetune.enabled=false", script)
-                active = [line for line in script.splitlines()
-                          if "finetune.enabled=true" in line
-                          and not line.lstrip().startswith("#")]
-                self.assertEqual(active, [])
+    def test_a_transfers_for_five_million_and_b_does_not(self):
+        """A is the training-plus-transfer experiment; B is generalization.
+
+        The 5M budget is an explicit override in both A launchers, so the
+        shared `finetune.steps` default keeps applying to unrelated runs.
+        """
+        default = yaml.safe_load(
+            Path("configs/configs.yaml").read_text(encoding="utf-8"))["finetune"]
+        self.assertEqual(default["steps"], 3_000_000)
+        self.assertFalse(default["enabled"])
+        for arm in self.ARMS:
+            with self.subTest(arm=arm):
+                a = self._active(self._script("a", arm))
+                self.assertIn("finetune.enabled=true", a)
+                self.assertIn("finetune.steps=5000000", a)
+                b = self._active(self._script("b", arm))
+                self.assertIn("finetune.enabled=false", b)
+                self.assertNotIn("finetune.steps", b)
+
+    def test_both_a_arms_transfer_on_the_same_budget(self):
+        """A matched comparison needs the two arms to spend the same steps."""
+        budgets = {re.findall(r"finetune\.steps=(\d+)",
+                              self._active(self._script("a", arm)))[0]
+                   for arm in self.ARMS}
+        self.assertEqual(budgets, {"5000000"})
+
+    def test_validation_checks_the_launchers_without_running_them(self):
+        probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
+        self.assertIn("check_launchers", probe)
+        self.assertIn("bash -n", probe)
+        self.assertIn("^python train\\.py", probe)
+        for experiment in self.EXPERIMENTS:
+            for arm in self.ARMS:
+                self.assertIn(f"runs/mshab/slurm_{experiment}_{arm}.sh", probe)
+        # Reading only: validation never executes a launcher.
+        for line in probe.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or "slurm_" not in stripped:
+                continue
+            self.assertNotRegex(stripped, r"^(bash|sh|sbatch|source|\.)\s+\S*slurm_")
 
 
 class CheckpointConfigBlockTest(unittest.TestCase):

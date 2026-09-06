@@ -15,6 +15,11 @@
 # evaluations. No lighting conditions here: A varies the object, B varies the
 # scene, C varies the illumination inside B's panel.
 #
+# A is the training-plus-transfer experiment: 10M steps on the five
+# objects, then 5M more on the held-out 008_pudding_box from A's best
+# eligible checkpoint, logged under finetune/*. The transfer stage reports
+# its results but saves no checkpoint of its own.
+#
 # Everything else is the shipped default: 10M steps, 126 training envs,
 # batch 32 x 64, train_ratio 64, evaluation every 50k steps.
 #
@@ -86,25 +91,7 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-python train.py \
-  env=mshab_pick_a \
-  model=size50M_graph_simple \
-  env.graph.whitelist_dir=$WL/tidy_house \
-  model.graph.entity_vocab=19 \
-  model.graph.n_max=8 \
-  model.graph.e_max=168 \
-  model.progress.beta=0.05 \
-  checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
-  checkpoint.tiebreak='' \
-  finetune.enabled=false \
-  wandb.group=mshab_tidy_house_pick_A \
-  wandb.name=A-five-objects-beta005 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005
-
-# Transfer arm: the same run, then 3M more steps on a held-out object from
-# A's best eligible checkpoint. Uncomment instead of the command above.
-#
+# Main training only (disabled).
 # python train.py \
 #   env=mshab_pick_a \
 #   model=size50M_graph_simple \
@@ -116,10 +103,28 @@ python train.py \
 #   checkpoint.enabled=true \
 #   checkpoint.metric=eval/success_once \
 #   checkpoint.tiebreak='' \
-#   finetune.enabled=true \
+#   finetune.enabled=false \
 #   wandb.group=mshab_tidy_house_pick_A \
-#   wandb.name=A-five-objects-beta005-transfer \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005-transfer
+#   wandb.name=A-five-objects-beta005 \
+#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005
+
+# Train 10M, then transfer for 5M from A's best eligible checkpoint.
+python train.py \
+  env=mshab_pick_a \
+  model=size50M_graph_simple \
+  env.graph.whitelist_dir=$WL/tidy_house \
+  model.graph.entity_vocab=19 \
+  model.graph.n_max=8 \
+  model.graph.e_max=168 \
+  model.progress.beta=0.05 \
+  checkpoint.enabled=true \
+  checkpoint.metric=eval/success_once \
+  checkpoint.tiebreak='' \
+  finetune.enabled=true \
+  finetune.steps=5000000 \
+  wandb.group=mshab_tidy_house_pick_A \
+  wandb.name=A-five-objects-beta005-transfer \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005-transfer
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID
