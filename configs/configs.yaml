@@ -38,7 +38,7 @@ batch_length: 64
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
-  max_size: 7.5e5
+  max_size: 9e5
   device: ${device}
   storage_device: cpu
 
