@@ -568,6 +568,62 @@ class TransferConfigTest(unittest.TestCase):
             self.assertEqual(len(closed), 4)
 
 
+class ActorDistTest(unittest.TestCase):
+    """The transfer stage builds a second agent from the same config.
+
+    ``dreamer`` imports torch, so the resolver is exec'd from source the way
+    the adapter tests do.
+    """
+
+    class Node(dict):
+        __getattr__ = dict.__getitem__
+        __setattr__ = dict.__setitem__
+
+    def setUp(self):
+        tree = ast.parse(Path("dreamer.py").read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "resolve_actor_dist")
+        namespace = {}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "<dreamer>", "exec"),
+             namespace)
+        self.resolve = namespace["resolve_actor_dist"]
+
+    def config(self):
+        node = self.Node
+        return node(actor=node(dist=node(
+            cont=node(name="bounded_normal"), disc=node(name="onehot"),
+            multi_disc=node(name="multi_onehot"))))
+
+    def test_a_second_agent_reuses_the_resolution_instead_of_failing(self):
+        config, box = self.config(), NS(shape=(8,))
+        self.assertFalse(self.resolve(config, box))
+        self.assertEqual(config.actor.dist.name, "bounded_normal")
+        # The second call is the transfer stage; it used to raise here.
+        self.assertFalse(self.resolve(config, box))
+        self.assertEqual(config.actor.dist.name, "bounded_normal")
+
+    def test_each_action_space_picks_its_own_branch(self):
+        for space, name, discrete in (
+                (NS(shape=(8,)), "bounded_normal", False),
+                (NS(discrete=True, n=5), "onehot", True),
+                (NS(multi_discrete=True, discrete=True, n=5), "multi_onehot", True)):
+            with self.subTest(dist=name):
+                config = self.config()
+                self.assertEqual(self.resolve(config, space), discrete)
+                self.assertEqual(config.actor.dist.name, name)
+
+    def test_a_config_resolved_for_another_action_space_is_refused(self):
+        """Reuse must not quietly hand a continuous agent a discrete head."""
+        config = self.config()
+        self.resolve(config, NS(shape=(8,)))
+        with self.assertRaises(ValueError):
+            self.resolve(config, NS(discrete=True, n=5))
+        config = self.config()
+        self.resolve(config, NS(discrete=True, n=5))
+        with self.assertRaises(ValueError):
+            self.resolve(config, NS(shape=(8,)))
+
+
 class EvaluationLoopTest(unittest.TestCase):
     def test_only_scheduled_episodes_render_without_changing_rollout(self):
         import torch

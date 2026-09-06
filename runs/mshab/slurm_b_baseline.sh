@@ -65,10 +65,14 @@ cd $HOME/projects/r2dreamer-graph
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
 export MS_ASSET_DIR=/mnt/data/tuannl
 
+# The selected model lands outside the log tree, so clearing a
+# logdir cannot take the checkpoint every later number is read from.
+CKPT_DIR=$MS_ASSET_DIR/mshab_transfer_checkpoint
+
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 
-mkdir -p $HOME/output
+mkdir -p $HOME/output "$CKPT_DIR"
 
 # Print initial GPU state
 nvidia-smi
@@ -87,6 +91,7 @@ python train.py \
   checkpoint.enabled=true \
   checkpoint.metric=eval/success_once \
   checkpoint.tiebreak='' \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-baseline.pt \
   finetune.enabled=false \
   wandb.group=mshab_tidy_house_pick_B \
   wandb.name=B-scenes-and-lighting-baseline \

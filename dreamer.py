@@ -151,6 +151,32 @@ def _sync_camera_count(graph_config, obs_space) -> None:
         graph_config.n_cams = observed
 
 
+def resolve_actor_dist(config, act_space):
+    """Pick the actor's output distribution for this action space.
+
+    Choosing a branch consumes the other two, so this has to be safe to run
+    twice against the same config: the transfer stage builds a second agent
+    from the configuration the first one already resolved. An already-resolved
+    config is reused rather than re-read -- but only if it was resolved for an
+    action space of the same kind, because inheriting the wrong head would be
+    a silently wrong agent rather than a crash.
+
+    Returns whether the action space is discrete.
+    """
+    multi = hasattr(act_space, "multi_discrete")
+    discrete = multi or hasattr(act_space, "discrete")
+    options = config.actor.dist
+    if "cont" in options:
+        config.actor.dist = (options.multi_disc if multi
+                             else options.disc if discrete else options.cont)
+    elif discrete != (str(options.name) in ("onehot", "multi_onehot")):
+        raise ValueError(
+            f"actor.dist is already resolved to {str(options.name)!r}, which "
+            f"does not match a {'discrete' if discrete else 'continuous'} "
+            "action space. Build this agent from an unresolved model config.")
+    return discrete
+
+
 class Dreamer(nn.Module):
     def __init__(self, config, obs_space, act_space):
         super().__init__()
@@ -222,15 +248,7 @@ class Dreamer(nn.Module):
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
 
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
-        self.act_discrete = False
-        if hasattr(act_space, "multi_discrete"):
-            config.actor.dist = config.actor.dist.multi_disc
-            self.act_discrete = True
-        elif hasattr(act_space, "discrete"):
-            config.actor.dist = config.actor.dist.disc
-            self.act_discrete = True
-        else:
-            config.actor.dist = config.actor.dist.cont
+        self.act_discrete = resolve_actor_dist(config, act_space)
 
         # Actor-critic components
         self.actor = networks.MLPHead(config.actor, self.rssm.feat_size)
