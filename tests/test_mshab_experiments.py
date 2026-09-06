@@ -316,6 +316,25 @@ class LauncherTest(unittest.TestCase):
                 self.assertNotIn("CKPT_METRIC", script)
                 self.assertNotIn("CKPT_TIEBREAK", script)
 
+    def test_the_selected_model_is_saved_outside_the_log_tree(self):
+        """Clearing a logdir must not take the checkpoint every later number
+        is read from, and four arms must not overwrite each other's."""
+        destinations = set()
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("CKPT_DIR=$MS_ASSET_DIR/mshab_transfer_checkpoint",
+                              script)
+                # Fails before the budget when the volume is not mounted.
+                self.assertIn('mkdir -p $HOME/output "$CKPT_DIR"', script)
+                path = re.search(r"checkpoint\.path=(\S+)",
+                                 self._active(script)).group(1)
+                self.assertTrue(path.startswith("$CKPT_DIR/"), path)
+                # Timestamped, so a rerun cannot silently replace the best a
+                # previous run of the same arm earned.
+                self.assertIn("${TIMESTAMP}", path)
+                destinations.add(path)
+        self.assertEqual(len(destinations), 4)
+
     def test_no_launcher_pins_the_old_entity_vocabulary(self):
         for experiment, arm, script in self._scripts():
             with self.subTest(experiment=experiment, arm=arm):
