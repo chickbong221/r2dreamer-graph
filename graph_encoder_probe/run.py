@@ -256,15 +256,29 @@ def check_gradients(model, pool: GraphFrames, device, *, batch: int = 8) -> str:
 
 
 def check_controls(result) -> str:
-    """Unchanged graphs stay inside the tolerance they define."""
+    """An unchanged pair must never look as different as an edited one.
+
+    With no threshold to sit under, this is the property that actually matters:
+    the numerical floor has to be below every real response, or a distance
+    cannot be read as the edit's doing.
+    """
     controls = [m for m in result.measurements if m.group == CONTROL_GROUP]
+    changed = [m for m in result.measurements if m.group != CONTROL_GROUP]
     if not controls:
         return "FAIL: the probe set has no controls"
-    worst = max(m.rms for m in controls)
-    flagged = [m.name for m in controls if m.detected]
-    if flagged:
-        return f"FAIL: controls reported as different: {flagged} (worst {worst:.3e})"
-    return f"ok (worst control {worst:.3e} against tolerance {result.tolerance.value:.3e})"
+    if not changed:
+        return "FAIL: the probe set has no edited pairs"
+    worst, weakest = max(m.rms for m in controls), min(m.rms for m in changed)
+    if worst >= weakest:
+        swamped = [m.name for m in changed if m.rms <= worst]
+        return (
+            f"FAIL: unchanged pairs reach {worst:.3e}, at or above the weakest edit "
+            f"{weakest:.3e} ({swamped[:3]})"
+        )
+    return (
+        f"ok (worst unchanged {worst:.3e}, weakest edit {weakest:.3e} -- "
+        f"{weakest / max(worst, 1e-30):.0f}x margin)"
+    )
 
 
 def check_probe_is_read_only(model, pool, pairset, index_a, index_b, device, probe_kwargs) -> str:
@@ -295,11 +309,11 @@ def check_reload(run_directory, pool, pairset, index_a, index_b, device, probe_k
         delta = abs(other.rms - item.rms)
         if delta > worst:
             worst, worst_name = delta, item.name
-    # The floor is the run's own measured non-determinism, not zero: the same
-    # weights on the same GPU already disagree with themselves by that much. The
-    # relative term covers float32 accumulation; a checkpoint that actually
-    # reloaded wrong would be out by a fraction of the token, not a millionth.
-    limit = max(reference.tolerance.repeat_max, 1e-6 * reference.token_scale, 1e-9)
+    # Not zero: the same weights on the same GPU already disagree with
+    # themselves in the last bits, because the encoder's scatter-add over edges
+    # has no fixed summation order. A checkpoint that actually reloaded wrong
+    # would be out by a fraction of the token, not a millionth of one.
+    limit = max(1e-6 * reference.token_scale, 1e-9)
     if worst > limit:
         return f"FAIL: {worst_name} moved by {worst:.3e} after reloading (limit {limit:.3e})"
     return f"ok (largest change after reload {worst:.3e}, limit {limit:.3e})"
@@ -312,9 +326,6 @@ def plumbing_checks(cfg, dataset, pairset, result: TrainResult) -> tuple[bool, l
     probe_cfg = dict(cfg["probe"])
     probe_kwargs = dict(
         batch_size=int(probe_cfg.get("batch_size", 64)),
-        repeats=int(probe_cfg.get("repeats", 3)),
-        control_factor=float(probe_cfg.get("tolerance_control_factor", 5.0)),
-        rel_floor=float(probe_cfg.get("tolerance_rel_floor", 1e-3)),
         zero_token_eps=float(probe_cfg.get("zero_token_eps", 1e-6)),
     )
     model = build_model(
@@ -328,7 +339,7 @@ def plumbing_checks(cfg, dataset, pairset, result: TrainResult) -> tuple[bool, l
         f"1. cache round trip        {check_cache_roundtrip(dataset, source_dir)}",
         f"2. pair edits              {check_pairs(dataset, pairset)}",
         f"3. gradients reach both    {check_gradients(model, pool, device)}",
-        f"4. unchanged controls      {check_controls(result.last)}",
+        f"4. unchanged pairs stay put {check_controls(result.last)}",
         f"5. probing is read-only    "
         f"{check_probe_is_read_only(model, pool, pairset, index_a, index_b, device, probe_kwargs)}",
         f"6. reload reproduces       "
@@ -373,7 +384,8 @@ def write_report(
         f"{'plateau' if result.converged else 'the budget was reached, which is not convergence'}",
         f"- device {result.device}, float32, monitor subset {result.monitor_size} frames",
         f"- collection revision `{dataset.meta.get('revision')}`, run revision `{git_revision()}`",
-        f"- {last.tolerance.describe()}",
+        f"- token RMS magnitude {first.token_scale:.4e} before training, "
+        f"{last.token_scale:.4e} after -- distances are read against this",
         "",
         "## By edit group",
         "",
@@ -496,7 +508,8 @@ def main(argv=None) -> int:
                 "updates": result.updates,
                 "stop_reason": result.stop_reason,
                 "converged": result.converged,
-                "tolerance": result.last.tolerance.__dict__,
+                "token_scale_before": result.first.token_scale,
+                "token_scale_after": result.last.token_scale,
                 "by_group_before": result.first.by_group,
                 "by_group_after": result.last.by_group,
                 "warnings": result.warnings,

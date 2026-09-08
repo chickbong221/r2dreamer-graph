@@ -100,12 +100,10 @@ decoder_eval:
   examples: 3
 
 probe:
-  # A changed pair counts as detected only above this. Both terms matter: the
-  # first is the numerical floor measured on identical inputs, the second keeps
-  # a tiny-but-repeatable wobble from being reported as a response.
-  tolerance_control_factor: 5.0
-  tolerance_rel_floor: 1.0e-3
-  repeats: 3
+  # No threshold and no yes/no verdict: the distance is the result, and the
+  # unchanged control pairs on the same plot are the scale it is read against.
+  # A token whose norm falls under this is flagged instead of given a cosine,
+  # because a near-zero vector has no direction to compare.
   zero_token_eps: 1.0e-6
   batch_size: 64
 

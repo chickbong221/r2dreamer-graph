@@ -34,7 +34,7 @@ MODEL_CFG = {
     "centroid_scale": 5.0,
 }
 
-PROBE_KWARGS = dict(batch_size=16, repeats=3, control_factor=5.0, rel_floor=1e-3, zero_token_eps=1e-6)
+PROBE_KWARGS = dict(batch_size=16, zero_token_eps=1e-6)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -123,7 +123,8 @@ class ProbeModel(unittest.TestCase):
         probe(self.model, self.pool, self.pairs, self.index_a, self.index_b, update=0, **PROBE_KWARGS)
         self.assertTrue(self.model.training)
 
-    def test_controls_stay_inside_the_tolerance(self):
+    def test_unchanged_pairs_stay_below_every_edit(self):
+        """With no threshold, this is the property the measurement rests on."""
         from ..evaluate import probe
         from ..run import check_controls
 
@@ -132,7 +133,7 @@ class ProbeModel(unittest.TestCase):
         )
         self.assertTrue(check_controls(result).startswith("ok"), check_controls(result))
 
-    def test_edited_pairs_are_measured_above_the_controls(self):
+    def test_edited_pairs_move_the_token_further_than_no_edit_does(self):
         """A randomly initialised encoder is expected to separate these already.
 
         Recorded as a test because the alternative -- an encoder whose token
@@ -179,7 +180,7 @@ class ProbeModel(unittest.TestCase):
     def test_a_zero_token_is_flagged_not_scored(self):
         from ..evaluate import PairMeasurement
 
-        item = PairMeasurement("x", "absolute", 0.0, 1.0, 0.0, 0.0, True, False)
+        item = PairMeasurement("x", "absolute", 0.0, 1.0, 0.0, 0.0, True)
         self.assertEqual(item.cosine_text(), "zero-token")
 
 

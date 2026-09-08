@@ -40,13 +40,7 @@ def config(**train_overrides) -> dict:
         "seed": 0,
         "model": dict(MODEL_CFG),
         "train": train,
-        "probe": {
-            "tolerance_control_factor": 5.0,
-            "tolerance_rel_floor": 1e-3,
-            "repeats": 2,
-            "zero_token_eps": 1e-6,
-            "batch_size": 16,
-        },
+        "probe": {"zero_token_eps": 1e-6, "batch_size": 16},
     }
 
 
@@ -84,6 +78,18 @@ class ShortRun(unittest.TestCase):
         self.assertEqual(result.stop_reason, "plateau")
         self.assertTrue(result.converged)
         self.assertLess(result.updates, 100)
+
+    def test_no_threshold_survives_anywhere_in_the_output(self):
+        """The distance is the result; a verdict column would only hide it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._train(config(), tmp)
+            with open(os.path.join(tmp, "probe_rows.csv")) as handle:
+                columns = next(csv.reader(handle))
+        self.assertNotIn("detected", columns)
+        self.assertNotIn("tolerance", columns)
+        self.assertFalse([k for k in result.history[0] if "detected" in k or "toleran" in k])
+        self.assertFalse(hasattr(result.last, "tolerance"))
+        self.assertIn("token_scale", result.history[0])
 
     def test_every_pair_gets_a_row_at_every_probe(self):
         with tempfile.TemporaryDirectory() as tmp:

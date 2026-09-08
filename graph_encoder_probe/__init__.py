@@ -19,6 +19,27 @@ __all__ = ["EDIT_GROUPS", "TOKEN_KEY"]
 # which, so a pooled readout that merely counts labels cannot separate them.
 EDIT_GROUPS = ("absolute", "temporal", "geometry", "assignment")
 
+# What each group is called where a person reads it. The keys stay the internal
+# identifiers -- pair names, CSV columns and config all use those -- but a
+# legend saying "control" makes a reader work out what was controlled, and one
+# saying "no change" does not.
+GROUP_LABELS = {
+    "absolute": "absolute label changed",
+    "temporal": "temporal label changed",
+    "geometry": "centroid moved 1-5 cm",
+    "assignment": "labels swapped between pairs",
+    "control": "no change",
+}
+
+# The same thing again for the console, where the line has to stay one line.
+GROUP_SHORT = {
+    "absolute": "abs",
+    "temporal": "temp",
+    "geometry": "geom",
+    "assignment": "swap",
+    "control": "unchanged",
+}
+
 # What the probe measures. Named once so a future change to the encoder's
 # readout has a single place to be reflected.
 TOKEN_KEY = "token"

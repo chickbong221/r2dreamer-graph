@@ -266,9 +266,6 @@ def train(
     probe_kwargs = dict(
         device=device,
         batch_size=int(probe_cfg.get("batch_size", 64)),
-        repeats=int(probe_cfg.get("repeats", 3)),
-        control_factor=float(probe_cfg.get("tolerance_control_factor", 5.0)),
-        rel_floor=float(probe_cfg.get("tolerance_rel_floor", 1e-3)),
         zero_token_eps=float(probe_cfg.get("zero_token_eps", 1e-6)),
     )
 
@@ -327,16 +324,13 @@ def train(
             "update": update,
             "train_loss": train_loss,
             "monitor_loss": losses["total"],
-            "tolerance": result.tolerance.value,
             "token_scale": result.token_scale,
-            "repeat_max": result.tolerance.repeat_max,
-            "control_max": result.tolerance.control_max,
             "updates_per_sec": rate,
         }
         row |= {f"monitor/{key}": losses[key] for key in LOSS_KEYS}
         for name, stats in result.by_group.items():
             row[f"mean_rms/{name}"] = stats["mean_rms"]
-            row[f"detected/{name}"] = int(stats["detected"])
+            row[f"mean_cosine/{name}"] = stats["mean_cosine"]
         history.append(row)
         print(result.summary_line(losses["total"]), flush=True)
         if decoded is not None:

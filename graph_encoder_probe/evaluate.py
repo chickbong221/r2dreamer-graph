@@ -1,15 +1,18 @@
-"""Measuring the pooled token: distances, the tolerance they are read against,
-and the report.
+"""Measuring the pooled token: distances, and the report.
 
 Two numbers per pair. The RMS distance says how far apart the vectors are; the
 cosine says whether they point the same way. Neither answers the question alone
 -- two tokens can sit at cosine 0.9999 and still differ in length by a factor
-the RSSM would see -- so both are always reported, and the raw distance is never
-replaced by the detected flag.
+the RSSM would see -- so both are always reported.
 
-The tolerance is measured, not assumed. Encoding an unchanged graph twice is not
-bit-exact on a GPU (the encoder aggregates with ``index_add``, whose order is
-not fixed), so "different" has to mean "further apart than that".
+There is no threshold and no yes/no verdict. The distance is the result, and a
+flag derived from it could only ever hide how large it was.
+
+The unchanged control pairs carry the scale: they are the same graph twice, so
+whatever distance they show is what "no change at all" costs in this precision
+on this hardware. Every other distance is read against that, by eye, from the
+same plot -- there is no threshold and no yes/no verdict, because the raw
+distance is the result.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 import numpy as np
 import torch
 
+from . import GROUP_LABELS, GROUP_SHORT
 from .dataset import GraphFrames
 from .pairs import CONTROL_GROUP, PairSet
 
@@ -64,52 +68,6 @@ def distances(z_a: torch.Tensor, z_b: torch.Tensor, *, eps: float = 1e-12) -> di
 
 
 @dataclass
-class Tolerance:
-    """What a distance has to beat before it counts as a difference."""
-
-    value: float
-    control_max: float
-    repeat_max: float
-    token_scale: float
-    control_factor: float
-    rel_floor: float
-
-    def describe(self) -> str:
-        return (
-            f"tolerance {self.value:.3e} = max({self.control_factor:g} x "
-            f"max(control {self.control_max:.3e}, repeat {self.repeat_max:.3e}), "
-            f"{self.rel_floor:g} x token RMS {self.token_scale:.3e})"
-        )
-
-
-def build_tolerance(
-    control_rms: np.ndarray,
-    repeat_rms: float,
-    token_scale: float,
-    *,
-    control_factor: float = 5.0,
-    rel_floor: float = 1e-3,
-) -> Tolerance:
-    """Numerical floor and scale floor, whichever is larger.
-
-    The first term is what identical inputs cost. The second keeps a difference
-    that is repeatable but negligible against the token's own magnitude from
-    being reported as a response.
-    """
-    control_max = float(np.max(control_rms)) if np.size(control_rms) else 0.0
-    numerical = float(control_factor) * max(control_max, float(repeat_rms))
-    scale = float(rel_floor) * float(token_scale)
-    return Tolerance(
-        value=max(numerical, scale),
-        control_max=control_max,
-        repeat_max=float(repeat_rms),
-        token_scale=float(token_scale),
-        control_factor=float(control_factor),
-        rel_floor=float(rel_floor),
-    )
-
-
-@dataclass
 class PairMeasurement:
     name: str
     group: str
@@ -118,7 +76,6 @@ class PairMeasurement:
     norm_a: float
     norm_b: float
     zero_token: bool
-    detected: bool
     note: str = ""
 
     def cosine_text(self) -> str:
@@ -131,7 +88,6 @@ class PairMeasurement:
 class ProbeResult:
     update: int
     measurements: list[PairMeasurement]
-    tolerance: Tolerance
     token_scale: float
     by_group: dict[str, dict[str, float]] = field(default_factory=dict)
 
@@ -147,14 +103,14 @@ class ProbeResult:
 
     def summary_line(self, recon: Optional[float] = None) -> str:
         """The one console line per probe."""
-        detected = " ".join(
-            f"{name[:5]} {int(self.by_group[name]['detected'])}/{int(self.by_group[name]['count'])}"
+        per_group = " ".join(
+            f"{GROUP_SHORT.get(name, name[:5])} {self.by_group[name]['mean_rms']:.1e}"
             for name in self.group_names()
         )
         changed = [m for m in self.measurements if m.group != CONTROL_GROUP]
         mean = float(np.mean([m.rms for m in changed])) if changed else 0.0
         loss = "     n/a" if recon is None else f"{recon:8.4f}"
-        return f"update {self.update:6d} | recon {loss} | {detected} | dist {mean:.4e}"
+        return f"update {self.update:6d} | recon {loss} | {per_group} | dist {mean:.4e}"
 
 
 def probe(
@@ -167,9 +123,6 @@ def probe(
     update: int,
     device=None,
     batch_size: int = 64,
-    repeats: int = 3,
-    control_factor: float = 5.0,
-    rel_floor: float = 1e-3,
     zero_token_eps: float = 1e-6,
 ) -> ProbeResult:
     """Measure every pair once. Weights are untouched by construction."""
@@ -178,24 +131,15 @@ def probe(
     try:
         z_a = encode(model, pool, index_a, device=device, batch_size=batch_size)
         z_b = encode(model, pool, index_b, device=device, batch_size=batch_size)
-        repeat_max = repeat_variation(
-            model, pool, index_a, repeats=repeats, device=device, batch_size=batch_size
-        )
     finally:
         model.train(was_training)
 
     stats = distances(z_a, z_b)
-    # The token's own RMS magnitude. A distance is only meaningful against it:
-    # 1e-3 apart means one thing on a token of norm 1 and another on norm 100.
+    # Logged beside the distances because it is what makes them comparable: the
+    # same 1e-3 gap means one thing on a token of RMS 1 and another on RMS 100,
+    # and this magnitude moves during training.
     token_scale = (
         float(torch.sqrt((torch.cat([z_a, z_b], 0) ** 2).mean())) if z_a.numel() else 0.0
-    )
-
-    control = np.asarray(
-        [stats["rms"][i] for i, spec in enumerate(pairset.specs) if spec.group == CONTROL_GROUP]
-    )
-    tolerance = build_tolerance(
-        control, repeat_max, token_scale, control_factor=control_factor, rel_floor=rel_floor
     )
 
     measurements: list[PairMeasurement] = []
@@ -212,40 +156,19 @@ def probe(
                 norm_a=float(stats["norm_a"][i]),
                 norm_b=float(stats["norm_b"][i]),
                 zero_token=zero,
-                detected=bool(stats["rms"][i] > tolerance.value),
                 note=spec.note,
             )
         )
 
-    result = ProbeResult(int(update), measurements, tolerance, token_scale)
+    result = ProbeResult(int(update), measurements, token_scale)
     for name in result.group_names():
         rows = [m for m in measurements if m.group == name]
         result.by_group[name] = {
             "count": float(len(rows)),
-            "detected": float(sum(m.detected for m in rows)),
             "mean_rms": float(np.mean([m.rms for m in rows])),
             "mean_cosine": float(np.mean([m.cosine for m in rows])),
         }
     return result
-
-
-@torch.no_grad()
-def repeat_variation(
-    model, pool: GraphFrames, indices: Sequence[int], *, repeats: int = 3, device=None, batch_size: int = 64
-) -> float:
-    """Largest RMS distance between repeated encodings of the same graphs.
-
-    This is the experiment's own noise floor. On a GPU it is not zero: the
-    encoder's scatter-add over edges has no fixed summation order.
-    """
-    if int(repeats) < 2 or len(indices) == 0:
-        return 0.0
-    first = encode(model, pool, indices, device=device, batch_size=batch_size)
-    worst = 0.0
-    for _ in range(int(repeats) - 1):
-        again = encode(model, pool, indices, device=device, batch_size=batch_size)
-        worst = max(worst, float(distances(first, again)["rms"].max()))
-    return worst
 
 
 # --------------------------------------------------------------------------- #
@@ -260,13 +183,13 @@ def write_probe_rows(path: str, result: ProbeResult) -> None:
         if new:
             writer.writerow(
                 ["update", "pair", "group", "rms", "cosine", "norm_a", "norm_b",
-                 "zero_token", "detected", "tolerance"]
+                 "zero_token"]
             )
         for item in result.measurements:
             writer.writerow(
                 [result.update, item.name, item.group, f"{item.rms:.10e}",
                  f"{item.cosine:.10f}", f"{item.norm_a:.10e}", f"{item.norm_b:.10e}",
-                 int(item.zero_token), int(item.detected), f"{result.tolerance.value:.10e}"]
+                 int(item.zero_token)]
             )
 
 
@@ -293,8 +216,8 @@ def final_table(first: ProbeResult, last: ProbeResult, pairset: PairSet, *, per_
     """
     before, after = first.lookup(), last.lookup()
     lines = [
-        "| Pair | Change | Distance before | Distance after | Final cosine | Detected? |",
-        "|---|---|---:|---:|---:|---|",
+        "| Pair | Change | Distance before | Distance after | After / before | Final cosine |",
+        "|---|---|---:|---:|---:|---:|",
     ]
     shown: dict[str, int] = {}
     for spec in pairset.specs:
@@ -305,11 +228,13 @@ def final_table(first: ProbeResult, last: ProbeResult, pairset: PairSet, *, per_
         end = after.get(spec.name)
         if end is None:
             continue
+        ratio = (
+            "n/a" if start is None or start.rms <= 0 else f"{end.rms / start.rms:.2f}x"
+        )
         lines.append(
             f"| {spec.name} | {spec.note} | "
             f"{'n/a' if start is None else f'{start.rms:.4e}'} | "
-            f"{end.rms:.4e} | {end.cosine_text()} | "
-            f"{'yes' if end.detected else 'no'} |"
+            f"{end.rms:.4e} | {ratio} | {end.cosine_text()} |"
         )
     return "\n".join(lines)
 
@@ -323,12 +248,15 @@ def group_table(first: ProbeResult, last: ProbeResult) -> str:
     """
     lines = [
         "| Group | Pairs | Mean distance before | Mean distance after | After / before | "
-        "Mean cosine after | Detected after |",
-        "|---|---:|---:|---:|---|---:|---:|",
+        "Mean cosine after |",
+        "|---|---:|---:|---:|---|---:|",
     ]
     for name in last.group_names():
         end = last.by_group[name]
         start = first.by_group.get(name, {})
+        # Named for the reader, with the identifier kept so a row still points
+        # at its pairs (``control-01``) and its CSV column.
+        shown = f"{GROUP_LABELS.get(name, name)} (`{name}`)"
         before = float(start.get("mean_rms", float("nan")))
         ratio = end["mean_rms"] / before if before > 0 else float("nan")
         if not math.isfinite(ratio):
@@ -340,8 +268,8 @@ def group_table(first: ProbeResult, last: ProbeResult) -> str:
         else:
             change = f"{ratio:.2f}x preserved"
         lines.append(
-            f"| {name} | {int(end['count'])} | {before:.4e} | {end['mean_rms']:.4e} | "
-            f"{change} | {end['mean_cosine']:.6f} | {int(end['detected'])}/{int(end['count'])} |"
+            f"| {shown} | {int(end['count'])} | {before:.4e} | {end['mean_rms']:.4e} | "
+            f"{change} | {end['mean_cosine']:.6f} |"
         )
     return "\n".join(lines)
 
@@ -387,14 +315,11 @@ def make_plots(history: Sequence[Mapping], out_dir: str, groups: Iterable[str]) 
         values = [row.get(key) for row in history]
         if not any(v is not None for v in values):
             continue
-        ax.plot(updates, values, marker="o", ms=3, label=name)
-    tol = [row.get("tolerance") for row in history]
-    if any(v is not None for v in tol):
-        ax.plot(updates, tol, linestyle="--", color="0.4", label="tolerance")
+        ax.plot(updates, values, marker="o", ms=3, label=GROUP_LABELS.get(name, name))
     ax.set_yscale("log")
     ax.set_xlabel("optimizer updates")
-    ax.set_ylabel("mean latent RMS distance")
-    ax.set_title("Latent distance by edit type")
+    ax.set_ylabel("distance between the pair's two tokens (RMS)")
+    ax.set_title("How far one edit moves the encoder's token")
     ax.legend(fontsize=8)
     fig.tight_layout()
     path = os.path.join(out_dir, "latent_distance.png")

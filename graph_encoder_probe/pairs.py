@@ -412,8 +412,8 @@ def _check_consumed(a: Mapping[str, np.ndarray], b: Mapping[str, np.ndarray], sp
     """The edited row is a real node or a real fact, in both members.
 
     An edit to a padded row is invisible to the encoder -- it strips those rows
-    before the first message pass -- so a pair built on one would report "no
-    difference detected" about a graph nobody changed.
+    before the first message pass -- so a pair built on one would sit down at the
+    controls' distance while claiming to be an edit.
     """
     ctx_mask = legal_absolute_mask()
     for pos in spec.positions:

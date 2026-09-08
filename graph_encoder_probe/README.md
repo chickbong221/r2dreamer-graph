@@ -57,9 +57,14 @@ Each pair holds everything fixed but one thing.
 `assignment` is the group that cannot be answered by counting: both graphs carry
 the same labels over the same topology, and only the pairing differs.
 
+In the plots and the report these read as what they are -- "absolute label
+changed", "labels swapped between pairs", "no change (control)" -- while the
+identifiers (`absolute`, `assignment`, `control`) stay attached to pair names
+and CSV columns. `GROUP_LABELS` in `__init__.py` is where the wording lives.
+
 Plus unchanged **controls** -- the same frame twice. Whatever distance they show
-is what "no change at all" costs in this precision on this hardware, and it is
-the floor the tolerance is built from.
+is what "no change at all" costs in this precision on this hardware, and every
+other line on the plot is read against theirs.
 
 Some edited graphs are physically inconsistent, deliberately: a centroid moves
 while the boxes that would have followed it stay put. The point is to isolate
@@ -136,7 +141,7 @@ what the run measures, so it is a decision, not a tuning knob.
 Console, one line per probe:
 
 ```text
-update    250 | recon   1.8342 | absol 25/25 tempo 24/25 geome 25/25 assig 22/25 contr 0/8 | dist 4.7e-02
+update    250 | recon   1.8342 | abs 3.9e-02 temp 4.4e-02 geom 8.1e-04 swap 3.0e-02 unchanged 4.1e-08 | dist 2.8e-02
 ```
 
 In `outputs/runs/<name>/`:
@@ -144,13 +149,13 @@ In `outputs/runs/<name>/`:
 | File | Contents |
 |---|---|
 | `report.md` | the headline tables: per group, and every pair before vs after |
-| `probe_rows.csv` | one row per pair per probe -- distance, cosine, both norms, detected flag |
+| `probe_rows.csv` | one row per pair per probe -- distance, cosine, both norms |
 | `progress.csv`, `history.json` | loss and per-group distance against updates |
 | `loss.png`, `latent_distance.png` | the two plots |
 | `decoder_*.csv`, `decoder_*.png` | what the decoder recovered (below) |
 | `checkpoint_init.pt`, `checkpoint_final.pt` | weights before the first update and at the end |
 | `resolved_config.yaml` | exactly what this run was given |
-| `result.json` | stop reason, tolerance, per-group summary, check verdict |
+| `result.json` | stop reason, token scale, per-group summary, check verdict |
 
 ## Does the decoded label match the true one?
 
@@ -188,7 +193,7 @@ A head with nothing to score reports *no items*, not zero accuracy. On
 PlaceSphere `node_target` is in that state -- see the caveat above -- and
 "nothing to score" and "never right" must not print the same.
 
-## How a difference is decided
+## How a difference is measured
 
 Per pair, on `z_A` and `z_B` with gradients off and identical preprocessing:
 
@@ -197,13 +202,17 @@ Per pair, on `z_A` and `z_B` with gradients off and identical preprocessing:
   same way. Two tokens can sit at cosine 0.9999 and still differ in length, so
   cosine never decides on its own.
 
-A changed pair counts as **detected** only above a tolerance built from two
-measured things: the largest distance any control or repeated encoding shows
-(the numerical floor -- the encoder aggregates with `index_add`, which has no
-fixed summation order on a GPU), and a small fraction of the token's own RMS
-magnitude. The raw distance is always in the table, so a weak response cannot
-hide behind a binary flag. A token whose norm is effectively zero is flagged
-rather than given a cosine.
+There is no threshold and no yes/no verdict. The distance is the result; a flag
+derived from it could only hide how large it was. What makes a distance readable
+is on the same plot: the **no-change controls** are the same graph twice, so
+their distance is what this precision on this hardware costs when nothing
+changed, and every edited group is read against that line. `token_scale` -- the
+token's own RMS magnitude -- is logged beside every probe for the same reason,
+because it moves during training and a fixed distance means less as the vector
+grows.
+
+A token whose norm is effectively zero is flagged rather than given a cosine: a
+near-zero vector has no direction to compare.
 
 ## Training, and what it deliberately does not do
 
@@ -269,7 +278,7 @@ graph_encoder_probe/
     pairs.py        the four edits, their verification, and the fixed probe set
     model.py        encoder -> decoder, and the config resolved from the data
     train.py        reconstruction training with the probe read off at intervals
-    evaluate.py     distances, tolerance, tables, plots
+    evaluate.py     distances, tables, plots
     decoder_eval.py what the decoder recovered: agreement, confusions, figures
     run.py          orchestration, the six plumbing checks, the report
     tests/          all of it without a simulator
