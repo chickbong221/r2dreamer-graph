@@ -383,7 +383,7 @@ def plot_accuracy(history: Sequence[Mapping], out_dir: str) -> Optional[str]:
             continue
         left.plot(updates, values, marker="o", ms=3, label=name)
     left.set_ylim(0.0, 1.02)
-    left.set_xlabel("optimizer updates")
+    left.set_xlabel("step")
     left.set_ylabel("fraction of labels recovered exactly")
     left.set_title("Discrete heads")
     left.legend(fontsize=8)
@@ -391,7 +391,7 @@ def plot_accuracy(history: Sequence[Mapping], out_dir: str) -> Optional[str]:
     mae = [row.get("bbox_mae") for row in history]
     if any(v is not None for v in mae):
         right.plot(updates, mae, marker="o", ms=3, color="tab:red")
-    right.set_xlabel("optimizer updates")
+    right.set_xlabel("step")
     right.set_ylabel("mean absolute error (normalised box units)")
     right.set_title("Box regression")
     fig.tight_layout()
