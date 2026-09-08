@@ -291,10 +291,14 @@ class PooledGraphSimpleTest(unittest.TestCase):
             self.assertTrue(torch.isfinite(metrics[name]), name)
         # The signed difference is exactly prior minus posterior, so its sign
         # says which branch is running small.
+        prior = float(metrics["graph_sem_prior_rms"])
+        post = float(metrics["graph_sem_post_rms"])
+        # Relative, not `places=`: these are float32 magnitudes with no bound
+        # on how large they grow, and an absolute tolerance that holds at
+        # init would start flaking once they do.
         self.assertAlmostEqual(
-            float(metrics["graph_sem_rms_difference"]),
-            float(metrics["graph_sem_prior_rms"])
-            - float(metrics["graph_sem_post_rms"]), places=5)
+            float(metrics["graph_sem_rms_difference"]), prior - post,
+            delta=1e-5 * max(1.0, abs(prior), abs(post)))
         # Both magnitudes are positive: an RMS that reads zero is the
         # collapse this exists to make visible, not a healthy alignment.
         self.assertGreater(float(metrics["graph_sem_post_rms"]), 0.0)

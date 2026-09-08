@@ -929,7 +929,13 @@ class EvaluationLoopTest(unittest.TestCase):
         self.assertEqual(agent.batch_sizes, [93, 93, 93])
         self.assertEqual(result["eval/success_once"], 0)
         self.assertEqual(result["eval_light/bright/success_once"], 1)
-        self.assertEqual(result["eval/episodes"], 63)
+        # Every scene case is stepped and scored -- that is what "entire
+        # panel" means, and the 93-wide batches above are the same claim from
+        # the loop's side. What eval/ *reports* is the 62 the policy did not
+        # train in; s00 is measured, and lands under eval_scene/training.
+        self.assertEqual(result["eval_scene/all/episodes"], 63)
+        self.assertEqual(result["eval_scene/training/episodes"], 1)
+        self.assertEqual(result["eval/episodes"], 62)
         self.assertTrue(agent.training)
         self.assertTrue(torch.equal(before, torch.get_rng_state()))
         self.assertEqual(runner._last_eval_step, 50000)
