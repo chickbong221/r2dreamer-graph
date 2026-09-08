@@ -318,8 +318,10 @@ def make_plots(history: Sequence[Mapping], out_dir: str, groups: Iterable[str]) 
         ax.plot(updates, values, marker="o", ms=3, label=GROUP_LABELS.get(name, name))
     ax.set_yscale("log")
     ax.set_xlabel("optimizer updates")
-    ax.set_ylabel("distance between the pair's two tokens (RMS)")
-    ax.set_title("How far one edit moves the encoder's token")
+    # Each pair is two graphs encoded separately; this is how far apart the one
+    # pooled token each of them produces ends up. The legend says what was
+    # edited, so the axis does not have to.
+    ax.set_ylabel("RMS Distance")
     ax.legend(fontsize=8)
     fig.tight_layout()
     path = os.path.join(out_dir, "latent_distance.png")
