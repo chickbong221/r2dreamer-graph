@@ -11,22 +11,27 @@
 # Experiment B -- one object, five training scenes, forty-two unseen ones.
 #
 # 004_sugar_box in five arrangements of one apartment for 8M steps, evaluated
-# in every arrangement of the other two. 125 training environments, 25 per
-# scene; the split itself is frozen in configs/scenes/mshab_pick_b.json and
-# checked against the installed task plans above, so a drifted manifest stops
-# the run rather than quietly moving the experiment.
+# in thirty arrangements of the other two, fifteen from each. 125 training
+# environments, 25 per scene; the split itself is frozen in
+# configs/scenes/mshab_pick_b.json and checked against the installed task
+# plans above, so a drifted manifest stops the run rather than quietly moving
+# the experiment.
 #
-# The panel is 82 environments in one simulator: 42 unseen scenes at nominal
+# The panel is 70 environments in one simulator: 30 unseen scenes at nominal
 # light, 10 training-scene cases at nominal light, and C's 30 matched cases at
 # 0.4 / 1.0 / 2.0 -- all thirty on the original single training scene, which
 # five-scene training does not expand.
 #
-# The checkpoint is selected on eval_scene/training/success_once, the ten
-# normal-light training-scene cases. Not eval/success_once, which here pools
-# the unseen scenes in: selecting on the number B reports would pick whichever
-# checkpoint got luckiest on the test set. Eligibility starts at 6M of the 8M
-# budget, so the selection window is the last two million steps rather than
-# the final evaluation on its own.
+# The three parts are never pooled: eval/* is the 30 unseen scenes alone, so
+# a policy that generalises to nothing reports zero rather than the 25% that
+# averaging the ten training cases in would give.
+#
+# The checkpoint is selected on eval_scene/training/success_once, those ten
+# normal-light training-scene cases -- deliberately not eval/success_once,
+# because selecting on the number B reports would pick whichever checkpoint
+# got luckiest on the test set. Eligibility starts at 6M of the 8M budget, so
+# the selection window is the last two million steps rather than the final
+# evaluation on its own.
 #
 # No transfer stage: the held-out object belongs to A.
 #

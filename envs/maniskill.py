@@ -289,6 +289,12 @@ class ManiSkillVecEnv:
         from scenegraph.adapters.graph_obs import build_graph_obs
 
         self._eval = bool(eval)
+        self._video_source = str(
+            getattr(config, "eval_video_source", "render") or "render")
+        if self._video_source not in ("render", "policy"):
+            raise ValueError(
+                f"eval_video_source must be 'render' or 'policy', got "
+                f"{self._video_source!r}")
         self.eval_cases = []
         self.training_scenes = list(getattr(config, "train_build_config_ids", []) or [])
         self._eval_seed = int(getattr(config, "eval_seed", config.seed))
@@ -487,6 +493,12 @@ class ManiSkillVecEnv:
             self._render_size = tuple(
                 int(v) for v in (getattr(config, "eval_render_size", None) or ())
             )
+            # Nothing reads the human camera in `policy` mode, so do not ask
+            # for a large one: the configs are per parallel environment, and
+            # a 512x512 target on each of seventy is memory bought to be
+            # rendered and discarded.
+            if self._video_source == "policy":
+                self._render_size = ()
             if self._render_size:
                 make_kwargs["human_render_camera_configs"] = dict(
                     width=self._render_size[1], height=self._render_size[0]
@@ -820,7 +832,16 @@ class ManiSkillVecEnv:
         return trans, done_t.to(self._device)
 
     def render(self, env_idx=None):
-        """Human-render images on CPU; select a row before transferring when requested."""
+        """Human-render images on CPU; select a row before transferring when requested.
+
+        ``None`` under ``eval_video_source: policy``, which makes the trainer
+        fall through to the policy's own cameras. Returning nothing is the
+        point: ManiSkill renders the human camera for every parallel
+        environment, so calling it to keep three rows is the waste this mode
+        exists to avoid.
+        """
+        if self._video_source == "policy":
+            return None
         frames = self._env.render()
         if frames is None:
             return None

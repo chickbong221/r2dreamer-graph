@@ -299,6 +299,29 @@ class PooledGraphSimpleTest(unittest.TestCase):
         # collapse this exists to make visible, not a healthy alignment.
         self.assertGreater(float(metrics["graph_sem_post_rms"]), 0.0)
 
+    def test_the_amplitude_diagnostics_survive_the_wandb_filter(self):
+        """Produced is not reported. `wandb_scalars` is a whitelist, so a
+        metric Dreamer emits under `train/` reaches nobody until it is named
+        there -- which is how the loss rode through on its `train/loss/`
+        prefix while every gauge beside it was dropped.
+
+        Driven from what the model actually emitted, not from a list, so a
+        metric renamed on one side and not the other fails here."""
+        import tools
+
+        model = self._model()
+        _, metrics = model._cal_grad(
+            model.preprocess(pooled_sequence()), model.rssm.initial(2)
+        )
+        emitted = [f"train/{name}" for name in metrics
+                   if name.startswith(("graph_sem_", "graph_amp_",
+                                       "graph_align_"))
+                   or name == "loss/graphamp"]
+        self.assertIn("train/loss/graphamp", emitted)
+        kept = tools.wandb_scalars((name, 0.0) for name in emitted)
+        self.assertEqual(sorted(kept), sorted(emitted),
+                         f"dropped: {sorted(set(emitted) - set(kept))}")
+
     def test_a_zero_amplitude_scale_drops_the_loss_and_keeps_the_gauges(self):
         config = make_pooled_config()
         config.loss_scales.graphamp = 0.0

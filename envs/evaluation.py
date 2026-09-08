@@ -3,10 +3,11 @@
 B and C share one vector simulator and one policy batch. No extra normal
 evaluation is constructed. The panel is also the source of metric grouping.
 
-B's panel has three parts and they are never pooled: the unseen scenes are
-the generalisation number, a smaller fixed set of training-scene cases is
-what the checkpoint is selected on, and the lighting rows sit on one named
-training scene whatever else B trains in.
+B's panel has three parts and they are never pooled. ``eval/*`` is the unseen
+scenes -- the generalisation number the experiment is read by. A smaller fixed
+set of training-scene cases sits under ``eval_scene/training/*`` and is what
+the checkpoint is selected on, disjoint from the number it is selected for.
+The lighting rows sit on one named training scene whatever else B trains in.
 """
 
 from collections import defaultdict
@@ -182,43 +183,83 @@ def build_panel(by_object, config):
 
 
 def evaluation_video_rows(cases, training_scenes):
+    """Which environments are filmed. Nothing outside this mapping is.
+
+    Rendering happens per selected environment, so this is the whole video
+    cost of an evaluation -- a 70-case panel does not produce 70 films, it
+    produces however many rows are named here, at every evaluation, for the
+    length of the run.
+
+    A lighting panel gets one episode per illumination and nothing else.
+    They are matched by repetition, so the three share a scene, a task plan
+    and a spawn: what differs between the videos is the light and what the
+    policy did about it, which is the comparison C exists to show. Watching
+    the same policy fail in an unseen apartment adds nothing the thirty
+    held-out numbers do not already say, so no video is made of it.
+
+    Any other panel -- A's objects, or B with lighting switched off -- gets
+    exactly one.
+    """
     rows = {"eval/video": 0}
     if not cases:
         return rows
+    conditions = sorted({c.condition for c in cases if c.group == "light"})
+    if conditions:
+        by_repetition = defaultdict(dict)
+        for i, case in enumerate(cases):
+            if case.group == "light":
+                by_repetition[case.repetition][case.condition] = i
+        # The first repetition that carries every condition. There is always
+        # one; falling through rather than raising keeps a malformed panel
+        # from costing an evaluation.
+        matched = next((rep for rep in sorted(by_repetition)
+                        if len(by_repetition[rep]) == len(conditions)), None)
+        if matched is not None:
+            return {f"eval/video_{name}": by_repetition[matched][name]
+                    for name in conditions}
     training = set(training_scenes)
     nominal = [i for i, c in enumerate(cases)
                if c.group != "light" and c.intensity == 1.0]
     rows["eval/video"] = next(
         (i for i in nominal if cases[i].scene in training), 0)
-    unseen = next((i for i in nominal if cases[i].scene not in training), None)
-    if unseen is not None:
-        rows["eval/unseen_scene"] = unseen
-    dim = [i for i, c in enumerate(cases)
-           if c.group == "light" and c.intensity < 1.0 and c.scene in training]
-    if dim:
-        rows["eval/dim_light"] = min(dim, key=lambda i: cases[i].intensity)
     return rows
 
 
 def panel_metrics(cases, values, training_scenes):
-    """Separate primary B/A scores from lighting; never pool them together."""
+    """Separate primary B/A scores from lighting; never pool them together.
+
+    ``eval/*`` is the number the experiment is read by, so on a scene panel it
+    is the *unseen* scenes and nothing else. Pooling the training-scene cases
+    in reports something that is partly fit: 42 unseen failures beside 10
+    training successes read as 19% rather than 0%, and the gap grows with
+    however many training-scene cases the panel happens to carry. Those cases
+    exist to select a checkpoint and stay under ``eval_scene/training/*``,
+    which is what ``checkpoint.metric`` names.
+
+    A panel with no unseen half -- A's objects, or a scene panel evaluated
+    only where it trained -- keeps every case, so the group is never empty.
+    """
     values = {k: np.asarray(v, dtype=float) for k, v in values.items()}
     for key, arr in values.items():
         if arr.shape != (len(cases),) or not np.isfinite(arr).all():
             raise ValueError(f"invalid per-environment evaluation metric: {key}")
     outcomes = {"score", "length", "success_once", "success_at_end", "fail_once"}
+    trained = set(training_scenes)
+    unseen = {i for i, c in enumerate(cases)
+              if c.group == "scene" and c.scene not in trained}
     groups = defaultdict(list)
     for i, case in enumerate(cases):
-        if case.group != "light":
+        if case.group == "light":
+            groups[f"eval_light/{case.condition}"].append(i)
+            continue
+        if case.group != "scene" or not unseen or i in unseen:
             groups["eval"].append(i)
         if case.group == "object":
             groups[f"eval_object/{case.object}"].append(i)
         elif case.group == "scene":
             groups["eval_scene/all"].append(i)
-            split = "training" if case.scene in training_scenes else "held_out"
+            split = "training" if case.scene in trained else "held_out"
             groups[f"eval_scene/{split}"].append(i)
-        elif case.group == "light":
-            groups[f"eval_light/{case.condition}"].append(i)
     result = {}
     for group, indices in groups.items():
         result[f"{group}/episodes"] = len(indices)

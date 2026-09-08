@@ -9,7 +9,9 @@ runs on, before the budget is spent:
         --task tidy_house --subtask pick --obj 004_sugar_box --split train
 
 It reads the plan file, applies ``envs.scene_manifest.split_scenes`` and
-writes ``configs/scenes/mshab_pick_b.json``. Re-running it on the same
+writes ``configs/scenes/mshab_pick_b.json``: five arrangements of the pinned
+scene's apartment to train in, and thirty drawn evenly from the apartments
+outside it to be held out. Re-running it on the same
 dataset rewrites the same file byte for byte; re-running it on a different
 dataset is a different experiment and the diff says so.
 
@@ -65,7 +67,7 @@ def main(argv=None):
                         help="the original single training scene; it stays a "
                              "training scene and carries the lighting panel")
     parser.add_argument("--train-scenes", type=int, default=5)
-    parser.add_argument("--held-out-scenes", type=int, default=42)
+    parser.add_argument("--held-out-scenes", type=int, default=30)
     parser.add_argument("--out", default=os.path.join(
         REPO_ROOT, "configs", "scenes", "mshab_pick_b.json"))
     parser.add_argument("--check", action="store_true",

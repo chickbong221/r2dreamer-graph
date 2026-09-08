@@ -86,6 +86,29 @@ class SceneSplit:
         return self
 
 
+def _spread(groups: Dict[str, List[str]], count: int) -> List[str]:
+    """Take ``count`` names one apartment at a time.
+
+    A plain prefix would fill the held-out set from whichever apartment sorts
+    first and only reach the next one once that ran out -- 21 arrangements of
+    one room and 9 of another, which is not the even coverage a
+    scene-generalisation number wants. Round-robin instead, then sort, so the
+    manifest reads in order and the panel stays deterministic.
+
+    When ``count`` is every scene available this is exactly the sorted list,
+    so a full split is unaffected by the rule.
+    """
+    ordered = [list(groups[key]) for key in sorted(groups)]
+    out: List[str] = []
+    for index in range(max((len(group) for group in ordered), default=0)):
+        for group in ordered:
+            if index < len(group):
+                out.append(group[index])
+                if len(out) == count:
+                    return sorted(out)
+    return sorted(out)
+
+
 def split_scenes(available: Sequence[str], pinned: str, n_train: int,
                  n_held_out: int) -> SceneSplit:
     """Training scenes from the pinned scene's apartment, held-out from the rest.
@@ -94,7 +117,8 @@ def split_scenes(available: Sequence[str], pinned: str, n_train: int,
     held-out set in whichever apartments happen to sort last and leave the
     count to chance. Grouping by apartment makes the two halves mean something
     -- arrangements of one apartment against arrangements of the others -- and
-    makes the held-out count a property of the dataset rather than a knob.
+    a held-out set drawn evenly from every remaining apartment rather than
+    filling one before starting the next.
     """
     names = sorted({str(n) for n in available})
     if pinned not in names:
@@ -109,7 +133,10 @@ def split_scenes(available: Sequence[str], pinned: str, n_train: int,
             f"{n_train} training scenes")
     train = [pinned] + [n for n in inside if n != pinned]
     train = sorted(train[:n_train])
-    held_out = outside[:n_held_out]
+    by_group: Dict[str, List[str]] = {}
+    for name in outside:
+        by_group.setdefault(scene_group(name), []).append(name)
+    held_out = _spread(by_group, n_held_out)
     if len(held_out) != n_held_out:
         raise ValueError(
             f"{len(outside)} scene(s) outside apartment {group!r}, need "

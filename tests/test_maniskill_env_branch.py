@@ -11,6 +11,10 @@ import ast
 import re
 import types
 import unittest
+# Explicit: `unittest.mock` is a submodule, so `unittest` alone only carries it
+# once some other module has imported it. That happened to be true under the
+# full suite and not when this file runs alone.
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -907,9 +911,10 @@ class RenderSelectionTest(unittest.TestCase):
              namespace)
         return namespace
 
-    def _actor(self, log, frames=(93, 512, 512, 3)):
+    def _actor(self, log, frames=(93, 512, 512, 3), source="render"):
         namespace = self._namespace()
         actor = SimpleNamespace(
+            _video_source=source,
             _env=SimpleNamespace(render=lambda: _Frames(frames, log)))
         for name in ("render", "render_one", "render_selected"):
             setattr(actor, name, types.MethodType(namespace[name], actor))
@@ -940,12 +945,28 @@ class RenderSelectionTest(unittest.TestCase):
                          (512, 512, 3))
 
     def test_a_renderer_that_returns_nothing_stays_none(self):
-        namespace, actor = self._namespace(), SimpleNamespace()
+        namespace, actor = self._namespace(), SimpleNamespace(
+            _video_source="render")
         actor._env = SimpleNamespace(render=lambda: None)
         for name in ("render", "render_one"):
             setattr(actor, name, types.MethodType(namespace[name], actor))
         self.assertIsNone(actor.render())
         self.assertIsNone(actor.render_one(3))
+
+    def test_the_policy_source_never_calls_the_renderer_at_all(self):
+        """ManiSkill renders the human camera for every parallel environment,
+        so a 70-case panel would render 70 frames per step to film three.
+        Under `policy` the call is not made: returning None sends the trainer
+        to the policy's own cameras, which the observation already carries."""
+        log = []
+        actor = self._actor(log, source="policy")
+        with unittest.mock.patch.object(
+                actor._env, "render", wraps=actor._env.render) as render:
+            self.assertIsNone(actor.render())
+            self.assertIsNone(actor.render_one(3))
+            self.assertIsNone(actor.render_selected([0, 1, 2]))
+        render.assert_not_called()
+        self.assertEqual(log, [])
 
 
 if __name__ == "__main__":

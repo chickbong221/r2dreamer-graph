@@ -29,6 +29,11 @@ eval_episode_num: 25
 eval_even_build_configs: false
 eval_panel: objects
 
+# Three videos an evaluation, from the policy's own cameras. The
+# third-person camera would be rendered for every environment in the
+# panel and thrown away for all but those three.
+eval_video_source: policy
+
 progress_mode: task_schedule
 
 graph:

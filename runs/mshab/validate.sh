@@ -124,7 +124,7 @@ sys.modules["scene_manifest"] = module
 spec.loader.exec_module(module)
 split = module.load_manifest("configs/scenes/mshab_pick_b.json")
 counts = module.counts(split)
-assert counts == {"train": 5, "held_out": 42, "evaluation": 47}, counts
+assert counts == {"train": 5, "held_out": 30, "evaluation": 35}, counts
 assert not set(split.train) & set(split.held_out)
 assert split.lighting_scene == "v3_sc0_staging_00.scene_instance.json"
 print(f"scene manifest: {counts}, lighting on {split.lighting_scene}")

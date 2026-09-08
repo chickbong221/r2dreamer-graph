@@ -1136,10 +1136,14 @@ class Dreamer(nn.Module):
             # Direction is not enough: the two terms above compare unit
             # vectors, so the prior is free to be the right shape at the wrong
             # scale while the decoder and the actor read the raw g.
-            amp_error, prior_rms, post_rms = self.rssm.semantic_amplitude_loss(
-                post_sem, prior_sem
-            )
-            amp_loss = (amp_error * step_float).sum() / denominator
+            # Grad only when the term is actually in the objective. With
+            # the scale at zero the gauges below are still wanted, but nothing
+            # should build a graph the backward pass will never walk.
+            with torch.set_grad_enabled(
+                    torch.is_grad_enabled() and self._graph_amplitude):
+                amp_error, prior_rms, post_rms = (
+                    self.rssm.semantic_amplitude_loss(post_sem, prior_sem))
+                amp_loss = (amp_error * step_float).sum() / denominator
             if self._graph_amplitude:
                 losses["graphamp"] = amp_loss
             with torch.no_grad():

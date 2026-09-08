@@ -12,6 +12,22 @@ from tools import (
     FPS, Logger, StageTimer, prepare_video, process_memory_stats, wandb_scalars,
 )
 
+# Every metric the semantic alignment path reports, by the name Dreamer writes
+# it under. Listed here rather than derived from the filter, because a filter
+# checked against itself passes however much it drops.
+SEMANTIC_DIAGNOSTICS = (
+    "graph_align_mse",
+    "graph_align_cos",
+    "graph_amp_mse",
+    "graph_sem_prior_rms",
+    "graph_sem_post_rms",
+    "graph_sem_rms_difference",
+    "graph_sem_post_var",
+    "graph_sem_prior_var",
+    "graph_sem_post_var_across_obs",
+    "graph_sem_prior_var_across_obs",
+)
+
 
 class _FakeRun:
     def __init__(self):
@@ -37,6 +53,27 @@ class _FakeVideo:
 
 
 class LoggingTest(unittest.TestCase):
+    def test_every_semantic_diagnostic_reaches_wandb(self):
+        """The gap this closes: `graphamp` rode through on the `train/loss/`
+        prefix while its six gauges were silently dropped, so the chart that
+        says whether the amplitude term is working never existed.
+
+        Driven through the real filter, not through the set it reads.
+        """
+        scalars = [(f"train/{name}", float(i))
+                   for i, name in enumerate(SEMANTIC_DIAGNOSTICS)]
+        scalars.append(("train/loss/graphamp", 99.0))
+        kept = wandb_scalars(scalars)
+        self.assertEqual(set(kept), {name for name, _ in scalars})
+
+    def test_an_unlisted_train_metric_is_still_dropped(self):
+        """The whitelist stays a whitelist: adding six names must not have
+        turned the `train/` namespace into a pass-through."""
+        kept = wandb_scalars([("train/graph_sem_post_var_across_obs", 1.0),
+                              ("train/graph_sem_something_new", 2.0),
+                              ("train/action_mean", 3.0)])
+        self.assertEqual(set(kept), {"train/graph_sem_post_var_across_obs"})
+
     def test_filter_keeps_only_comparison_metrics(self):
         selected = wandb_scalars(
             [

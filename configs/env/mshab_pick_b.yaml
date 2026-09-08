@@ -1,10 +1,11 @@
-# Experiment B -- one object, five training scenes, forty-two unseen ones.
+# Experiment B -- one object, five training scenes, thirty unseen ones.
 #
 # Trains 004_sugar_box in five arrangements of one apartment and evaluates in
-# every arrangement of the other two, so what varies is the room. A clean
-# grasp on purpose: the measurement is scene variance, not grasp difficulty.
+# thirty arrangements of the other two, fifteen from each, so what varies is
+# the room. A clean grasp on purpose: the measurement is scene variance, not
+# grasp difficulty.
 #
-# The scenes are not a count. `scene_manifest` names all forty-seven outright
+# The scenes are not a count. `scene_manifest` names all thirty-five outright
 # and is frozen by scenegraph/tools/freeze_scene_split.py from the installed
 # task plans; a name that is not in them raises at construction rather than
 # training somewhere else. Training and held-out scenes cannot overlap -- the
@@ -15,17 +16,19 @@
 # makes that exact rather than approximate: MS-HAB checks divisibility, so 125
 # over 5 is 25 each or the run refuses to start.
 #
-# The evaluation panel is 82 environments in one simulator:
-#   42  one episode in each unseen scene            -- scene generalisation
+# The evaluation panel is 70 environments in one simulator:
+#   30  one episode in each unseen scene            -- scene generalisation
 #   10  two episodes in each of the five training scenes -- checkpoint selection
 #   30  ten matched cases at 0.4x / 1.0x / 2.0x     -- C, on one fixed scene
 # The lighting rows stay on the original single training scene, named in
 # eval_lighting.scene. Training in five scenes must not multiply C by five.
 #
-# Checkpoint selection uses eval_scene/training/success_once -- the ten
-# normal-light training-scene cases. Not eval/success_once, which here pools
-# the unseen scenes in: selecting on the number the experiment reports would
-# choose the checkpoint that got luckiest on the test set.
+# The three parts are never pooled. eval/* is the 30 unseen scenes alone --
+# the number B is read by, so a policy that generalises to nothing reports
+# zero rather than the 25% that averaging the ten training cases in would
+# give. Those ten stay under eval_scene/training/*, which is what
+# checkpoint.metric names: selecting on the number the experiment reports
+# would choose whichever checkpoint got luckiest on the test set.
 defaults:
   - mshab
   - _self_
@@ -44,7 +47,7 @@ train_even_build_configs: true
 
 # Named scenes win over any count, so eval_num_build_configs does not apply.
 eval_num_build_configs: 0
-eval_episode_num: 52
+eval_episode_num: 40
 eval_scene_episodes:
   training: 2
   held_out: 1
@@ -58,6 +61,11 @@ eval_panel: scenes
 eval_lighting:
   enabled: true
   scene: v3_sc0_staging_00.scene_instance.json
+
+# Three videos an evaluation, from the policy's own cameras. The
+# third-person camera would be rendered for every environment in the
+# panel and thrown away for all but those three.
+eval_video_source: policy
 
 progress_mode: task_schedule
 

@@ -60,6 +60,17 @@ eval_split: train
 eval_num_build_configs: ${env.num_build_configs}
 eval_time_limit: 200
 
+# Where an evaluation video's pixels come from.
+#   render  the third-person human camera at eval_render_size. ManiSkill
+#           renders it for *every* parallel environment on each call, and the
+#           eval loop keeps only the rows it films -- so a 70-environment
+#           panel pays for 70 renders per step to produce 3 videos.
+#   policy  the policy's own cameras, already computed as part of the
+#           observation. No extra render at all, and for the lighting
+#           comparison it is the more useful picture anyway: what the
+#           illumination changed is exactly what the policy sees.
+# eval_render_size applies to `render` only.
+eval_video_source: render
 eval_render_size: [512, 512]
 eval_reconfiguration_frequency: 0
 num_build_configs: 10

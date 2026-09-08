@@ -15,9 +15,11 @@
 # should already have spent its hours on the load-bearing run.
 #
 # B -- 004_sugar_box in five arrangements of one apartment for 8M steps,
-# evaluated on 42 unseen scenes plus 10 training-scene cases plus C's 30
+# evaluated on 30 unseen scenes plus 10 training-scene cases plus C's 30
 # lighting environments (10 each at 0.4 / 1.0 / 2.0, all on the original
-# single training scene). Selected on eval_scene/training/success_once.
+# single training scene). The three are never pooled: eval/* reports the 30
+# unseen scenes, and the checkpoint is selected on the disjoint
+# eval_scene/training/success_once.
 #
 # A -- five tidy_house objects in one named scene for 8M steps, then 5M more
 # on the held-out 008_pudding_box from A's best eligible checkpoint, logged

@@ -24,9 +24,10 @@
 # exactly as the graph arm does.
 #
 # Same experiments, panels, budgets and selection metrics as the graph arm:
-# B first then A, 8M steps each, B selected on
-# eval_scene/training/success_once and A on eval/success_once, both eligible
-# from 6M. A adds its 5M transfer stage.
+# B first then A, 8M steps each, B reporting eval/* over its 30 unseen scenes
+# and selected on the disjoint eval_scene/training/success_once, A reporting
+# and selecting on eval/success_once, both eligible from 6M. A adds its 5M
+# transfer stage.
 #
 # The two commands are the ones in slurm_b_baseline.sh and
 # slurm_a_baseline.sh, which stay for launching a single arm.

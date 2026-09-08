@@ -192,8 +192,8 @@ class ExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config["env_num"] // len(split.train), 25)
         self.assertTrue(config["train_even_build_configs"])
 
-    def test_b_composes_its_eighty_two_case_panel(self):
-        """42 unseen + 2 x 5 training + 30 lighting, and the primary count is
+    def test_b_composes_its_seventy_case_panel(self):
+        """30 unseen + 2 x 5 training + 30 lighting, and the primary count is
         the first two."""
         config = self._config("b")
         split = manifest.load_manifest(MANIFEST)
@@ -201,18 +201,30 @@ class ExperimentConfigTest(unittest.TestCase):
         primary = (repeats["held_out"] * len(split.held_out)
                    + repeats["training"] * len(split.train))
         self.assertEqual(repeats, {"training": 2, "held_out": 1})
-        self.assertEqual(primary, 52)
+        self.assertEqual(primary, 40)
         self.assertEqual(config["eval_episode_num"], primary)
         base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
         lighting = len(base["eval_lighting"]["conditions"]) * \
             base["eval_lighting"]["envs_per_condition"]
         self.assertEqual(lighting, 30)
-        self.assertEqual(primary + lighting, 82)
+        self.assertEqual(primary + lighting, 70)
 
     def test_b_does_not_ask_for_an_even_evaluation_spread(self):
         """The panel pins every scene itself, and the two halves are
         deliberately not weighted equally."""
         self.assertFalse(self._config("b")["eval_even_build_configs"])
+
+    def test_both_experiments_film_the_policy_rather_than_every_environment(self):
+        """The third-person camera is rendered for every parallel environment
+        on each call, so a 70-case panel would render 70 frames per step to
+        keep 3. The policy's cameras are already in the observation."""
+        for name in ("a", "b"):
+            with self.subTest(experiment=name):
+                self.assertEqual(self._config(name)["eval_video_source"],
+                                 "policy")
+        base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
+        # Unchanged for every other suite.
+        self.assertEqual(base["eval_video_source"], "render")
 
     def test_b_pins_the_lighting_comparison_to_one_training_scene(self):
         """Training in five scenes must not multiply C by five."""
@@ -281,9 +293,9 @@ class SceneManifestTest(unittest.TestCase):
         self.raw = json.loads(Path(MANIFEST).read_text(encoding="utf-8"))
         self.split = manifest.load_manifest(MANIFEST)
 
-    def test_it_freezes_five_training_and_forty_two_unseen_scenes(self):
+    def test_it_freezes_five_training_and_thirty_unseen_scenes(self):
         self.assertEqual(manifest.counts(self.split),
-                         {"train": 5, "held_out": 42, "evaluation": 47})
+                         {"train": 5, "held_out": 30, "evaluation": 35})
 
     def test_the_two_halves_cannot_overlap(self):
         """An unseen-scene score measured on a trained scene is not a
@@ -317,9 +329,18 @@ class SceneManifestTest(unittest.TestCase):
         """The tool that writes the file and the file agree, so regenerating
         it on the training machine is a no-op unless the dataset moved."""
         available = sorted(set(self.split.evaluation))
-        recomputed = manifest.split_scenes(available, SCENE, 5, 42)
+        recomputed = manifest.split_scenes(available, SCENE, 5, 30)
         self.assertEqual(recomputed.train, self.split.train)
         self.assertEqual(recomputed.held_out, self.split.held_out)
+
+    def test_the_unseen_scenes_are_spread_evenly_over_their_apartments(self):
+        """A prefix would take 21 arrangements of one room and 9 of another;
+        the held-out number is supposed to be about rooms, not about which
+        one sorts first."""
+        from collections import Counter
+        counts = Counter(manifest.scene_group(n) for n in self.split.held_out)
+        self.assertEqual(len(counts), 2)
+        self.assertEqual(set(counts.values()), {15})
 
     def test_the_manifest_records_what_it_was_frozen_from(self):
         for key in ("task", "subtask", "object", "split", "available"):

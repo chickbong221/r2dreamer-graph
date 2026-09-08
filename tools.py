@@ -160,6 +160,19 @@ _WANDB_DIAGNOSTICS = {
     "train/graph_align_cos",
     "train/graph_sem_post_var",
     "train/graph_sem_prior_var",
+    # Amplitude alignment. The loss alone cannot say which way it went: it
+    # falls whether the two magnitudes converged or both collapsed towards
+    # zero, so the two RMS readings and their signed difference travel with
+    # it. `*_var_across_obs` is the collapse check along the other axis --
+    # graph_sem_*_var above varies over features within one observation and
+    # stays healthy when every observation is the same vector; these vary one
+    # feature over observations and do not.
+    "train/graph_amp_mse",
+    "train/graph_sem_prior_rms",
+    "train/graph_sem_post_rms",
+    "train/graph_sem_rms_difference",
+    "train/graph_sem_prior_var_across_obs",
+    "train/graph_sem_post_var_across_obs",
     "train/node_ent_acc",
     "train/node_bbox_loss",
     "train/relabs_acc",

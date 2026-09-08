@@ -190,10 +190,11 @@ configuration and launchers in the repository are what runs.
 | --- | --- | --- |
 | Model | `size50M` / `size50M_graph_simple` | `size100M` / `size100M_graph_simple`, matched on every RSSM setting |
 | Main budget | 10M steps | 8M steps, both experiments (A's 5M transfer stage is additional) |
-| B's training scenes | one | five, frozen in `configs/scenes/mshab_pick_b.json` |
+| B's training scenes | one | five arrangements of one apartment, frozen in `configs/scenes/mshab_pick_b.json`; the 30 unseen scenes are drawn evenly from the other two |
 | B's training envs | 126 | 125, an even 25 per scene |
-| B's evaluation | 20 scenes + 30 lighting | 42 unseen + 10 training-scene + 30 lighting = 82 |
-| B's selection metric | `eval/success_once` | `eval_scene/training/success_once`, the ten normal-light training-scene cases |
+| B's evaluation | 20 scenes + 30 lighting | 30 unseen + 10 training-scene + 30 lighting = 70 |
+| B's reported metric | `eval/success_once` over all evaluated scenes | `eval/success_once` over the 30 unseen scenes only |
+| B's selection metric | `eval/success_once` | `eval_scene/training/success_once`, the ten normal-light training-scene cases, disjoint from the reported half |
 | A's selection metric | `eval/success_once` | unchanged |
 | Checkpoint eligibility | 8M | 6M, keeping a two-million-step selection window against the shorter budget |
 | Progress beta | 0.05 | 0.1, same 200k-700k warm-up |

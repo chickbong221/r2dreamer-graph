@@ -57,7 +57,7 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(len({c.plan_index for c in lights if c.repetition == k}), 1)
         self.assertEqual(panel, evaluation.build_panel(plans(), config()))
 
-    def test_the_shipped_b_counts_compose_into_one_82_env_panel(self):
+    def test_the_shipped_b_counts_compose_into_one_70_env_panel(self):
         """B's counts come from mshab_pick_b.yaml and the manifest it names;
         read them, don't restate them."""
         shipped, split = shipped_b()
@@ -69,14 +69,15 @@ class PanelTest(unittest.TestCase):
             config(count=int(shipped["eval_episode_num"]), training=training,
                    repeats=shipped["eval_scene_episodes"],
                    light_scene=shipped["eval_lighting"]["scene"]))
-        self.assertEqual(len(panel), 82)
+        self.assertEqual(int(shipped["eval_episode_num"]), 40)
+        self.assertEqual(len(panel), 70)
         scene_cases = [c for c in panel if c.group == "scene"]
-        self.assertEqual(len(scene_cases), 52)
+        self.assertEqual(len(scene_cases), 40)
         counts = Counter(c.scene for c in scene_cases)
         # One episode in each unseen scene, two in each training scene.
         self.assertEqual({counts[name] for name in split["held_out"]}, {1})
         self.assertEqual({counts[name] for name in training}, {2})
-        self.assertEqual(sum(counts[name] for name in split["held_out"]), 42)
+        self.assertEqual(sum(counts[name] for name in split["held_out"]), 30)
         self.assertEqual(sum(counts[name] for name in training), 10)
         lights = [c for c in panel if c.group == "light"]
         self.assertEqual(Counter(c.condition for c in lights),
@@ -133,7 +134,7 @@ class PanelTest(unittest.TestCase):
         panel = evaluation.build_panel(
             {"sugar": [NS(build_config_name=name, init_config_name=f"init{j:02d}")
                        for name in every for j in range(12)]},
-            config(count=52, training=training,
+            config(count=40, training=training,
                    repeats=shipped["eval_scene_episodes"],
                    light_scene=shipped["eval_lighting"]["scene"]))
         success = np.array([1.0 if case.scene in set(training) else 0.0
@@ -141,12 +142,43 @@ class PanelTest(unittest.TestCase):
         result = evaluation.panel_metrics(panel, {"success_once": success},
                                           training)
         self.assertEqual(result["eval_scene/training/episodes"], 10)
-        self.assertEqual(result["eval_scene/held_out/episodes"], 42)
+        self.assertEqual(result["eval_scene/held_out/episodes"], 30)
         self.assertEqual(result["eval_scene/training/success_once"], 1.0)
         self.assertEqual(result["eval_scene/held_out/success_once"], 0.0)
         # The lighting rows score 1.0 too and still cannot move selection.
         self.assertEqual(result["eval_light/nominal/success_once"], 1.0)
-        self.assertAlmostEqual(result["eval/success_once"], 10 / 52)
+        # And the reported number is the unseen scenes alone. Pooling the ten
+        # training cases in would read 10/40 = 25% for a policy that
+        # generalised to nothing at all.
+        self.assertEqual(result["eval/episodes"], 30)
+        self.assertEqual(result["eval/success_once"], 0.0)
+        self.assertEqual(result["eval/success_once"],
+                         result["eval_scene/held_out/success_once"])
+
+    def test_the_reported_and_selected_numbers_move_independently(self):
+        """They are measured on disjoint halves, so neither can drag the
+        other: that separation is the whole reason both exist."""
+        shipped, split = shipped_b()
+        training = set(split["train"])
+        every = split["train"] + split["held_out"]
+        panel = evaluation.build_panel(
+            {"sugar": [NS(build_config_name=name, init_config_name=f"init{j:02d}")
+                       for name in every for j in range(12)]},
+            config(count=40, training=split["train"],
+                   repeats=shipped["eval_scene_episodes"],
+                   light_scene=shipped["eval_lighting"]["scene"]))
+        base = np.array([0.5 if c.group == "scene" and c.scene not in training
+                         else 0.0 for c in panel])
+        reported = evaluation.panel_metrics(
+            panel, {"success_once": base}, split["train"])["eval/success_once"]
+        # Move every training-scene and lighting case; eval/ does not budge.
+        for value in (0.0, 1.0):
+            moved = np.where([c.group != "scene" or c.scene in training
+                              for c in panel], value, base)
+            result = evaluation.panel_metrics(panel, {"success_once": moved},
+                                              split["train"])
+            self.assertEqual(result["eval/success_once"], reported)
+            self.assertEqual(result["eval_scene/training/success_once"], value)
 
     def test_a_is_fixed_and_balanced_without_lighting(self):
         source = {}
@@ -156,14 +188,17 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(Counter(c.object for c in panel), {f"object{i}": 5 for i in range(5)})
         self.assertEqual(len({c.plan_index for c in panel}), 25)
 
-    def test_primary_success_never_includes_lighting_and_heldout_is_separate(self):
+    def test_primary_success_never_includes_lighting_or_the_training_scene(self):
         panel = evaluation.build_panel(plans(), config())
         success = np.zeros(93)
         success[0] = 1  # only training scene succeeds
         success[63:] = 1  # C cannot improve B's checkpoint score
         result = evaluation.panel_metrics(panel, {
             "success_once": success, "graph_cache_entries": np.ones(93)}, ["s00"])
-        self.assertAlmostEqual(result["eval/success_once"], 1 / 63)
+        # Neither the lighting rows nor the one scene the policy trained in
+        # can lift the number the experiment is read by.
+        self.assertEqual(result["eval/success_once"], 0)
+        self.assertEqual(result["eval/episodes"], 62)
         self.assertEqual(result["eval_scene/training/success_once"], 1)
         self.assertEqual(result["eval_scene/held_out/success_once"], 0)
         self.assertEqual(result["eval_light/dim/episodes"], 10)
@@ -189,9 +224,11 @@ class PanelTest(unittest.TestCase):
         # Sub-groups carry outcomes only; the full gauge set stays on eval/.
         self.assertFalse([k for k in result
                           if k.endswith("graph_cache_entries") and not k.startswith("eval/")])
-        # The checkpoint metric is the 63-case aggregate, and lighting rows
-        # cannot move it whatever they score.
-        self.assertAlmostEqual(result["eval/success_once"], 32 / 63)
+        # eval/ is the 62 unseen scenes: of the 32 successes, one is the
+        # training scene and does not count towards it. Lighting rows cannot
+        # move it whatever they score.
+        self.assertEqual(result["eval/episodes"], 62)
+        self.assertAlmostEqual(result["eval/success_once"], 31 / 62)
         for filler in (0.0, 1.0):
             shifted = dict(values)
             shifted["success_once"] = np.concatenate([success[:63], np.full(30, filler)])
@@ -455,18 +492,53 @@ class LightingTest(unittest.TestCase):
 
 
 class ResetIntegrationTest(unittest.TestCase):
-    def test_video_rows_use_scene_identity_not_row_zero(self):
+    def test_a_lighting_panel_films_one_episode_per_illumination(self):
+        """Three videos, whatever the panel's size: rendering is per selected
+        environment, so every row here is paid for at every evaluation."""
         panel = evaluation.build_panel(plans(), config())
+        rows = evaluation.evaluation_video_rows(panel, ["s00"])
+        self.assertEqual(sorted(rows), ["eval/video_bright", "eval/video_dim",
+                                        "eval/video_nominal"])
+        self.assertEqual(
+            {name: panel[i].intensity for name, i in rows.items()},
+            {"eval/video_dim": 0.4, "eval/video_nominal": 1.0,
+             "eval/video_bright": 2.0})
+        # Matched: one scene, one task plan, one spawn. The three videos
+        # differ by the light and by what the policy did about it.
+        chosen = [panel[i] for i in rows.values()]
+        self.assertEqual(len({c.scene for c in chosen}), 1)
+        self.assertEqual(len({c.plan_index for c in chosen}), 1)
+        self.assertEqual(len({c.repetition for c in chosen}), 1)
+        self.assertEqual({c.scene for c in chosen}, {"s00"})
+
+    def test_the_size_of_the_panel_never_changes_the_number_of_videos(self):
+        """A 70-case panel films three, the same three a 93-case panel does."""
+        for scenes, count in ((63, 63), (47, 47)):
+            with self.subTest(scenes=scenes):
+                rows = evaluation.evaluation_video_rows(
+                    evaluation.build_panel(plans(scenes), config(count=count)),
+                    ["s00"])
+                self.assertEqual(len(rows), 3)
+
+    def test_a_panel_without_lighting_films_exactly_one(self):
+        """A's objects, or B with lighting switched off. No unseen-scene
+        video: the held-out scenes are already reported as numbers, and a
+        film of one of them answers nothing they do not."""
+        objects = {}
+        for i in range(5):
+            objects.update(plans(1, f"object{i}"))
+        rows = evaluation.evaluation_video_rows(
+            evaluation.build_panel(objects, config("objects", 25, False)),
+            ["s00"])
+        self.assertEqual(list(rows), ["eval/video"])
+        panel = evaluation.build_panel(plans(), config(lighting=False))
+        rows = evaluation.evaluation_video_rows(panel, ["s00"])
+        self.assertEqual(list(rows), ["eval/video"])
+        # Scene identity, not row zero.
         panel[0], panel[2] = panel[2], panel[0]
         rows = evaluation.evaluation_video_rows(panel, ["s00"])
         self.assertEqual(panel[rows["eval/video"]].scene, "s00")
-        self.assertEqual(panel[rows["eval/video"]].intensity, 1.0)
-        self.assertNotEqual(panel[rows["eval/unseen_scene"]].scene, "s00")
-        self.assertEqual(panel[rows["eval/dim_light"]].intensity, 0.4)
-        self.assertEqual(panel[rows["eval/dim_light"]].scene, "s00")
-        self.assertEqual(evaluation.evaluation_video_rows([], []), {"eval/video": 0})
-        same_scene = evaluation.build_panel(plans(1), config(count=1, lighting=False))
-        self.assertEqual(evaluation.evaluation_video_rows(same_scene, ["s00"]),
+        self.assertEqual(evaluation.evaluation_video_rows([], []),
                          {"eval/video": 0})
 
     def test_actual_adapter_reset_passes_fixed_plans_spawns_and_scenes(self):
