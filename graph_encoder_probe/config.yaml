@@ -67,12 +67,37 @@ train:
   # plus a random remainder, drawn once.
   monitor_frames: 1024
   device: auto
+  # Hold the whole packed pool on the training device, so a batch is an
+  # on-device gather instead of nine pageable host-to-device copies. These
+  # graphs are small enough that those copies, not the arithmetic, are most of
+  # an update. auto: on for an accelerator when the pool fits the budget.
+  pool_on_device: auto
+  pool_device_max_gib: 4.0
+  # Frames withheld from the shuffled training order, used as a genuine
+  # held-out set for the decoder readout. 0 keeps the plan's design -- no split
+  # at all -- and the readout is then reported on training frames and labelled
+  # `train`, never `test`. Probe-pair members are never eligible: they have to
+  # stay in training for the latent measurement to mean anything.
+  holdout_frames: 0
   seed: 0
   loss_scales:
     node: 1.0
     nodetgt: 1.0
     relabs: 1.0
     reltemp: 1.0
+
+# Does the discrete output match the true label? One argmax per head --
+# entity, target row, absolute label, temporal change -- compared against the
+# packed truth, aggregated, confused, and drawn.
+decoder_eval:
+  enabled: true
+  batch_size: 128
+  # Cap on the evaluation set; 0 uses all of it.
+  max_frames: 2048
+  # Frames written out item by item at the end (decoder_predictions.csv), and
+  # how many of those the side-by-side figure draws.
+  dump_frames: 64
+  examples: 3
 
 probe:
   # A changed pair counts as detected only above this. Both terms matter: the

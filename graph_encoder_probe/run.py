@@ -387,6 +387,34 @@ def write_report(
         final_table(first, last, pairset),
         "",
     ]
+    if result.decoder is not None:
+        from .decoder_eval import report_table
+
+        note = (
+            "These frames were **held out** of training."
+            if result.eval_split == "holdout"
+            else "These are **training** frames -- the experiment defines no held-out "
+            "split, so this measures what the decoder recovered from graphs it was "
+            "fitted on, not generalisation. `train.holdout_frames` carves a real one."
+        )
+        lines += [
+            "## What the decoder recovered",
+            "",
+            "Each head's argmax against the packed truth, under the decoder's own "
+            "masks: the target among admissible rows, the absolute label among "
+            "those its relation may legally take, the temporal label among the "
+            "non-padding classes.",
+            "",
+            note,
+            "",
+            report_table(result.decoder),
+            "`decoder_confusion.png` shows which label is mistaken for which, "
+            "`decoder_accuracy.png` how agreement moved during training, and "
+            "`decoder_examples.png` a few frames item by item. "
+            "`decoder_predictions.csv` is the same comparison, one row per node "
+            "and per fact.",
+            "",
+        ]
     if result.warnings:
         lines += ["## Flags", "", *[f"- {item}" for item in result.warnings], ""]
     if checks:
@@ -473,6 +501,15 @@ def main(argv=None) -> int:
                 "by_group_after": result.last.by_group,
                 "warnings": result.warnings,
                 "checks_passed": passed,
+                "decoder_eval": (
+                    None if result.decoder is None
+                    else {
+                        "split": result.eval_split,
+                        "frames": result.eval_frames,
+                        **{f"acc/{k}": v.accuracy for k, v in result.decoder.heads.items()},
+                        "bbox_mae": result.decoder.bbox_mae,
+                    }
+                ),
             },
             handle,
             indent=2,

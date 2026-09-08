@@ -142,6 +142,55 @@ class Contract(unittest.TestCase):
         self.assertEqual(tuple(FIELD_DTYPES), tuple(GRAPH_KEYS))
 
 
+@unittest.skipIf(torch is None, "torch is not installed")
+class Residency(unittest.TestCase):
+    """Holding the pool on the device is a transport change, not a numeric one."""
+
+    def setUp(self):
+        self.frames = make_frames(24, seed=9)
+        self.resident = make_frames(24, seed=9).to_device("cpu")
+
+    def test_a_resident_batch_is_identical_to_a_host_batch(self):
+        for indices in ([0], [5, 1, 5, 23], list(range(24))):
+            host = self.frames.torch_batch(indices)
+            gathered = self.resident.torch_batch(indices)
+            for key in GRAPH_KEYS:
+                self.assertEqual(gathered[key].dtype, host[key].dtype, key)
+                self.assertTrue(torch.equal(gathered[key], host[key]), key)
+
+    def test_tensor_indices_gather_the_same_rows(self):
+        want = self.frames.torch_batch([3, 8, 2])
+        got = self.resident.torch_batch(torch.tensor([3, 8, 2]))
+        for key in GRAPH_KEYS:
+            self.assertTrue(torch.equal(got[key], want[key]), key)
+
+    def test_a_host_table_still_accepts_tensor_indices(self):
+        want = self.frames.torch_batch([1, 4])
+        got = self.frames.torch_batch(torch.tensor([1, 4]))
+        for key in GRAPH_KEYS:
+            self.assertTrue(torch.equal(got[key], want[key]), key)
+
+    def test_derived_tables_do_not_inherit_the_cache(self):
+        """``select`` and ``concat`` build different rows; a stale gather would
+        silently hand back the wrong graphs."""
+        self.assertIsNone(self.resident.select([0, 1]).resident_device)
+        self.assertIsNone(self.resident.concat(self.frames).resident_device)
+
+    def test_the_budget_is_measured_not_guessed(self):
+        from ..train import resolve_residency
+
+        cpu = torch.device("cpu")
+        on, why = resolve_residency("auto", cpu, self.frames, 4.0)
+        self.assertFalse(on)
+        self.assertIn("cpu", why)
+        on, _ = resolve_residency(True, cpu, self.frames, 4.0)
+        self.assertTrue(on)
+        on, why = resolve_residency("auto", torch.device("cuda"), self.frames, 1e-9)
+        self.assertFalse(on)
+        self.assertIn("budget", why)
+        self.assertGreater(self.frames.device_bytes(), 0)
+
+
 class Selection(unittest.TestCase):
     def setUp(self):
         self.frames = make_frames(12, seed=4)

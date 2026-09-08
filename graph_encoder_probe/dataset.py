@@ -121,6 +121,11 @@ class GraphFrames:
 
     def __post_init__(self) -> None:
         check_fields(self.fields, frame_axis=True)
+        # A cache, not state: ``select`` and ``concat`` build a different table
+        # and must not inherit it. Set here rather than declared as a field so
+        # it never reaches a comparison, a copy or a save.
+        self._resident: Optional[dict] = None
+        self._resident_device = None
 
     def __len__(self) -> int:
         return int(self.fields["graph_node_ent"].shape[0])
@@ -153,6 +158,41 @@ class GraphFrames:
             }
         )
 
+    def device_bytes(self) -> int:
+        """What holding the whole table on a device would cost."""
+        return sum(
+            arr.nbytes * (2 if key == "graph_node_bbox" else 1)   # float16 -> float32
+            for key, arr in self.fields.items()
+        )
+
+    def to_device(self, device) -> "GraphFrames":
+        """Hold the whole table on ``device``, so a batch is an on-device gather.
+
+        These graphs are small -- a batch of 128 is about 150 KB -- but building
+        one on the host means nine separate host-to-device copies out of
+        pageable numpy memory, and a pageable copy is synchronous. At a few
+        milliseconds per update that is most of the update. The pool is tens of
+        megabytes, so it simply lives on the device instead.
+
+        The tensors are exactly the ones ``torch_batch`` built before, widened
+        once instead of per batch, so no number changes.
+        """
+        import torch
+
+        device = torch.device(device)
+        resident = {}
+        for key in GRAPH_KEYS:
+            tensor = torch.from_numpy(np.ascontiguousarray(self.fields[key]))
+            if key == "graph_node_bbox":
+                tensor = tensor.to(torch.float32)
+            resident[key] = tensor.to(device)
+        self._resident, self._resident_device = resident, device
+        return self
+
+    @property
+    def resident_device(self):
+        return self._resident_device
+
     def torch_batch(self, indices, device=None) -> dict:
         """Packed arrays as tensors, ready for ``GraphEncoder``.
 
@@ -160,9 +200,25 @@ class GraphFrames:
         float16 and the run is float32 throughout. The widening is exact, and
         the encoder would do it internally anyway -- doing it here keeps one
         precision visible at the call site.
+
+        ``indices`` may be a device tensor, which is how the training loop keeps
+        an epoch's shuffled order on the device and slices it there.
         """
         import torch
 
+        if self._resident is not None and (
+            device is None or torch.device(device) == self._resident_device
+        ):
+            if torch.is_tensor(indices):
+                idx = indices.to(self._resident_device, torch.int64)
+            else:
+                idx = torch.as_tensor(
+                    np.asarray(indices, dtype=np.int64), device=self._resident_device
+                )
+            return {key: value.index_select(0, idx) for key, value in self._resident.items()}
+
+        if torch.is_tensor(indices):
+            indices = indices.detach().cpu().numpy()
         idx = np.asarray(indices, dtype=np.int64)
         out = {}
         for key in GRAPH_KEYS:

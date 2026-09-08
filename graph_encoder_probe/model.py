@@ -136,6 +136,158 @@ class GraphProbe(nn.Module):
         return ProbeOutput(encoding.token, total, dict(losses), dict(metrics))
 
 
+@dataclass
+class DecoderPrediction:
+    """What the decoder actually said, beside what the graph actually was.
+
+    ``SimpleGraphDecoder.forward`` returns losses and metrics, not predictions --
+    the logits are local to it. Rather than re-deriving them here, which would be
+    a second copy of the decoder's forward pass free to drift from the real one,
+    the two output projections are tapped with forward hooks while the decoder
+    runs normally. What is read is exactly what was scored.
+    """
+
+    node_valid: torch.Tensor        # (G, N) bool
+    node_ent_true: torch.Tensor     # (G, N) long
+    node_ent_pred: torch.Tensor
+    target_mask: torch.Tensor       # (G, N) bool -- row 0 is never the target
+    target_true: torch.Tensor       # (G, N) bool
+    target_row_true: torch.Tensor   # (G,) long
+    target_row_pred: torch.Tensor
+    has_target: torch.Tensor        # (G,) bool
+    bbox_true: torch.Tensor         # (G, N, C, 4)
+    bbox_pred: torch.Tensor
+    bbox_mask: torch.Tensor         # (G, N, C) bool -- this camera saw the node
+    edge_rel: torch.Tensor          # (E,) long
+    edge_graph: torch.Tensor        # (E,) long
+    edge_src: torch.Tensor
+    edge_dst: torch.Tensor
+    abs_true: torch.Tensor          # (E,) long
+    abs_pred: torch.Tensor
+    temp_true: torch.Tensor
+    temp_pred: torch.Tensor
+    temp_mask: torch.Tensor         # (E,) bool -- this relation carries a delta
+    losses: dict[str, torch.Tensor]
+    metrics: dict[str, torch.Tensor]
+
+
+class GraphProbe(nn.Module):
+    """``G -> GraphEncoder -> z -> SimpleGraphDecoder -> G``.
+
+    ``z`` is the pooled token exactly as the RSSM would receive it. It is handed
+    to the decoder unprojected and unnormalised: any adapter in between would be
+    a third module whose gradients also shape the thing being measured.
+    """
+
+    def __init__(self, config, loss_scales: Optional[Mapping[str, float]] = None):
+        super().__init__()
+        self.config = config
+        self.encoder = GraphEncoder(config)
+        self.decoder = SimpleGraphDecoder(config, semantic_dim=int(config.simple_units))
+        scales = dict(loss_scales or {})
+        self.loss_scales = {key: float(scales.get(key, 1.0)) for key in LOSS_KEYS}
+
+    @property
+    def token_dim(self) -> int:
+        return int(self.config.simple_units)
+
+    def encode(self, batch: Mapping[str, torch.Tensor]) -> GraphEncoding:
+        return self.encoder(batch)
+
+    def token(self, batch: Mapping[str, torch.Tensor]) -> torch.Tensor:
+        """The pooled readout alone -- what every distance in this experiment is
+        measured on."""
+        return self.encoder(batch).token
+
+    def forward(self, batch: Mapping[str, torch.Tensor]) -> ProbeOutput:
+        encoding = self.encoder(batch)
+        graphs = int(encoding.token.shape[0])
+        # Every frame in this pool is a real observation, so nothing is masked
+        # out; the argument exists because replay hands the decoder padded time
+        # steps, which this experiment does not have.
+        step_valid = torch.ones(graphs, dtype=torch.bool, device=encoding.token.device)
+        losses, metrics = self.decoder(encoding.token, encoding.compact, step_valid)
+        missing = [key for key in LOSS_KEYS if key not in losses]
+        if missing:
+            raise KeyError(f"the decoder did not emit {missing}; it returned {sorted(losses)}")
+        total = sum(losses[key] * self.loss_scales[key] for key in LOSS_KEYS)
+        return ProbeOutput(encoding.token, total, dict(losses), dict(metrics))
+
+    @torch.no_grad()
+    def predict(self, batch: Mapping[str, torch.Tensor]) -> DecoderPrediction:
+        """Run the decoder and read back what it predicted.
+
+        Every argmax here uses the decoder's own masks: the entity head is
+        unrestricted, the target is chosen among admissible rows only, the
+        absolute label among those its relation may legally take, and the
+        temporal label among the non-padding classes. Scoring against anything
+        else would report a number the loss never optimised.
+        """
+        captured: dict[str, torch.Tensor] = {}
+        handles = [
+            self.decoder.node_head.register_forward_hook(
+                lambda _m, _i, out: captured.__setitem__("node", out)
+            ),
+            self.decoder.edge_head.register_forward_hook(
+                lambda _m, _i, out: captured.__setitem__("edge", out)
+            ),
+        ]
+        was_training = self.training
+        self.eval()
+        try:
+            encoding = self.encoder(batch)
+            compact = encoding.compact
+            graphs = int(encoding.token.shape[0])
+            step_valid = torch.ones(graphs, dtype=torch.bool, device=encoding.token.device)
+            losses, metrics = self.decoder(encoding.token, compact, step_valid)
+        finally:
+            for handle in handles:
+                handle.remove()
+            self.train(was_training)
+
+        decoder = self.decoder
+        nodes = int(compact.num_nodes)
+        entity_logit, target_logit, bbox_pred = captured["node"].split(
+            [decoder.entity_vocab, 1, 4 * decoder.n_cams], dim=-1
+        )
+        abs_logits, temp_logits = captured["edge"].split([decoder.n_abs, decoder.n_temp], dim=-1)
+
+        valid = compact.node_valid
+        target_mask = valid.clone()
+        target_mask[:, 0] = False                     # row 0 is the end effector
+        target_true = compact.node_target.bool()
+        target_logit = target_logit.squeeze(-1).float()
+
+        abs_classes = decoder.abs_valid.index_select(0, compact.edge_rel)
+        temp_classes = torch.ones_like(temp_logits, dtype=torch.bool)
+        temp_classes[:, 0] = False
+
+        return DecoderPrediction(
+            node_valid=valid,
+            node_ent_true=compact.node_ent,
+            node_ent_pred=entity_logit.float().argmax(-1),
+            target_mask=target_mask,
+            target_true=target_true,
+            target_row_true=target_true.long().argmax(-1),
+            target_row_pred=target_logit.masked_fill(~target_mask, -1e9).argmax(-1),
+            has_target=(target_mask & target_true).any(-1),
+            bbox_true=compact.node_bbox.float(),
+            bbox_pred=bbox_pred.reshape(graphs, nodes, decoder.n_cams, 4).float(),
+            bbox_mask=valid[..., None] & compact.camera_visible,
+            edge_rel=compact.edge_rel,
+            edge_graph=compact.edge_graph,
+            edge_src=compact.edge_src_local,
+            edge_dst=compact.edge_dst_local,
+            abs_true=compact.edge_abs,
+            abs_pred=abs_logits.float().masked_fill(~abs_classes, -1e9).argmax(-1),
+            temp_true=compact.edge_temp,
+            temp_pred=temp_logits.float().masked_fill(~temp_classes, -1e9).argmax(-1),
+            temp_mask=compact.edge_temp.ne(0),
+            losses=dict(losses),
+            metrics=dict(metrics),
+        )
+
+
 def build_model(model_cfg: Mapping, dataset_meta: Mapping, *, loss_scales=None, device=None):
     config = graph_config(model_cfg, dataset_meta)
     model = GraphProbe(config, loss_scales)
