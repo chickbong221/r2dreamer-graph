@@ -1,11 +1,13 @@
 # C is part of B's regular evaluation, not a third independently trained model.
 # This alias runs B+C; disable lighting with env.eval_lighting.enabled=false.
+#
+# It inherits B's frozen scene manifest and its pinned lighting scene, so the
+# five-scene training set does not expand the lighting comparison here either.
+# Nothing about the scenes is restated: a second copy of the split is a second
+# thing to keep in step with the first.
 defaults:
   - mshab_pick_b
   - _self_
-
-train_build_config_ids:
-  - v3_sc0_staging_00.scene_instance.json
 
 graph:
   # Must match the graph mode used by Experiment B's checkpoint.

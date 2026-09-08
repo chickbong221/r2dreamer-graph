@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-hab-a-b005
+#SBATCH --job-name=r2d-hab-a-b01
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -8,20 +8,22 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Experiment A -- five tidy_house pick objects, one named training scene,
-# evaluated on those same five objects in that same scene.
+# Experiment A -- five tidy_house pick objects, one named training scene.
+#
+# 8M steps on the five objects, then 5M more on the held-out 008_pudding_box
+# from A's best eligible checkpoint, logged under finetune/*. The transfer
+# stage reports its results but saves no checkpoint of its own.
 #
 # The evaluation panel is 25 environments, five per object, fixed across
 # evaluations. No lighting conditions here: A varies the object, B varies the
 # scene, C varies the illumination inside B's panel.
 #
-# A is the training-plus-transfer experiment: 10M steps on the five
-# objects, then 5M more on the held-out 008_pudding_box from A's best
-# eligible checkpoint, logged under finetune/*. The transfer stage reports
-# its results but saves no checkpoint of its own.
+# Selection stays on eval/success_once -- A trains and evaluates in the same
+# scene, so there is no held-out half for that number to pool in. Eligibility
+# starts at 6M of the 8M budget.
 #
-# Everything else is the shipped default: 10M steps, 126 training envs,
-# batch 32 x 64, train_ratio 64, evaluation every 50k steps.
+# Everything else is the shipped default: batch 32 x 64, train_ratio 64,
+# evaluation every 50k steps.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 
@@ -29,7 +31,9 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: A, graph + progress beta=0.05 (warm-up 200k-700k)"
+echo "Arm: A, graph + progress beta=0.1 (warm-up 200k-700k), amplitude 0.1"
+echo "Budget: 8M steps, 100M model, checkpoint eligible from 6M"
+echo "Selection: eval/success_once"
 echo "================================="
 
 # Activate conda
@@ -95,42 +99,25 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Main training only (disabled).
-# python train.py \
-#   env=mshab_pick_a \
-#   model=size50M_graph_simple \
-#   env.graph.whitelist_dir=$WL/tidy_house \
-#   model.graph.entity_vocab=19 \
-#   model.graph.n_max=8 \
-#   model.graph.e_max=168 \
-#   model.progress.beta=0.05 \
-#   checkpoint.enabled=true \
-#   checkpoint.metric=eval/success_once \
-#   checkpoint.tiebreak='' \
-#   checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-beta005.pt \
-#   finetune.enabled=false \
-#   wandb.group=mshab_tidy_house_pick_A \
-#   wandb.name=A-five-objects-beta005 \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005
-
-# Train 10M, then transfer for 5M from A's best eligible checkpoint.
 python train.py \
   env=mshab_pick_a \
-  model=size50M_graph_simple \
+  model=size100M_graph_simple \
+  env.steps=8000000 \
   env.graph.whitelist_dir=$WL/tidy_house \
   model.graph.entity_vocab=19 \
   model.graph.n_max=8 \
   model.graph.e_max=168 \
-  model.progress.beta=0.05 \
+  model.progress.beta=0.1 \
   checkpoint.enabled=true \
+  checkpoint.start_step=6000000 \
   checkpoint.metric=eval/success_once \
   checkpoint.tiebreak='' \
-  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-beta005.pt \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-beta01.pt \
   finetune.enabled=true \
   finetune.steps=5000000 \
   wandb.group=mshab_tidy_house_pick_A \
-  wandb.name=A-five-objects-beta005-transfer \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005-transfer
+  wandb.name=A-five-objects-beta01-transfer \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta01-transfer
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

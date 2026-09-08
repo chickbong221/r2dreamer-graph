@@ -419,6 +419,39 @@ class RSSM(nn.Module):
         x = x.float()
         return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + eps)
 
+    @staticmethod
+    def sem_rms(x, eps: float = 1e-8):
+        """Per-observation RMS magnitude of a semantic vector.
+
+        The scalar ``rms`` divides by; float32 whatever autocast is doing,
+        because a magnitude squared under bfloat16 is the one number here with
+        no headroom to spare.
+        """
+        x = x.float()
+        return x.square().mean(-1).add(eps).sqrt()
+
+    def semantic_amplitude_loss(self, post_sem, prior_sem):
+        """One-way scale alignment; the directional terms cannot see magnitude.
+
+        ``semantic_align_loss`` compares RMS-normalised vectors, so a prior
+        pointing exactly the right way at half the posterior's magnitude
+        scores perfectly -- while the decoder, the actor and every imagined
+        step read the *unnormalised* g. This closes that one gap and nothing
+        else.
+
+        One-way on purpose: the target is the detached posterior magnitude, so
+        only the prior and the dynamics that produce h move. Pulling the
+        posterior towards the prior's scale as well is exactly what would let
+        both branches agree by shrinking together, which is the failure the
+        normalisation was introduced to prevent.
+
+        Returns the per-step squared error and both magnitudes, so the caller
+        can mask and log them without recomputing either.
+        """
+        post = self.sem_rms(post_sem)
+        prior = self.sem_rms(prior_sem)
+        return (prior - post.detach()).square(), prior, post
+
     def semantic_align_loss(self, post_sem, prior_sem):
         """Stop-gradient predictability regularizer, not a KL.
 

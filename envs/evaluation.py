@@ -2,6 +2,11 @@
 
 B and C share one vector simulator and one policy batch. No extra normal
 evaluation is constructed. The panel is also the source of metric grouping.
+
+B's panel has three parts and they are never pooled: the unseen scenes are
+the generalisation number, a smaller fixed set of training-scene cases is
+what the checkpoint is selected on, and the lighting rows sit on one named
+training scene whatever else B trains in.
 """
 
 from collections import defaultdict
@@ -49,6 +54,55 @@ def lighting_conditions(config):
     return [(str(k), float(v)) for k, v in conditions.items()]
 
 
+def lighting_scene(config, training_scenes):
+    """The one scene the illumination comparison runs on.
+
+    Named outright as soon as B trains in more than one scene. The comparison
+    is a controlled change to a *fixed* scene -- same plans, same spawns, three
+    light levels -- so adding training scenes has to leave it the size it was
+    rather than multiplying it by five. With a single training scene the name
+    is unambiguous and may be left empty, which is what A and every older
+    configuration do.
+    """
+    lighting = getattr(config, "eval_lighting", None)
+    named = str(getattr(lighting, "scene", "") or "")
+    if not named:
+        if len(training_scenes) != 1:
+            raise ValueError(
+                "lighting comparison needs eval_lighting.scene named outright: "
+                f"this run trains in {len(training_scenes)} scenes, so 'the "
+                "training scene' no longer identifies one")
+        return training_scenes[0]
+    if named not in training_scenes:
+        raise ValueError(
+            f"lighting scene {named!r} is not one of this run's training "
+            f"scenes {sorted(training_scenes)}. Changing the light in a scene "
+            "the policy never trained in measures two things at once.")
+    return named
+
+
+def scene_repeats(config):
+    """Episodes per scene, split by whether the policy trained in it.
+
+    Empty means the uniform panel: one count for every scene, which is what a
+    single-training-scene B did. An asymmetric split exists because the two
+    halves answer different questions -- the held-out scenes are the
+    generalisation number and want breadth, the training scenes only have to
+    select a checkpoint and want enough episodes for that number to be stable.
+    """
+    raw = getattr(config, "eval_scene_episodes", None)
+    if raw is None:
+        return {}
+    values = {key: int(raw.get(key, 0) or 0) for key in ("training", "held_out")}
+    if not any(values.values()):
+        return {}
+    if any(value <= 0 for value in values.values()):
+        raise ValueError(
+            "eval_scene_episodes needs a positive count for both splits; "
+            f"got {values}. Zero for one half silently drops it from the panel.")
+    return values
+
+
 def build_panel(by_object, config):
     """Indices refer to each scene's order in the flattened task plan list."""
     indexed, scene_count = defaultdict(list), defaultdict(int)
@@ -80,23 +134,50 @@ def build_panel(by_object, config):
             for obj in objects:
                 add(scenes[0], obj, k, "object")
     elif mode == "scenes":
-        if len(objects) != 1 or count <= 0 or count % len(scenes):
-            raise ValueError("scene evaluation needs one object and equal episodes per scene")
-        for k in range(count // len(scenes)):
-            for scene in scenes:
-                add(scene, objects[0], k, "scene")
+        if len(objects) != 1:
+            raise ValueError("scene evaluation needs exactly one object")
+        repeats = scene_repeats(config)
+        if repeats:
+            trained = set(config.train_build_config_ids)
+            held_out = [s for s in scenes if s not in trained]
+            training = [s for s in scenes if s in trained]
+            if not held_out or not training:
+                raise ValueError(
+                    "a split scene panel needs both halves present: "
+                    f"{len(training)} training and {len(held_out)} unseen "
+                    "scene(s) among the evaluation plans")
+            planned = (repeats["held_out"] * len(held_out)
+                       + repeats["training"] * len(training))
+            if planned != count:
+                raise ValueError(
+                    f"scene panel would build {planned} case(s) "
+                    f"({repeats['held_out']}x{len(held_out)} unseen + "
+                    f"{repeats['training']}x{len(training)} training) but "
+                    f"eval_episode_num is {count}")
+            # Unseen first, so the reported panel reads in the order the
+            # experiment is stated: generalisation, then selection, then light.
+            for k in range(repeats["held_out"]):
+                for scene in held_out:
+                    add(scene, objects[0], k, "scene")
+            for k in range(repeats["training"]):
+                for scene in training:
+                    add(scene, objects[0], k, "scene")
+        else:
+            if count <= 0 or count % len(scenes):
+                raise ValueError("scene evaluation needs equal episodes per scene")
+            for k in range(count // len(scenes)):
+                for scene in scenes:
+                    add(scene, objects[0], k, "scene")
     else:
         raise ValueError(f"unknown fixed evaluation panel: {mode!r}")
     conditions = lighting_conditions(config)
     if conditions:
         if mode != "scenes":
             raise ValueError("lighting evaluation is attached to B's scene panel only")
-        training_scenes = list(config.train_build_config_ids)
-        if len(training_scenes) != 1:
-            raise ValueError("lighting comparison needs one named training scene")
+        scene = lighting_scene(config, list(config.train_build_config_ids))
         for condition, intensity in conditions:
             for k in range(int(config.eval_lighting.envs_per_condition)):
-                add(training_scenes[0], objects[0], k, "light", condition, intensity)
+                add(scene, objects[0], k, "light", condition, intensity)
     return cases
 
 

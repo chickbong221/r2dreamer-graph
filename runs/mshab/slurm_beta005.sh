@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-hab-b005
+#SBATCH --job-name=r2d-hab-b01
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -8,21 +8,31 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Both MS-HAB Pick experiments on the graph arm, A then B.
+# Both MS-HAB Pick experiments on the graph arm, B first, then A.
 #
-# A -- five tidy_house objects in one named scene for 10M steps, then 5M more
+# B runs first: it is the generalization result the write-up leads with, it
+# has no transfer stage queued behind it, and a node that dies overnight
+# should already have spent its hours on the load-bearing run.
+#
+# B -- 004_sugar_box in five arrangements of one apartment for 8M steps,
+# evaluated on 42 unseen scenes plus 10 training-scene cases plus C's 30
+# lighting environments (10 each at 0.4 / 1.0 / 2.0, all on the original
+# single training scene). Selected on eval_scene/training/success_once.
+#
+# A -- five tidy_house objects in one named scene for 8M steps, then 5M more
 # on the held-out 008_pudding_box from A's best eligible checkpoint, logged
-# under finetune/*. 25 evaluation environments, five per object.
+# under finetune/*. 25 evaluation environments, five per object. Selected on
+# eval/success_once.
 #
-# B -- 004_sugar_box in that same scene for 10M steps, evaluated on 20 scenes
-# plus C's 30 lighting environments (10 each at 0.4 / 1.0 / 2.0). No transfer
-# stage: the held-out object belongs to A.
+# Checkpoint eligibility starts at 6M for both, so the selection window is the
+# last two million steps rather than the final evaluation on its own.
 #
-# The two commands are the ones in slurm_a_beta005.sh and slurm_b_beta005.sh,
-# which stay for launching a single arm.
+# The two commands are the ones in slurm_b_beta005.sh and slurm_a_beta005.sh,
+# which stay for launching a single arm. The filename keeps its old spelling;
+# the arm it launches is beta=0.1.
 #
-# Everything else is the shipped default: 126 training envs, batch 32 x 64,
-# train_ratio 64, evaluation every 50k steps.
+# Everything else is the shipped default: batch 32 x 64, train_ratio 64,
+# evaluation every 50k steps.
 #
 # Deliberately no `set -e`: a run that dies must not cancel the one after it.
 
@@ -30,7 +40,9 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: graph + progress beta=0.05 (warm-up 200k-700k), experiments A then B"
+echo "Arm: graph + progress beta=0.1 (warm-up 200k-700k), amplitude 0.1, experiments B then A"
+echo "Budget: 8M steps each, 100M model, checkpoint eligible from 6M"
+echo "Selection: B eval_scene/training/success_once, A eval/success_once"
 echo "================================="
 
 # Activate conda
@@ -86,6 +98,12 @@ python tests/probes/validate_task_assets.py \
             005_tomato_soup_can 007_tuna_fish_can 008_pudding_box \
             009_gelatin_box 010_potted_meat_can 024_bowl || exit 1
 
+# B's frozen five/42 scene split, checked against the installed task plans
+# before the budget is spent: every named scene present, the two halves
+# disjoint, and the split still the one the rule produces.
+python -m scenegraph.tools.freeze_scene_split --check \
+  --task tidy_house --subtask pick --obj 004_sugar_box --split train || exit 1
+
 # Print initial GPU state
 nvidia-smi
 
@@ -96,42 +114,47 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-echo "=== Experiment A ==="
-python train.py \
-  env=mshab_pick_a \
-  model=size50M_graph_simple \
-  env.graph.whitelist_dir=$WL/tidy_house \
-  model.graph.entity_vocab=19 \
-  model.graph.n_max=8 \
-  model.graph.e_max=168 \
-  model.progress.beta=0.05 \
-  checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
-  checkpoint.tiebreak='' \
-  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-beta005.pt \
-  finetune.enabled=true \
-  finetune.steps=5000000 \
-  wandb.group=mshab_tidy_house_pick_A \
-  wandb.name=A-five-objects-beta005-transfer \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta005-transfer
-
 echo "=== Experiment B ==="
 python train.py \
   env=mshab_pick_b \
-  model=size50M_graph_simple \
+  model=size100M_graph_simple \
+  env.steps=8000000 \
   env.graph.whitelist_dir=$WL/tidy_house \
   model.graph.entity_vocab=19 \
   model.graph.n_max=8 \
   model.graph.e_max=168 \
-  model.progress.beta=0.05 \
+  model.progress.beta=0.1 \
   checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
+  checkpoint.start_step=6000000 \
+  checkpoint.metric=eval_scene/training/success_once \
   checkpoint.tiebreak='' \
-  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-beta005.pt \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-beta01.pt \
   finetune.enabled=false \
   wandb.group=mshab_tidy_house_pick_B \
-  wandb.name=B-scenes-and-lighting-beta005 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta005
+  wandb.name=B-scenes-and-lighting-beta01 \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta01
+
+echo "=== Experiment A ==="
+python train.py \
+  env=mshab_pick_a \
+  model=size100M_graph_simple \
+  env.steps=8000000 \
+  env.graph.whitelist_dir=$WL/tidy_house \
+  model.graph.entity_vocab=19 \
+  model.graph.n_max=8 \
+  model.graph.e_max=168 \
+  model.progress.beta=0.1 \
+  checkpoint.enabled=true \
+  checkpoint.start_step=6000000 \
+  checkpoint.metric=eval/success_once \
+  checkpoint.tiebreak='' \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-beta01.pt \
+  finetune.enabled=true \
+  finetune.steps=5000000 \
+  wandb.group=mshab_tidy_house_pick_A \
+  wandb.name=A-five-objects-beta01-transfer \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-beta01-transfer
+
 # Stop GPU monitor
 kill $GPU_MONITOR_PID
 

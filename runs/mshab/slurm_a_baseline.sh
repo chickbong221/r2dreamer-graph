@@ -8,19 +8,22 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Experiment A, graph-free control: pure DreamerV3.
+# Experiment A -- five tidy_house pick objects, one named training scene.
 #
-# `size50M` and `size50M_graph_simple` are identical on every RSSM setting
-# -- deter, hidden, units, depth, discrete, act, norm -- so the plain preset
-# is already the matched control and needs no graph overrides at all. It
-# inherits graph.enabled=False and progress.enabled=False from the base
-# preset, so both extensions are off by construction rather than by being
-# switched off, and no whitelist or entity vocabulary applies.
+# 8M steps on the five objects, then 5M more on the held-out 008_pudding_box
+# from A's best eligible checkpoint, logged under finetune/*. The transfer
+# stage reports its results but saves no checkpoint of its own.
 #
-# obs_mode drops to rgb: with the graph off nothing consumes segmentation.
+# The evaluation panel is 25 environments, five per object, fixed across
+# evaluations. No lighting conditions here: A varies the object, B varies the
+# scene, C varies the illumination inside B's panel.
 #
-# Same evaluation panel as the graph arm: 25 environments, five per object,
-# and the same 10M + 5M transfer budget, so the two A arms are matched.
+# Selection stays on eval/success_once -- A trains and evaluates in the same
+# scene, so there is no held-out half for that number to pool in. Eligibility
+# starts at 6M of the 8M budget.
+#
+# Everything else is the shipped default: batch 32 x 64, train_ratio 64,
+# evaluation every 50k steps.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 
@@ -29,6 +32,8 @@ echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
 echo "Arm: A, baseline (pure DreamerV3, no graph, no progress)"
+echo "Budget: 8M steps, 100M model, checkpoint eligible from 6M"
+echo "Selection: eval/success_once"
 echo "================================="
 
 # Activate conda
@@ -82,26 +87,13 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Main training only (disabled).
-# python train.py \
-#   env=mshab_pick_a \
-#   model=size50M \
-#   env.obs_mode=rgb \
-#   checkpoint.enabled=true \
-#   checkpoint.metric=eval/success_once \
-#   checkpoint.tiebreak='' \
-#   checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-baseline.pt \
-#   finetune.enabled=false \
-#   wandb.group=mshab_tidy_house_pick_A \
-#   wandb.name=A-five-objects-baseline \
-#   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-baseline
-
-# Train 10M, then transfer for 5M from A's best eligible checkpoint.
 python train.py \
   env=mshab_pick_a \
-  model=size50M \
+  model=size100M \
+  env.steps=8000000 \
   env.obs_mode=rgb \
   checkpoint.enabled=true \
+  checkpoint.start_step=6000000 \
   checkpoint.metric=eval/success_once \
   checkpoint.tiebreak='' \
   checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-baseline.pt \

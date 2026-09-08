@@ -12,6 +12,7 @@ from buffer import Buffer
 from checkpointing import CheckpointConfig, CheckpointError, Checkpointer, load_checkpoint, run_identity
 from dreamer import Dreamer
 from envs import make_envs
+from envs.scene_manifest import apply_scene_manifest
 from trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
@@ -41,6 +42,12 @@ def main(config):
     atexit.register(logger.close)
     # save config
     logger.log_hydra_config(config)
+
+    # Before the config is logged again by any later stage: the frozen scene
+    # split becomes explicit names here, so every reader downstream -- the
+    # selectors, training_scenes, the checkpoint identity, the transfer
+    # stage's copy -- sees the same forty-seven strings and no manifest.
+    apply_scene_manifest(config.env)
 
     # Before the envs and the agent, which are the expensive part: a run with
     # checkpointing on and no metric has to fail in seconds, not after a scene
@@ -181,6 +188,10 @@ def run_finetune(config, logger, logdir, base_step, source_path):
     transfer.env.mshab_obj = str(ft.objects[0])
     transfer.env.steps = int(ft.steps)
     transfer.env.eval_build_config_ids = list(transfer.env.train_build_config_ids)
+    # The transfer stage deliberately evaluates somewhere the manifest does
+    # not describe -- one scene, the held-out object -- so the manifest is
+    # dropped rather than left to look like it still applies.
+    transfer.env.scene_manifest = ''
     transfer.env.eval_num_build_configs = 1
     transfer.env.eval_episode_num = int(ft.eval_episode_num)
     transfer.env.eval_even_build_configs = False

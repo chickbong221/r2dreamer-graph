@@ -202,7 +202,7 @@ class TheMetricIsStillTheUsersToChooseTest(unittest.TestCase):
             block = yaml.safe_load(handle)["checkpoint"]
         self.assertEqual(block["metric"], "")
         self.assertFalse(block["enabled"])
-        self.assertEqual(float(block["start_step"]), 8e6)
+        self.assertEqual(float(block["start_step"]), 6e6)
         self.assertEqual(block["path"], "checkpoint_best.pt")
 
     def test_enabling_without_one_refuses(self):

@@ -8,21 +8,30 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Experiment B, graph-free control: pure DreamerV3.
+# Experiment B -- one object, five training scenes, forty-two unseen ones.
 #
-# `size50M` and `size50M_graph_simple` are identical on every RSSM setting
-# -- deter, hidden, units, depth, discrete, act, norm -- so the plain preset
-# is already the matched control and needs no graph overrides at all. It
-# inherits graph.enabled=False and progress.enabled=False from the base
-# preset, so both extensions are off by construction rather than by being
-# switched off, and no whitelist or entity vocabulary applies.
+# 004_sugar_box in five arrangements of one apartment for 8M steps, evaluated
+# in every arrangement of the other two. 125 training environments, 25 per
+# scene; the split itself is frozen in configs/scenes/mshab_pick_b.json and
+# checked against the installed task plans above, so a drifted manifest stops
+# the run rather than quietly moving the experiment.
 #
-# obs_mode drops to rgb: with the graph off nothing consumes segmentation.
-# The lighting panel still works -- C compares the policy's RGB, which this
-# arm renders exactly as the graph arm does.
+# The panel is 82 environments in one simulator: 42 unseen scenes at nominal
+# light, 10 training-scene cases at nominal light, and C's 30 matched cases at
+# 0.4 / 1.0 / 2.0 -- all thirty on the original single training scene, which
+# five-scene training does not expand.
 #
-# Same evaluation panel as the graph arm: 20 scenes plus 30 lighting envs,
-# and the same 10M budget with no transfer stage.
+# The checkpoint is selected on eval_scene/training/success_once, the ten
+# normal-light training-scene cases. Not eval/success_once, which here pools
+# the unseen scenes in: selecting on the number B reports would pick whichever
+# checkpoint got luckiest on the test set. Eligibility starts at 6M of the 8M
+# budget, so the selection window is the last two million steps rather than
+# the final evaluation on its own.
+#
+# No transfer stage: the held-out object belongs to A.
+#
+# Everything else is the shipped default: batch 32 x 64, train_ratio 64,
+# evaluation every 50k steps.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 
@@ -31,6 +40,8 @@ echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
 echo "Arm: B, baseline (pure DreamerV3, no graph, no progress)"
+echo "Budget: 8M steps, 100M model, checkpoint eligible from 6M"
+echo "Selection: eval_scene/training/success_once"
 echo "================================="
 
 # Activate conda
@@ -74,6 +85,12 @@ export HYDRA_FULL_ERROR=1
 
 mkdir -p $HOME/output "$CKPT_DIR"
 
+# B's frozen five/42 scene split, checked against the installed task plans
+# before the budget is spent: every named scene present, the two halves
+# disjoint, and the split still the one the rule produces.
+python -m scenegraph.tools.freeze_scene_split --check \
+  --task tidy_house --subtask pick --obj 004_sugar_box --split train || exit 1
+
 # Print initial GPU state
 nvidia-smi
 
@@ -86,10 +103,12 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 python train.py \
   env=mshab_pick_b \
-  model=size50M \
+  model=size100M \
+  env.steps=8000000 \
   env.obs_mode=rgb \
   checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
+  checkpoint.start_step=6000000 \
+  checkpoint.metric=eval_scene/training/success_once \
   checkpoint.tiebreak='' \
   checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-baseline.pt \
   finetune.enabled=false \

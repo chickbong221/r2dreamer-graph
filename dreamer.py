@@ -114,6 +114,21 @@ def _masked_std(values, mask):
     return torch.where(count > 1, var.clamp_min(0).sqrt(), torch.zeros_like(var))
 
 
+def _observation_variance(values, mask):
+    """Mean per-feature variance *across* valid observations.
+
+    ``values.var(-1)`` says how much one observation's features differ from
+    each other, which stays healthy even when every observation is the same
+    vector. This says how much one feature differs between observations, which
+    is where a semantic branch collapsing onto a constant actually shows up.
+    """
+    values = values.float()
+    weight = mask.float().unsqueeze(-1)
+    count = weight.sum().clamp_min(1)
+    mean = (values * weight).sum(dim=(0, 1), keepdim=True) / count
+    return ((values - mean).square() * weight).sum() / (count * values.shape[-1])
+
+
 def _frame_flag(value):
     """(B, T) view of a per-frame flag stored as either (B, T) or (B, T, 1)."""
     flag = value.bool()
@@ -364,6 +379,11 @@ class Dreamer(nn.Module):
         # rather than computed and multiplied by zero, which is the only kind of
         # switch this repository needs: losses are keyed by scale, not by an
         # enable flag per head.
+        # Same rule for the amplitude term, except that its diagnostics stay
+        # on either way: they are what says whether the term is needed.
+        self._graph_amplitude = self.graph_enabled and (
+            float(self._loss_scales.get("graphamp", 0.0)) != 0.0
+        )
         self._progress_model = self.graph_pooled_simple and (
             float(self._loss_scales.get("progress_model", 0.0)) != 0.0
         )
@@ -1113,7 +1133,33 @@ class Dreamer(nn.Module):
             # Both terms share one forward value; log it once and let the
             # scales express the asymmetry.
             metrics["graph_align_mse"] = losses["graphdyn"].detach()
+            # Direction is not enough: the two terms above compare unit
+            # vectors, so the prior is free to be the right shape at the wrong
+            # scale while the decoder and the actor read the raw g.
+            amp_error, prior_rms, post_rms = self.rssm.semantic_amplitude_loss(
+                post_sem, prior_sem
+            )
+            amp_loss = (amp_error * step_float).sum() / denominator
+            if self._graph_amplitude:
+                losses["graphamp"] = amp_loss
             with torch.no_grad():
+                metrics["graph_amp_mse"] = amp_loss.detach()
+                prior_scale = (prior_rms * step_float).sum() / denominator
+                post_scale = (post_rms * step_float).sum() / denominator
+                metrics["graph_sem_prior_rms"] = prior_scale
+                metrics["graph_sem_post_rms"] = post_scale
+                # Signed, and in that order: negative is the prior running
+                # small, which is the direction an unconstrained scale drifts.
+                metrics["graph_sem_rms_difference"] = prior_scale - post_scale
+                # Sibling of graph_sem_*_var below, along the other axis:
+                # that one varies over features within an observation, this
+                # one over observations within a feature.
+                metrics["graph_sem_post_var_across_obs"] = _observation_variance(
+                    post_sem, step_float
+                )
+                metrics["graph_sem_prior_var_across_obs"] = _observation_variance(
+                    prior_sem, step_float
+                )
                 # Collapse shows up here first: cosine climbing to one
                 # while both variances fall means the two branches agreed
                 # on a constant rather than on the graph.

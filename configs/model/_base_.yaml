@@ -54,6 +54,10 @@ loss_scales:
   nodetgt: 1.0
   graphdyn: 1.0
   graphrep: 0.05
+  # One-way RMS-amplitude alignment. Unrelated to progress.beta, which happens
+  # to carry the same number: this weights a world-model loss, that weights
+  # the actor's progress advantage.
+  graphamp: 0.1
   progress_value: 1.0
   progress_model: 1.0
 r2dreamer:

@@ -7,6 +7,7 @@ MS-HAB and ManiSkill remain external simulator dependencies.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
@@ -454,10 +455,16 @@ class ManiSkillVecEnv:
                 # nothing makes the spread even. MS-HAB then requires
                 # divisibility, which is the check that 63 envs over 63
                 # configurations is one each.
+                # Training asks for the same even spread once it names more
+                # than one scene: 125 envs over 5 scenes is 25 each, or MS-HAB
+                # refuses the divisibility check and the run stops before the
+                # budget is spent on an allocation nobody chose.
                 require_build_configs_repeated_equally_across_envs=bool(
-                    self._eval
-                    and not self.eval_cases
-                    and getattr(config, "eval_even_build_configs", False)),
+                    (self._eval
+                     and not self.eval_cases
+                     and getattr(config, "eval_even_build_configs", False))
+                    or (not self._eval
+                        and getattr(config, "train_even_build_configs", False))),
             )
 
         control_mode = str(config.control_mode)
@@ -534,6 +541,7 @@ class ManiSkillVecEnv:
         )
 
         obs, _ = self._reset_simulator(initial=True)
+        self._report_scene_allocation()
         obs = self._obs_to_dict(obs)
         self._graph_obs = self._graph.reset() if self._graph is not None else {}
         self._graph_panel_env: Optional[int] = None
@@ -549,6 +557,32 @@ class ManiSkillVecEnv:
     @property
     def env_num(self):
         return self._num_envs
+
+    def _report_scene_allocation(self):
+        """How many environments each scene actually got, after the build.
+
+        The config asks; MS-HAB assigns. Printing the realized counts is what
+        turns "125 envs, 25 per scene" from an intention into something a log
+        can be checked against -- and it is the cheapest place to notice that
+        a run is training in one apartment when it was meant to train in five.
+        """
+        if not self._is_mshab:
+            return
+        base = self._env.unwrapped
+        names = getattr(getattr(base, "scene_builder", None),
+                        "build_config_names_to_idxs", None)
+        indices = getattr(base, "build_config_idxs", None)
+        if not names or indices is None:
+            return
+        by_index = {int(v): str(k) for k, v in names.items()}
+        counts = Counter(by_index.get(int(i), str(i)) for i in indices)
+        label = "eval" if self._eval else "train"
+        print(f"[env] {label} scene allocation over {len(list(indices))} env(s): "
+              f"{len(counts)} scene(s), "
+              f"{dict(sorted(Counter(counts.values()).items()))} env(s)-per-scene "
+              f"histogram", flush=True)
+        for scene, count in sorted(counts.items()):
+            print(f"[env]   {scene}: {count}", flush=True)
 
     def _reset_simulator(self, initial=False):
         """Pin actual build, task and spawn indices on every evaluation reset."""

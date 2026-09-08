@@ -13,7 +13,9 @@ vocabulary has moved is not a degraded checkpoint; it is a different model.
 
 The policy, deliberately narrow:
 
-* nothing is written before ``start_step``;
+* nothing is written before ``start_step`` -- 6M against an 8M budget, so
+  the selection window is the last two million steps rather than the final
+  evaluation alone;
 * from the first eligible evaluation onward, the best result so far is kept;
 * exactly one file, replaced in place, written atomically;
 * no interrupt, latest, milestone or automatic final checkpoint;
@@ -53,7 +55,7 @@ class CheckpointConfig:
     """The agreed policy, with the metric left for a human to fill in."""
 
     enabled: bool = False
-    start_step: int = 8_000_000
+    start_step: int = 6_000_000
     # Empty on purpose. See the module docstring.
     metric: str = ""
     tiebreak: str = ""
@@ -65,7 +67,7 @@ class CheckpointConfig:
         raw = dict(raw or {})
         return cls(
             enabled=bool(raw.get("enabled", False)),
-            start_step=int(raw.get("start_step", 8_000_000)),
+            start_step=int(raw.get("start_step", 6_000_000)),
             metric=str(raw.get("metric", "") or ""),
             tiebreak=str(raw.get("tiebreak", "") or ""),
             mode=str(raw.get("mode", "max") or "max"),

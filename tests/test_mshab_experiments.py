@@ -11,11 +11,15 @@ Both selections used to be implicit and neither survives inspection:
   chose.
 
 ``envs/maniskill`` imports torch, so the selectors are exec'd from source the
-way ``test_maniskill_env_branch`` does.
+way ``test_maniskill_env_branch`` does. ``envs/scene_manifest`` does not, so
+it is imported by path.
 """
 
 import ast
+import importlib.util
+import json
 import re
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +34,19 @@ FIVE = ["002_master_chef_can", "003_cracker_box", "004_sugar_box",
 HELD_OUT = ["005_tomato_soup_can", "008_pudding_box", "009_gelatin_box",
             "010_potted_meat_can"]
 SCENE = "v3_sc0_staging_00.scene_instance.json"
+MANIFEST = "configs/scenes/mshab_pick_b.json"
+
+
+def _scene_manifest():
+    spec = importlib.util.spec_from_file_location(
+        "_scene_manifest", "envs/scene_manifest.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+manifest = _scene_manifest()
 
 
 def _load(*names):
@@ -150,32 +167,65 @@ class ExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config["eval_episode_num"],
                          5 * len(config["mshab_objects"]))
 
-    def test_b_trains_one_object_in_the_same_scene(self):
+    def test_b_trains_one_object_from_a_frozen_scene_manifest(self):
+        """The scenes are named in one file, not restated in the config.
+
+        Both lists stay empty here on purpose: the manifest fills them in
+        before anything is built, and two sources for one decision is how the
+        two drift apart."""
         config = self._config("b")
         self.assertEqual(config["mshab_obj"], "004_sugar_box")
         self.assertEqual(config["mshab_objects"], [])
-        self.assertEqual(config["train_build_config_ids"], [SCENE])
+        self.assertEqual(config["scene_manifest"], MANIFEST)
+        self.assertEqual(config["train_build_config_ids"], [])
+        self.assertEqual(config["eval_build_config_ids"], [])
 
-    def test_b_evaluates_one_environment_per_selected_scene(self):
-        """One environment per scene: reconfiguration_freq is 0, so a
-        sub-scene keeps its configuration and the distinct-scene count is
-        bounded by the environment count rather than the episode count.
+    def test_b_allocates_twenty_five_training_environments_per_scene(self):
+        """125 over 5, and the even-spread flag is what makes it exact.
 
-        The two counts have to match, or the scene panel cannot allocate one
-        episode per scene and refuses to build."""
+        Without it MS-HAB assigns whatever it assigns; with it the run refuses
+        to start unless the count divides."""
         config = self._config("b")
-        self.assertEqual(config["eval_num_build_configs"], 20)
-        self.assertEqual(config["eval_episode_num"], 20)
-        self.assertEqual(config["eval_episode_num"],
-                         config["eval_num_build_configs"])
-        self.assertTrue(config["eval_even_build_configs"])
+        split = manifest.load_manifest(MANIFEST)
+        self.assertEqual(config["env_num"], 125)
+        self.assertEqual(config["env_num"] % len(split.train), 0)
+        self.assertEqual(config["env_num"] // len(split.train), 25)
+        self.assertTrue(config["train_even_build_configs"])
 
-    def test_b_evaluates_beyond_the_scene_it_trains_in(self):
-        """A held-out split is the whole point; one scene would measure fit."""
+    def test_b_composes_its_eighty_two_case_panel(self):
+        """42 unseen + 2 x 5 training + 30 lighting, and the primary count is
+        the first two."""
         config = self._config("b")
-        self.assertEqual(len(config["train_build_config_ids"]), 1)
-        self.assertGreater(config["eval_num_build_configs"],
-                           len(config["train_build_config_ids"]))
+        split = manifest.load_manifest(MANIFEST)
+        repeats = config["eval_scene_episodes"]
+        primary = (repeats["held_out"] * len(split.held_out)
+                   + repeats["training"] * len(split.train))
+        self.assertEqual(repeats, {"training": 2, "held_out": 1})
+        self.assertEqual(primary, 52)
+        self.assertEqual(config["eval_episode_num"], primary)
+        base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
+        lighting = len(base["eval_lighting"]["conditions"]) * \
+            base["eval_lighting"]["envs_per_condition"]
+        self.assertEqual(lighting, 30)
+        self.assertEqual(primary + lighting, 82)
+
+    def test_b_does_not_ask_for_an_even_evaluation_spread(self):
+        """The panel pins every scene itself, and the two halves are
+        deliberately not weighted equally."""
+        self.assertFalse(self._config("b")["eval_even_build_configs"])
+
+    def test_b_pins_the_lighting_comparison_to_one_training_scene(self):
+        """Training in five scenes must not multiply C by five."""
+        config = self._config("b")
+        self.assertEqual(config["eval_lighting"]["scene"], SCENE)
+        self.assertIn(SCENE, manifest.load_manifest(MANIFEST).train)
+
+    def test_b_evaluates_beyond_the_scenes_it_trains_in(self):
+        """A held-out split is the whole point; training scenes alone would
+        measure fit."""
+        split = manifest.load_manifest(MANIFEST)
+        self.assertGreater(len(split.held_out), len(split.train))
+        self.assertEqual(split.evaluation, split.train + split.held_out)
 
     def test_a_does_not_ask_for_an_even_spread(self):
         """It evaluates one scene, so divisibility would be a constraint with
@@ -196,7 +246,11 @@ class ExperimentConfigTest(unittest.TestCase):
     def test_c_is_b_evaluation_with_approved_lighting(self):
         config = self._config("c")
         self.assertEqual(config["defaults"][0], "mshab_pick_b")
-        self.assertEqual(config["train_build_config_ids"], [SCENE])
+        # It restates nothing about the scenes: a second copy of the split is
+        # a second thing to keep in step with the first.
+        for absent in ("train_build_config_ids", "eval_build_config_ids",
+                       "scene_manifest", "eval_lighting"):
+            self.assertNotIn(absent, config)
         base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
         self.assertEqual(base["eval_lighting"]["envs_per_condition"], 10)
         self.assertEqual(base["eval_lighting"]["conditions"],
@@ -211,13 +265,114 @@ class ExperimentConfigTest(unittest.TestCase):
         self.assertEqual(base["train_build_config_ids"], [])
         self.assertFalse(base["eval_even_build_configs"])
         self.assertFalse(base["graph"]["disable_object_object_relations"])
+        # The keys B needs exist here as no-ops, so an ordinary MS-HAB run
+        # picks up none of B's behaviour by inheriting them.
+        self.assertEqual(base["scene_manifest"], "")
+        self.assertFalse(base["train_even_build_configs"])
+        self.assertEqual(base["eval_scene_episodes"],
+                         {"training": 0, "held_out": 0})
+        self.assertEqual(base["eval_lighting"]["scene"], "")
+
+
+class SceneManifestTest(unittest.TestCase):
+    """The frozen five/42 split, and that nothing can silently overlap."""
+
+    def setUp(self):
+        self.raw = json.loads(Path(MANIFEST).read_text(encoding="utf-8"))
+        self.split = manifest.load_manifest(MANIFEST)
+
+    def test_it_freezes_five_training_and_forty_two_unseen_scenes(self):
+        self.assertEqual(manifest.counts(self.split),
+                         {"train": 5, "held_out": 42, "evaluation": 47})
+
+    def test_the_two_halves_cannot_overlap(self):
+        """An unseen-scene score measured on a trained scene is not a
+        generalisation number, so the loader refuses rather than warns."""
+        self.assertEqual(set(self.split.train) & set(self.split.held_out), set())
+        with self.assertRaises(ValueError) as caught:
+            manifest.SceneSplit(train=[SCENE], held_out=[SCENE],
+                                lighting_scene=SCENE).validate()
+        self.assertIn("trains and holds out", str(caught.exception))
+
+    def test_the_lighting_scene_is_the_original_training_scene(self):
+        self.assertEqual(self.split.lighting_scene, SCENE)
+        self.assertIn(SCENE, self.split.train)
+        with self.assertRaises(ValueError):
+            manifest.SceneSplit(train=[SCENE], held_out=["other.scene_instance.json"],
+                                lighting_scene="other.scene_instance.json").validate()
+
+    def test_every_name_is_a_build_configuration(self):
+        for name in self.split.evaluation:
+            self.assertTrue(name.endswith(".scene_instance.json"), name)
+
+    def test_training_scenes_are_arrangements_of_one_apartment(self):
+        """Held-out scenes come from apartments the policy never saw, which
+        is what makes the number a scene-generalisation result."""
+        groups = {manifest.scene_group(n) for n in self.split.train}
+        self.assertEqual(len(groups), 1)
+        self.assertFalse(
+            groups & {manifest.scene_group(n) for n in self.split.held_out})
+
+    def test_the_split_rule_reproduces_the_shipped_manifest(self):
+        """The tool that writes the file and the file agree, so regenerating
+        it on the training machine is a no-op unless the dataset moved."""
+        available = sorted(set(self.split.evaluation))
+        recomputed = manifest.split_scenes(available, SCENE, 5, 42)
+        self.assertEqual(recomputed.train, self.split.train)
+        self.assertEqual(recomputed.held_out, self.split.held_out)
+
+    def test_the_manifest_records_what_it_was_frozen_from(self):
+        for key in ("task", "subtask", "object", "split", "available"):
+            self.assertIn(key, self.raw)
+        self.assertEqual(self.raw["task"], "tidy_house")
+        self.assertEqual(self.raw["object"], "004_sugar_box")
+
+    def test_applying_it_fills_both_lists_and_refuses_a_second_source(self):
+        config = SimpleNamespace(
+            scene_manifest=MANIFEST, train_build_config_ids=[],
+            eval_build_config_ids=[],
+            eval_lighting=SimpleNamespace(enabled=True, scene=""))
+        manifest.apply_scene_manifest(config)
+        self.assertEqual(config.train_build_config_ids, self.split.train)
+        self.assertEqual(config.eval_build_config_ids, self.split.evaluation)
+        self.assertEqual(config.eval_lighting.scene, SCENE)
+        clash = SimpleNamespace(
+            scene_manifest=MANIFEST, train_build_config_ids=["elsewhere.json"],
+            eval_build_config_ids=[], eval_lighting=None)
+        with self.assertRaises(ValueError):
+            manifest.apply_scene_manifest(clash)
+
+    def test_no_manifest_changes_nothing(self):
+        config = SimpleNamespace(scene_manifest="",
+                                 train_build_config_ids=[SCENE],
+                                 eval_build_config_ids=[])
+        self.assertIsNone(manifest.apply_scene_manifest(config))
+        self.assertEqual(config.train_build_config_ids, [SCENE])
+
+    def test_the_launchers_check_it_against_the_installed_plans(self):
+        """A manifest that has drifted from the dataset has to stop the run
+        before the budget, not at the first evaluation."""
+        for name in ("slurm_b_beta005", "slurm_b_baseline",
+                     "slurm_beta005", "slurm_baseline"):
+            script = Path(f"runs/mshab/{name}.sh").read_text(encoding="utf-8")
+            with self.subTest(script=name):
+                self.assertIn("freeze_scene_split --check", script)
+        probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
+        self.assertIn("check_scene_manifest", probe)
+        self.assertIn("freeze_scene_split --check", probe)
 
 
 class LauncherTest(unittest.TestCase):
     """Launchers use approved settings and still validate supplied assets."""
 
+    # The graph launcher keeps its filename and reports a different beta:
+    # renaming six files mid-experiment is how a submitted job points at a
+    # script that no longer exists.
     EXPERIMENTS = ("a", "b")
     ARMS = ("beta005", "baseline")
+    LABELS = {"beta005": "beta01", "baseline": "baseline"}
+    METRICS = {"a": "eval/success_once",
+               "b": "eval_scene/training/success_once"}
 
     def _script(self, experiment, arm):
         return Path(f"runs/mshab/slurm_{experiment}_{arm}.sh").read_text(
@@ -254,16 +409,16 @@ class LauncherTest(unittest.TestCase):
                 self.assertIn("model.graph.entity_vocab=19", script)
                 self.assertIn("model.graph.n_max=8", script)
                 self.assertIn("model.graph.e_max=168", script)
-                self.assertIn("model.progress.beta=0.05", script)
+                self.assertIn("model.progress.beta=0.1", script)
         probe = Path("runs/mshab/validate.sh").read_text(encoding="utf-8")
         self.assertIn("--n-max 8 --e-max 168", probe)
 
     def test_the_baseline_arm_carries_no_graph_or_progress_override(self):
-        """size50M inherits both switches off; overriding them would say the
+        """size100M inherits both switches off; overriding them would say the
         control was configured rather than structurally matched."""
         for experiment, arm, script in self._scripts("baseline"):
             with self.subTest(experiment=experiment, arm=arm):
-                self.assertIn("model=size50M \\", script)
+                self.assertIn("model=size100M \\", script)
                 self.assertIn("env.obs_mode=rgb", script)
                 for absent in ("model.graph.", "model.progress.",
                                "env.graph.whitelist_dir"):
@@ -299,14 +454,17 @@ class LauncherTest(unittest.TestCase):
     def _merged(self, arm):
         return Path(self.MERGED[arm]).read_text(encoding="utf-8")
 
-    def test_each_merged_launcher_runs_a_then_b(self):
+    def test_each_merged_launcher_runs_b_then_a(self):
+        """B first: it is the generalization result, it has no transfer stage
+        queued behind it, and a node that dies overnight should already have
+        spent its hours on the load-bearing run."""
         for arm in self.ARMS:
             with self.subTest(arm=arm):
                 merged = self._merged(arm)
                 blocks = self._active_blocks(merged)
                 self.assertEqual(len(blocks), 2)
-                self.assertIn("env=mshab_pick_a", blocks[0])
-                self.assertIn("env=mshab_pick_b", blocks[1])
+                self.assertIn("env=mshab_pick_b", blocks[0])
+                self.assertIn("env=mshab_pick_a", blocks[1])
                 self.assertIn("CKPT_DIR=$MS_ASSET_DIR/mshab_transfer_checkpoint",
                               merged)
                 self.assertIn('mkdir -p $HOME/output "$CKPT_DIR"', merged)
@@ -317,7 +475,7 @@ class LauncherTest(unittest.TestCase):
         both shapes."""
         for arm in self.ARMS:
             blocks = self._active_blocks(self._merged(arm))
-            for experiment, block in zip(self.EXPERIMENTS, blocks):
+            for experiment, block in zip(("b", "a"), blocks):
                 with self.subTest(experiment=experiment, arm=arm):
                     self.assertEqual(
                         block, self._active(self._script(experiment, arm)))
@@ -339,17 +497,61 @@ class LauncherTest(unittest.TestCase):
                 self.assertIn(f"wandb.group=mshab_tidy_house_pick_"
                               f"{experiment.upper()}", active)
                 name = re.search(r"wandb\.name=(\S+)", active).group(1)
-                self.assertIn(arm, name)
+                self.assertIn(self.LABELS[arm], name)
                 seen.add(name)
         self.assertEqual(len(seen), 4)
 
-    def test_the_approved_checkpoint_metric_is_success_once(self):
+    def test_each_experiment_selects_on_its_own_metric(self):
+        """B selects on the ten training-scene cases, not on the number it
+        reports: eval/success_once pools B's unseen scenes in, and selecting
+        on that would pick whichever checkpoint got luckiest on the test set.
+        A trains and evaluates in one scene, so it has no such half."""
         for experiment, arm, script in self._scripts():
             with self.subTest(experiment=experiment, arm=arm):
-                self.assertIn("checkpoint.metric=eval/success_once", script)
+                active = self._active(script)
+                self.assertIn(f"checkpoint.metric={self.METRICS[experiment]}",
+                              active)
                 self.assertIn("checkpoint.tiebreak=''", script)
                 self.assertNotIn("CKPT_METRIC", script)
                 self.assertNotIn("CKPT_TIEBREAK", script)
+        for arm in self.ARMS:
+            blocks = self._active_blocks(self._merged(arm))
+            for experiment, block in zip(("b", "a"), blocks):
+                with self.subTest(experiment=experiment, arm=arm, merged=True):
+                    self.assertIn(
+                        f"checkpoint.metric={self.METRICS[experiment]}", block)
+
+    def test_every_arm_spends_the_agreed_eight_million_steps(self):
+        """Stated in the launcher rather than inherited: the env default is
+        10M, and an arm that quietly ran two million steps longer would not
+        be comparable to the one beside it."""
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                self.assertIn("env.steps=8000000", self._active(script))
+
+    def test_checkpoint_eligibility_starts_two_million_steps_early(self):
+        """6M against an 8M budget keeps the agreed two-million-step selection
+        window; leaving it at 8M would reduce selection to the final
+        evaluation."""
+        default = yaml.safe_load(
+            Path("configs/configs.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(float(default["checkpoint"]["start_step"]), 6e6)
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                active = self._active(script)
+                self.assertIn("checkpoint.start_step=6000000", active)
+                budget = int(re.search(r"env\.steps=(\d+)", active).group(1))
+                self.assertEqual(budget - 6_000_000, 2_000_000)
+
+    def test_every_arm_uses_the_matched_hundred_million_models(self):
+        """One capacity across both arms, or the comparison measures size."""
+        for experiment, arm, script in self._scripts():
+            with self.subTest(experiment=experiment, arm=arm):
+                active = self._active(script)
+                self.assertIn(
+                    "model=size100M_graph_simple" if arm == "beta005"
+                    else "model=size100M", active)
+                self.assertNotIn("size50M", active)
 
     def test_the_selected_model_is_saved_outside_the_log_tree(self):
         """Clearing a logdir must not take the checkpoint every later number
@@ -431,7 +633,11 @@ class CheckpointConfigBlockTest(unittest.TestCase):
         self.assertEqual(self._config()["metric"], "")
 
     def test_the_start_step_is_the_agreed_one(self):
-        self.assertEqual(float(self._config()["start_step"]), 8e6)
+        """6M, against the 8M budget both experiments now run: the agreed
+        selection window is the last two million steps, and leaving
+        eligibility at the budget would reduce selection to the final
+        evaluation."""
+        self.assertEqual(float(self._config()["start_step"]), 6e6)
 
     def test_one_path_and_no_milestone_settings(self):
         config = self._config()

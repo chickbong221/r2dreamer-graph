@@ -179,3 +179,29 @@ and finite losses; early success is not a requirement.
 Do not treat that trial as long-run experimental sign-off. Correct A's final
 object balancing and fixed evaluation panel before the full experiment, and
 verify the actual server assets rather than relying on the stale local copy.
+
+## Superseded by the current experiment specification
+
+Everything above is the state at that audit and is left unedited. The
+experiments have since been respecified; where the two disagree, the
+configuration and launchers in the repository are what runs.
+
+| Setting | At the audit | Now |
+| --- | --- | --- |
+| Model | `size50M` / `size50M_graph_simple` | `size100M` / `size100M_graph_simple`, matched on every RSSM setting |
+| Main budget | 10M steps | 8M steps, both experiments (A's 5M transfer stage is additional) |
+| B's training scenes | one | five, frozen in `configs/scenes/mshab_pick_b.json` |
+| B's training envs | 126 | 125, an even 25 per scene |
+| B's evaluation | 20 scenes + 30 lighting | 42 unseen + 10 training-scene + 30 lighting = 82 |
+| B's selection metric | `eval/success_once` | `eval_scene/training/success_once`, the ten normal-light training-scene cases |
+| A's selection metric | `eval/success_once` | unchanged |
+| Checkpoint eligibility | 8M | 6M, keeping a two-million-step selection window against the shorter budget |
+| Progress beta | 0.05 | 0.1, same 200k-700k warm-up |
+| Semantic alignment | direction only (`graphdyn` 1.0, `graphrep` 0.05) | plus one-way RMS-amplitude `graphamp` 0.1 |
+| Combined launcher order | A then B | B then A |
+
+Two names are deliberately unchanged: `runs/mshab/slurm_beta005.sh` and
+`runs/mshab/slurm_a_beta005.sh` / `slurm_b_beta005.sh` keep their filenames
+while launching the beta=0.1 arm, because renaming a script mid-experiment is
+how a queued job ends up pointing at a path that no longer exists. Their run
+names, checkpoint names and log directories all say `beta01`.

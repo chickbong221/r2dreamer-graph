@@ -8,24 +8,28 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Both MS-HAB Pick experiments on the graph-free control, A then B.
+# Both MS-HAB Pick experiments on the graph-free control, B first, then A.
 #
-# `size50M` and `size50M_graph_simple` are identical on every RSSM setting
+# `size100M` and `size100M_graph_simple` are identical on every RSSM setting
 # -- deter, hidden, units, depth, discrete, act, norm -- so the plain preset
 # is already the matched control and needs no graph overrides at all. It
 # inherits graph.enabled=False and progress.enabled=False from the base
 # preset, so both extensions are off by construction rather than by being
-# switched off, and no whitelist or entity vocabulary applies.
+# switched off, and no whitelist or entity vocabulary applies. progress.beta
+# and the amplitude weight do not apply either: with no graph branch and no
+# progress advantage there is nothing for them to weight.
 #
 # obs_mode drops to rgb: with the graph off nothing consumes segmentation.
 # C still works -- it compares the policy's RGB, which this arm renders
 # exactly as the graph arm does.
 #
-# Same experiments, panels and budgets as the graph arm: A for 10M + 5M
-# transfer, B for 10M with no transfer stage.
+# Same experiments, panels, budgets and selection metrics as the graph arm:
+# B first then A, 8M steps each, B selected on
+# eval_scene/training/success_once and A on eval/success_once, both eligible
+# from 6M. A adds its 5M transfer stage.
 #
-# The two commands are the ones in slurm_a_baseline.sh and
-# slurm_b_baseline.sh, which stay for launching a single arm.
+# The two commands are the ones in slurm_b_baseline.sh and
+# slurm_a_baseline.sh, which stay for launching a single arm.
 #
 # Deliberately no `set -e`: a run that dies must not cancel the one after it.
 
@@ -33,7 +37,9 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: baseline (pure DreamerV3, no graph, no progress), experiments A then B"
+echo "Arm: baseline (pure DreamerV3, no graph, no progress), experiments B then A"
+echo "Budget: 8M steps each, 100M model, checkpoint eligible from 6M"
+echo "Selection: B eval_scene/training/success_once, A eval/success_once"
 echo "================================="
 
 # Activate conda
@@ -77,6 +83,12 @@ export HYDRA_FULL_ERROR=1
 
 mkdir -p $HOME/output "$CKPT_DIR"
 
+# B's frozen five/42 scene split, checked against the installed task plans
+# before the budget is spent: every named scene present, the two halves
+# disjoint, and the split still the one the rule produces.
+python -m scenegraph.tools.freeze_scene_split --check \
+  --task tidy_house --subtask pick --obj 004_sugar_box --split train || exit 1
+
 # Print initial GPU state
 nvidia-smi
 
@@ -87,12 +99,30 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
+echo "=== Experiment B ==="
+python train.py \
+  env=mshab_pick_b \
+  model=size100M \
+  env.steps=8000000 \
+  env.obs_mode=rgb \
+  checkpoint.enabled=true \
+  checkpoint.start_step=6000000 \
+  checkpoint.metric=eval_scene/training/success_once \
+  checkpoint.tiebreak='' \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-baseline.pt \
+  finetune.enabled=false \
+  wandb.group=mshab_tidy_house_pick_B \
+  wandb.name=B-scenes-and-lighting-baseline \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-baseline
+
 echo "=== Experiment A ==="
 python train.py \
   env=mshab_pick_a \
-  model=size50M \
+  model=size100M \
+  env.steps=8000000 \
   env.obs_mode=rgb \
   checkpoint.enabled=true \
+  checkpoint.start_step=6000000 \
   checkpoint.metric=eval/success_once \
   checkpoint.tiebreak='' \
   checkpoint.path=$CKPT_DIR/${TIMESTAMP}_A-five-objects-baseline.pt \
@@ -102,19 +132,6 @@ python train.py \
   wandb.name=A-five-objects-baseline-transfer \
   logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/A-five-objects-baseline-transfer
 
-echo "=== Experiment B ==="
-python train.py \
-  env=mshab_pick_b \
-  model=size50M \
-  env.obs_mode=rgb \
-  checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
-  checkpoint.tiebreak='' \
-  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-baseline.pt \
-  finetune.enabled=false \
-  wandb.group=mshab_tidy_house_pick_B \
-  wandb.name=B-scenes-and-lighting-baseline \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-baseline
 # Stop GPU monitor
 kill $GPU_MONITOR_PID
 

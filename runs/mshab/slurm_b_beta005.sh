@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-hab-b-b005
+#SBATCH --job-name=r2d-hab-b-b01
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -8,17 +8,30 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# Experiment B -- one object, one training scene, evaluated on 20 scenes.
+# Experiment B -- one object, five training scenes, forty-two unseen ones.
 #
-# The evaluation panel is 20 scene environments plus 30 lighting environments
-# (10 each at 0.4 / 1.0 / 2.0), so C rides along with B rather than training a
-# third model. Illumination is applied while the evaluation scene is built.
+# 004_sugar_box in five arrangements of one apartment for 8M steps, evaluated
+# in every arrangement of the other two. 125 training environments, 25 per
+# scene; the split itself is frozen in configs/scenes/mshab_pick_b.json and
+# checked against the installed task plans above, so a drifted manifest stops
+# the run rather than quietly moving the experiment.
 #
-# B is the generalization experiment and has no transfer stage: the
-# held-out object belongs to A. 10M steps, evaluated throughout.
+# The panel is 82 environments in one simulator: 42 unseen scenes at nominal
+# light, 10 training-scene cases at nominal light, and C's 30 matched cases at
+# 0.4 / 1.0 / 2.0 -- all thirty on the original single training scene, which
+# five-scene training does not expand.
 #
-# Everything else is the shipped default: 10M steps, 126 training envs,
-# batch 32 x 64, train_ratio 64, evaluation every 50k steps.
+# The checkpoint is selected on eval_scene/training/success_once, the ten
+# normal-light training-scene cases. Not eval/success_once, which here pools
+# the unseen scenes in: selecting on the number B reports would pick whichever
+# checkpoint got luckiest on the test set. Eligibility starts at 6M of the 8M
+# budget, so the selection window is the last two million steps rather than
+# the final evaluation on its own.
+#
+# No transfer stage: the held-out object belongs to A.
+#
+# Everything else is the shipped default: batch 32 x 64, train_ratio 64,
+# evaluation every 50k steps.
 #
 # Deliberately no `set -e`: a run that dies must not take the rest with it.
 
@@ -26,7 +39,9 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "Arm: B, graph + progress beta=0.05 (warm-up 200k-700k)"
+echo "Arm: B, graph + progress beta=0.1 (warm-up 200k-700k), amplitude 0.1"
+echo "Budget: 8M steps, 100M model, checkpoint eligible from 6M"
+echo "Selection: eval_scene/training/success_once"
 echo "================================="
 
 # Activate conda
@@ -82,6 +97,12 @@ python tests/probes/validate_task_assets.py \
             005_tomato_soup_can 007_tuna_fish_can 008_pudding_box \
             009_gelatin_box 010_potted_meat_can 024_bowl || exit 1
 
+# B's frozen five/42 scene split, checked against the installed task plans
+# before the budget is spent: every named scene present, the two halves
+# disjoint, and the split still the one the rule produces.
+python -m scenegraph.tools.freeze_scene_split --check \
+  --task tidy_house --subtask pick --obj 004_sugar_box --split train || exit 1
+
 # Print initial GPU state
 nvidia-smi
 
@@ -94,20 +115,22 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 python train.py \
   env=mshab_pick_b \
-  model=size50M_graph_simple \
+  model=size100M_graph_simple \
+  env.steps=8000000 \
   env.graph.whitelist_dir=$WL/tidy_house \
   model.graph.entity_vocab=19 \
   model.graph.n_max=8 \
   model.graph.e_max=168 \
-  model.progress.beta=0.05 \
+  model.progress.beta=0.1 \
   checkpoint.enabled=true \
-  checkpoint.metric=eval/success_once \
+  checkpoint.start_step=6000000 \
+  checkpoint.metric=eval_scene/training/success_once \
   checkpoint.tiebreak='' \
-  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-beta005.pt \
+  checkpoint.path=$CKPT_DIR/${TIMESTAMP}_B-scenes-and-lighting-beta01.pt \
   finetune.enabled=false \
   wandb.group=mshab_tidy_house_pick_B \
-  wandb.name=B-scenes-and-lighting-beta005 \
-  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta005
+  wandb.name=B-scenes-and-lighting-beta01 \
+  logdir=$HOME/logdir/r2dreamer-graph/$TIMESTAMP/B-scenes-and-lighting-beta01
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

@@ -24,14 +24,31 @@ mshab_objects: []
 # the build list does.
 train_build_config_ids: []
 eval_build_config_ids: []
+# A frozen split, read once and written into the two lists above before
+# anything is built. Empty leaves them exactly as they are written here, so an
+# ordinary run is untouched. See envs/scene_manifest.py.
+scene_manifest: ''
+# Spread the named training scenes evenly over the training envs. MS-HAB then
+# checks divisibility, which is what turns "125 envs, 5 scenes" into a
+# guaranteed 25 each rather than whatever the assignment happened to produce.
+train_even_build_configs: false
 # Ask MS-HAB to spread build configurations evenly across evaluation
 # sub-scenes. Required to cover all 63 in one pass; it makes MS-HAB check
 # divisibility, so eval_episode_num must be a multiple of the scene count.
 eval_even_build_configs: false
 eval_panel: ''
+# Episodes per scene in the `scenes` panel, split by whether the policy
+# trained there. Both zero keeps the uniform panel: one count for every scene.
+eval_scene_episodes:
+  training: 0
+  held_out: 0
 eval_seed: 42
 eval_lighting:
   enabled: false
+  # The single scene the light is changed in. Required once a run trains in
+  # more than one scene, or "the training scene" names five of them and the
+  # comparison quietly grows fivefold.
+  scene: ''
   envs_per_condition: 10
   conditions:
     dim: 0.4

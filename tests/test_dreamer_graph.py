@@ -250,7 +250,8 @@ class PooledGraphSimpleTest(unittest.TestCase):
         )
         emitted = {k[len("loss/"):] for k in metrics if k.startswith("loss/")}
         for name in ("node", "nodetgt", "relabs", "reltemp", "graphdyn",
-                     "graphrep", "progress_model", "progress_value"):
+                     "graphrep", "graphamp", "progress_model",
+                     "progress_value"):
             self.assertIn(name, emitted, name)
         # Retired losses must not reappear.
         for name in ("prior_progress_relabs", "slotdyn", "slotalive",
@@ -272,6 +273,41 @@ class PooledGraphSimpleTest(unittest.TestCase):
             self.assertIn(name, metrics, name)
         # IoU needs its own kernels and optimises nothing: evaluation only.
         self.assertNotIn("node_bbox_iou", metrics)
+
+    def test_the_amplitude_term_is_visible_without_reading_the_loss(self):
+        """Whether the prior's scale is drifting has to be readable from the
+        dashboard: the loss alone falls whether the two magnitudes converged
+        or both collapsed towards zero."""
+        model = self._model()
+        _, metrics = model._cal_grad(
+            model.preprocess(pooled_sequence()), model.rssm.initial(2)
+        )
+        for name in ("loss/graphamp", "graph_amp_mse",
+                     "graph_sem_prior_rms", "graph_sem_post_rms",
+                     "graph_sem_rms_difference",
+                     "graph_sem_prior_var_across_obs",
+                     "graph_sem_post_var_across_obs"):
+            self.assertIn(name, metrics, name)
+            self.assertTrue(torch.isfinite(metrics[name]), name)
+        # The signed difference is exactly prior minus posterior, so its sign
+        # says which branch is running small.
+        self.assertAlmostEqual(
+            float(metrics["graph_sem_rms_difference"]),
+            float(metrics["graph_sem_prior_rms"])
+            - float(metrics["graph_sem_post_rms"]), places=5)
+        # Both magnitudes are positive: an RMS that reads zero is the
+        # collapse this exists to make visible, not a healthy alignment.
+        self.assertGreater(float(metrics["graph_sem_post_rms"]), 0.0)
+
+    def test_a_zero_amplitude_scale_drops_the_loss_and_keeps_the_gauges(self):
+        config = make_pooled_config()
+        config.loss_scales.graphamp = 0.0
+        model = Dreamer(config, *pooled_spaces()).to("cpu")
+        _, metrics = model._cal_grad(
+            model.preprocess(pooled_sequence()), model.rssm.initial(2)
+        )
+        self.assertNotIn("loss/graphamp", metrics)
+        self.assertIn("graph_amp_mse", metrics)
 
     def test_progress_critic_reads_exactly_the_policy_feature(self):
         # Under the world-model source the potential is already a function of
@@ -449,7 +485,8 @@ class DreamerGraphIntegrationTest(unittest.TestCase):
         initial = model.rssm.initial(2)
         posterior, metrics = model._cal_grad(data, initial)
         self.assertEqual(len(posterior), 3)
-        for key in ("loss/node", "loss/nodetgt", "loss/relabs", "loss/reltemp", "loss/graphdyn", "loss/graphrep"):
+        for key in ("loss/node", "loss/nodetgt", "loss/relabs", "loss/reltemp",
+                    "loss/graphdyn", "loss/graphrep", "loss/graphamp"):
             self.assertIn(key, metrics)
             self.assertTrue(torch.isfinite(metrics[key]))
 

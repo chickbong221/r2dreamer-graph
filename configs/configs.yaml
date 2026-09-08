@@ -65,8 +65,9 @@ trainer:
 # is an experiment decision rather than a default.
 checkpoint:
   enabled: false
-  start_step: 8e6
-  # Required when enabled; MS-HAB A/B launchers set eval/success_once.
+  start_step: 6e6
+  # Required when enabled; the launchers set it per experiment -- A selects on
+  # eval/success_once, B on eval_scene/training/success_once.
   metric: ''
   tiebreak: ''
   mode: max

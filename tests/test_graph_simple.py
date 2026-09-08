@@ -797,6 +797,10 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         self.assertIs(model_config.graph.enabled, False)
         self.assertIs(model_config.progress.enabled, False)
         self.assertEqual(model_config.loss_scales.reltemp, 1.0)
+        # Every graph loss has a scale here, so a preset restates rather than
+        # introduces them and `_loss_scales[k]` can never miss a key.
+        for name in ("graphdyn", "graphrep", "graphamp"):
+            self.assertIn(name, model_config.loss_scales)
 
     def test_the_pooled_simple_preset_pins_its_contract(self):
         preset = OmegaConf.load("configs/model/size50M_graph_simple.yaml")
@@ -824,6 +828,11 @@ class EnvConfigPlumbingTest(unittest.TestCase):
                      "progress_value", "graphdyn"):
             self.assertEqual(preset.loss_scales[name], 1.0, name)
         self.assertEqual(preset.loss_scales.graphrep, 0.05)
+        # Direction and amplitude are separate terms with separate weights.
+        # graphdyn/graphrep compare RMS-normalised vectors and cannot see
+        # magnitude at all, so without this the prior is free to point the
+        # right way at the wrong scale.
+        self.assertEqual(preset.loss_scales.graphamp, 0.1)
         # There is no recurrent slot state to supervise in this arm.
         for name in ("slotdyn", "slotalive", "prior_nodetgt"):
             self.assertNotIn(name, preset.loss_scales)
@@ -839,10 +848,45 @@ class EnvConfigPlumbingTest(unittest.TestCase):
         the experiment changes.
         """
         for name in ("size50M_graph_simple", "size100M_graph_simple"):
-            schedule = OmegaConf.load(f"configs/model/{name}.yaml").progress
-            self.assertAlmostEqual(schedule.beta, 0.05, msg=name)
-            self.assertEqual(schedule.beta_warmup_start, 200000, name)
-            self.assertEqual(schedule.beta_warmup_end, 700000, name)
+            preset = OmegaConf.load(f"configs/model/{name}.yaml")
+            self.assertAlmostEqual(preset.progress.beta, 0.1, msg=name)
+            self.assertEqual(preset.progress.beta_warmup_start, 200000, name)
+            self.assertEqual(preset.progress.beta_warmup_end, 700000, name)
+            # A separate setting that happens to carry the same number: this
+            # weights a world-model loss, beta weights the actor's progress
+            # advantage. Stated in both presets so the two graph sizes cannot
+            # differ by a term nobody chose.
+            self.assertAlmostEqual(preset.loss_scales.graphamp, 0.1, msg=name)
+
+    def test_the_two_graph_presets_agree_on_every_functional_setting(self):
+        """100M is 50M at a different capacity and nothing else.
+
+        The experiment swaps the size; anything else that moved with it would
+        be a second change inside a comparison that claims to make one."""
+        small = OmegaConf.load("configs/model/size50M_graph_simple.yaml")
+        large = OmegaConf.load("configs/model/size100M_graph_simple.yaml")
+        self.assertEqual(OmegaConf.to_container(small.graph),
+                         OmegaConf.to_container(large.graph))
+        self.assertEqual(OmegaConf.to_container(small.progress),
+                         OmegaConf.to_container(large.progress))
+        self.assertEqual(OmegaConf.to_container(small.loss_scales),
+                         OmegaConf.to_container(large.loss_scales))
+        # The graph-specific capacities are the ones the experiment pinned.
+        self.assertEqual(large.graph.simple_units, 512)
+        self.assertEqual(large.graph.semantic_dim, 512)
+        self.assertEqual(large.graph.decoder_units, 256)
+        self.assertEqual(large.graph.n_max, 8)
+        self.assertEqual(large.graph.e_max, 168)
+
+    def test_the_baseline_matches_the_graph_arm_on_every_rssm_setting(self):
+        """The control is structurally matched, not configured to be."""
+        plain = OmegaConf.load("configs/model/size100M.yaml")
+        graph = OmegaConf.load("configs/model/size100M_graph_simple.yaml")
+        for key in ("deter", "hidden", "discrete", "depth", "units", "act",
+                    "norm"):
+            self.assertEqual(plain[key], graph[key], key)
+        for absent in ("graph", "progress", "loss_scales"):
+            self.assertNotIn(absent, plain)
 
     def test_every_arm_sees_the_same_privileged_observation(self):
         # The graph is built from privileged state in every graph arm, so the

@@ -1,19 +1,31 @@
-# Experiment B -- one object, twenty scenes.
+# Experiment B -- one object, five training scenes, forty-two unseen ones.
 #
-# Trains 004_sugar_box in one apartment and evaluates in the first 20, so what
-# varies is the room. A clean grasp on purpose: the measurement is scene
-# variance, not grasp difficulty.
+# Trains 004_sugar_box in five arrangements of one apartment and evaluates in
+# every arrangement of the other two, so what varies is the room. A clean
+# grasp on purpose: the measurement is scene variance, not grasp difficulty.
 #
-# Twenty rather than all 63 to keep the panel affordable: 20 scene
-# environments plus C's 30 lighting environments is 50 in one simulator.
-# The selection is a prefix of the sorted build-config names, so the same
-# count always names the same scenes and two runs stay comparable -- but it
-# is a prefix, not an identity, and which scenes it means would move if the
-# installed build list ever changed. The training scene sorts first, so it
-# is always inside the prefix; the panel raises at construction if it is not.
+# The scenes are not a count. `scene_manifest` names all forty-seven outright
+# and is frozen by scenegraph/tools/freeze_scene_split.py from the installed
+# task plans; a name that is not in them raises at construction rather than
+# training somewhere else. Training and held-out scenes cannot overlap -- the
+# manifest loader refuses that outright, because an unseen-scene score
+# measured on a trained scene is not a generalisation number.
 #
-# Checkpoint selection uses eval/success_once from the configured evaluation
-# set below (those 20 scenes); no separate same-scene selector is implemented.
+# 125 training environments, 25 per scene. `train_even_build_configs` is what
+# makes that exact rather than approximate: MS-HAB checks divisibility, so 125
+# over 5 is 25 each or the run refuses to start.
+#
+# The evaluation panel is 82 environments in one simulator:
+#   42  one episode in each unseen scene            -- scene generalisation
+#   10  two episodes in each of the five training scenes -- checkpoint selection
+#   30  ten matched cases at 0.4x / 1.0x / 2.0x     -- C, on one fixed scene
+# The lighting rows stay on the original single training scene, named in
+# eval_lighting.scene. Training in five scenes must not multiply C by five.
+#
+# Checkpoint selection uses eval_scene/training/success_once -- the ten
+# normal-light training-scene cases. Not eval/success_once, which here pools
+# the unseen scenes in: selecting on the number the experiment reports would
+# choose the checkpoint that got luckiest on the test set.
 defaults:
   - mshab
   - _self_
@@ -21,19 +33,31 @@ defaults:
 mshab_task: tidy_house
 mshab_obj: 004_sugar_box
 mshab_objects: []
-train_build_config_ids:
-  - v3_sc0_staging_00.scene_instance.json
-
-# Primary panel: one environment per scene. Lighting rows are added separately.
+scene_manifest: configs/scenes/mshab_pick_b.json
+# Filled from the manifest before anything is built; named here as empty so
+# the two sources can never disagree silently.
+train_build_config_ids: []
 eval_build_config_ids: []
-eval_num_build_configs: 20
-eval_episode_num: 20
-eval_even_build_configs: true
+
+env_num: 125
+train_even_build_configs: true
+
+# Named scenes win over any count, so eval_num_build_configs does not apply.
+eval_num_build_configs: 0
+eval_episode_num: 52
+eval_scene_episodes:
+  training: 2
+  held_out: 1
+# The panel pins every scene itself; an even spread has nothing to arrange,
+# and the two halves are deliberately not evenly weighted.
+eval_even_build_configs: false
 eval_panel: scenes
 
-# One parallel B+C panel: nominal scenes and 10 matched cases per light setting.
+# One parallel B+C panel: 10 matched cases per light setting, all on the
+# original training scene.
 eval_lighting:
   enabled: true
+  scene: v3_sc0_staging_00.scene_instance.json
 
 progress_mode: task_schedule
 

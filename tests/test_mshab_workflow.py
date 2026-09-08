@@ -4,6 +4,7 @@ import ast
 from collections import Counter
 import contextlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import types
@@ -20,15 +21,28 @@ sys.modules[spec.name] = evaluation
 spec.loader.exec_module(evaluation)
 
 
-def config(mode="scenes", count=63, lighting=True):
-    return NS(eval_panel=mode, eval_episode_num=count, train_build_config_ids=["s00"],
-              eval_lighting=NS(enabled=lighting, envs_per_condition=10,
+def config(mode="scenes", count=63, lighting=True, training=("s00",),
+           repeats=None, light_scene=""):
+    return NS(eval_panel=mode, eval_episode_num=count,
+              train_build_config_ids=list(training),
+              eval_scene_episodes=repeats,
+              eval_lighting=NS(enabled=lighting, scene=light_scene,
+                               envs_per_condition=10,
                                conditions={"dim": .4, "nominal": 1., "bright": 2.}))
 
 
 def plans(scenes=63, obj="sugar"):
     return {obj: [NS(build_config_name=f"s{i:02d}", init_config_name=f"init{j:02d}")
                   for i in range(scenes) for j in range(12)]}
+
+
+def shipped_b():
+    """B's own numbers, read from the config and the manifest it names."""
+    config_b = yaml.safe_load(
+        Path("configs/env/mshab_pick_b.yaml").read_text(encoding="utf-8"))
+    raw = json.loads(
+        Path(config_b["scene_manifest"]).read_text(encoding="utf-8"))
+    return config_b, raw
 
 
 class PanelTest(unittest.TestCase):
@@ -43,22 +57,96 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(len({c.plan_index for c in lights if c.repetition == k}), 1)
         self.assertEqual(panel, evaluation.build_panel(plans(), config()))
 
-    def test_the_shipped_b_counts_compose_into_one_fifty_env_panel(self):
-        """B's two counts come from mshab_pick_b.yaml; read them, don't restate."""
-        shipped = yaml.safe_load(
-            Path("configs/env/mshab_pick_b.yaml").read_text(encoding="utf-8"))
-        scenes = int(shipped["eval_num_build_configs"])
+    def test_the_shipped_b_counts_compose_into_one_82_env_panel(self):
+        """B's counts come from mshab_pick_b.yaml and the manifest it names;
+        read them, don't restate them."""
+        shipped, split = shipped_b()
+        training = split["train"]
+        every = training + split["held_out"]
         panel = evaluation.build_panel(
-            plans(scenes), config(count=int(shipped["eval_episode_num"])))
-        self.assertEqual(len(panel), scenes + 30)
-        self.assertEqual(len({c.scene for c in panel if c.group == "scene"}),
-                         scenes)
-        self.assertEqual(Counter(c.condition for c in panel if c.group == "light"),
+            {"sugar": [NS(build_config_name=name, init_config_name=f"init{j:02d}")
+                       for name in every for j in range(12)]},
+            config(count=int(shipped["eval_episode_num"]), training=training,
+                   repeats=shipped["eval_scene_episodes"],
+                   light_scene=shipped["eval_lighting"]["scene"]))
+        self.assertEqual(len(panel), 82)
+        scene_cases = [c for c in panel if c.group == "scene"]
+        self.assertEqual(len(scene_cases), 52)
+        counts = Counter(c.scene for c in scene_cases)
+        # One episode in each unseen scene, two in each training scene.
+        self.assertEqual({counts[name] for name in split["held_out"]}, {1})
+        self.assertEqual({counts[name] for name in training}, {2})
+        self.assertEqual(sum(counts[name] for name in split["held_out"]), 42)
+        self.assertEqual(sum(counts[name] for name in training), 10)
+        lights = [c for c in panel if c.group == "light"]
+        self.assertEqual(Counter(c.condition for c in lights),
                          {"dim": 10, "nominal": 10, "bright": 10})
-        # One episode per scene, and the training scene is among them.
-        self.assertEqual(Counter(c.scene for c in panel if c.group == "scene"),
-                         {f"s{i:02d}": 1 for i in range(scenes)})
-        self.assertIn("s00", {c.scene for c in panel if c.group == "light"})
+        # Five training scenes, and C still runs on exactly one of them.
+        self.assertEqual({c.scene for c in lights},
+                         {shipped["eval_lighting"]["scene"]})
+
+    def test_five_training_scenes_do_not_expand_the_lighting_comparison(self):
+        """The whole reason eval_lighting.scene exists: "the training scene"
+        stopped naming one."""
+        training = [f"s{i:02d}" for i in range(5)]
+        settings = config(count=47 + 5, training=training,
+                          repeats={"training": 2, "held_out": 1},
+                          light_scene="s00")
+        panel = evaluation.build_panel(plans(47), settings)
+        self.assertEqual(len([c for c in panel if c.group == "light"]), 30)
+        self.assertEqual({c.scene for c in panel if c.group == "light"}, {"s00"})
+        # Unnamed, with five training scenes, is refused rather than guessed.
+        settings.eval_lighting.scene = ""
+        with self.assertRaises(ValueError) as caught:
+            evaluation.build_panel(plans(47), settings)
+        self.assertIn("named outright", str(caught.exception))
+        # And a scene the policy never trained in is refused too.
+        settings.eval_lighting.scene = "s40"
+        with self.assertRaises(ValueError):
+            evaluation.build_panel(plans(47), settings)
+
+    def test_the_split_panel_refuses_a_count_that_does_not_compose(self):
+        training = [f"s{i:02d}" for i in range(5)]
+        for count in (51, 53):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                evaluation.build_panel(plans(47), config(
+                    count=count, training=training,
+                    repeats={"training": 2, "held_out": 1}, light_scene="s00"))
+        # Both halves have to be present, or one is silently dropped.
+        with self.assertRaises(ValueError):
+            evaluation.build_panel(plans(5), config(
+                count=10, training=training,
+                repeats={"training": 2, "held_out": 1}, light_scene="s00"))
+        # A zero for one half is a dropped half, not a smaller panel.
+        with self.assertRaises(ValueError):
+            evaluation.build_panel(plans(47), config(
+                count=42, training=training,
+                repeats={"training": 0, "held_out": 1}, light_scene="s00"))
+
+    def test_b_selects_on_the_training_cases_and_reports_the_unseen_ones(self):
+        """The number the checkpoint is chosen by must not be the number the
+        experiment reports, or selection picks whichever checkpoint got
+        luckiest on the test set."""
+        shipped, split = shipped_b()
+        training = split["train"]
+        every = training + split["held_out"]
+        panel = evaluation.build_panel(
+            {"sugar": [NS(build_config_name=name, init_config_name=f"init{j:02d}")
+                       for name in every for j in range(12)]},
+            config(count=52, training=training,
+                   repeats=shipped["eval_scene_episodes"],
+                   light_scene=shipped["eval_lighting"]["scene"]))
+        success = np.array([1.0 if case.scene in set(training) else 0.0
+                            for case in panel])
+        result = evaluation.panel_metrics(panel, {"success_once": success},
+                                          training)
+        self.assertEqual(result["eval_scene/training/episodes"], 10)
+        self.assertEqual(result["eval_scene/held_out/episodes"], 42)
+        self.assertEqual(result["eval_scene/training/success_once"], 1.0)
+        self.assertEqual(result["eval_scene/held_out/success_once"], 0.0)
+        # The lighting rows score 1.0 too and still cannot move selection.
+        self.assertEqual(result["eval_light/nominal/success_once"], 1.0)
+        self.assertAlmostEqual(result["eval/success_once"], 10 / 52)
 
     def test_a_is_fixed_and_balanced_without_lighting(self):
         source = {}
