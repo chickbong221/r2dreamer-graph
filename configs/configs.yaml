@@ -32,7 +32,7 @@ hydra:
   run:
     dir: ${logdir}
 
-batch_size: 32
+batch_size: 28
 batch_length: 64
 
 buffer:
