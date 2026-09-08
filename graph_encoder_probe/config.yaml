@@ -1,0 +1,89 @@
+# Encoder-sensitivity probe. One file drives collection, pair construction,
+# training and the report; `run.py --set a.b=c` overrides any leaf.
+
+seed: 0
+
+collect:
+  env_id: PlaceSphere-v1
+  # Reset seeds attempted, not episodes kept. The scripted solver fails on some
+  # seeds; those attempts still contribute their frames.
+  episodes: 200
+  first_seed: 0
+  keep_failed_episodes: true
+  # The scripted motion-planning solutions are written for pd_joint_pos.
+  control_mode: pd_joint_pos
+  # Segmentation resolution the graph is built from. The probe never looks at
+  # pixels, but the node builder mines its boxes from these masks.
+  sensor_size: [128, 128]
+  cameras: []              # empty: every sensor the task renders, in its order
+  thresholds_path: ''      # empty: the packaged thresholds.yaml
+  whitelist_dir: ''        # empty: the mined dir for this task group
+  # Normal ManiSkill, matching configs/env/maniskill.yaml: no MS-HAB target
+  # flag, object-object spatial edges on. The flag names the active subtask
+  # object, which only MS-HAB has, so on a task like PlaceSphere it stays off
+  # and L_nodetgt has nothing but negatives to learn from -- the run says so.
+  use_target_flag: false
+  object_object_spatial: true
+  visibility_policy: keep_tabletop
+  n_max: 8
+  e_max: 168
+  max_frames: 0            # 0: no cap
+  shard_size: 4096
+  out_dir: graph_encoder_probe/outputs/dataset
+
+pairs:
+  per_group: 25
+  controls: 8
+  # Metres, along one world axis. Small enough to be a nudge, large enough to
+  # survive the encoder's fixed centroid normalisation.
+  geometry_delta_m: [0.01, 0.05]
+  out_dir: graph_encoder_probe/outputs/pairs
+  seed: 0
+
+model:
+  layers: 2
+  simple_units: 512
+  decoder_units: 256
+  embed: 64
+  bbox_query_dim: 4
+  bbox_beta: 0.1
+  reverse_edges: true
+  act: SiLU
+  centroid_origin: [0.0, 0.0, 0.0]
+  centroid_scale: 5.0
+  # n_cams, entity_vocab and the three label vocabularies are resolved from the
+  # collected dataset, never written down here.
+
+train:
+  lr: 3.0e-4
+  batch_size: 128
+  max_updates: 10000
+  probe_every: 250
+  # Stop early only after this many updates, and only on a real plateau.
+  min_updates: 2000
+  plateau_checks: 8
+  plateau_rel_improve: 0.01
+  # Fixed subset the convergence number is read on. Contains every probe pair
+  # plus a random remainder, drawn once.
+  monitor_frames: 1024
+  device: auto
+  seed: 0
+  loss_scales:
+    node: 1.0
+    nodetgt: 1.0
+    relabs: 1.0
+    reltemp: 1.0
+
+probe:
+  # A changed pair counts as detected only above this. Both terms matter: the
+  # first is the numerical floor measured on identical inputs, the second keeps
+  # a tiny-but-repeatable wobble from being reported as a response.
+  tolerance_control_factor: 5.0
+  tolerance_rel_floor: 1.0e-3
+  repeats: 3
+  zero_token_eps: 1.0e-6
+  batch_size: 64
+
+output:
+  runs_dir: graph_encoder_probe/outputs/runs
+  run_name: ''             # empty: a UTC timestamp
