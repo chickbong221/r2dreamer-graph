@@ -492,33 +492,33 @@ class LightingTest(unittest.TestCase):
 
 
 class ResetIntegrationTest(unittest.TestCase):
-    def test_a_lighting_panel_films_one_episode_per_illumination(self):
-        """Three videos, whatever the panel's size: rendering is per selected
-        environment, so every row here is paid for at every evaluation."""
+    def test_a_lighting_panel_films_one_video_and_no_per_condition_films(self):
+        """The per-illumination films are gone.
+
+        A lighting panel is read off ``eval_light/*``; the three videos cost
+        render time at every evaluation to restate what those numbers say.
+        What is left is the ordinary one, on a training scene at nominal
+        light -- not one of the light cases.
+        """
         panel = evaluation.build_panel(plans(), config())
         rows = evaluation.evaluation_video_rows(panel, ["s00"])
-        self.assertEqual(sorted(rows), ["eval/video_bright", "eval/video_dim",
-                                        "eval/video_nominal"])
-        self.assertEqual(
-            {name: panel[i].intensity for name, i in rows.items()},
-            {"eval/video_dim": 0.4, "eval/video_nominal": 1.0,
-             "eval/video_bright": 2.0})
-        # Matched: one scene, one task plan, one spawn. The three videos
-        # differ by the light and by what the policy did about it.
-        chosen = [panel[i] for i in rows.values()]
-        self.assertEqual(len({c.scene for c in chosen}), 1)
-        self.assertEqual(len({c.plan_index for c in chosen}), 1)
-        self.assertEqual(len({c.repetition for c in chosen}), 1)
-        self.assertEqual({c.scene for c in chosen}, {"s00"})
+        self.assertEqual(list(rows), ["eval/video"])
+        for gone in ("eval/video_dim", "eval/video_nominal", "eval/video_bright"):
+            self.assertNotIn(gone, rows)
+        filmed = panel[rows["eval/video"]]
+        self.assertNotEqual(filmed.group, "light")
+        self.assertEqual(filmed.intensity, 1.0)
+        self.assertEqual(filmed.scene, "s00")
 
     def test_the_size_of_the_panel_never_changes_the_number_of_videos(self):
-        """A 70-case panel films three, the same three a 93-case panel does."""
+        """One film, whatever the panel's size: rendering is per selected
+        environment, so every row here is paid for at every evaluation."""
         for scenes, count in ((63, 63), (47, 47)):
             with self.subTest(scenes=scenes):
                 rows = evaluation.evaluation_video_rows(
                     evaluation.build_panel(plans(scenes), config(count=count)),
                     ["s00"])
-                self.assertEqual(len(rows), 3)
+                self.assertEqual(list(rows), ["eval/video"])
 
     def test_a_panel_without_lighting_films_exactly_one(self):
         """A's objects, or B with lighting switched off. No unseen-scene

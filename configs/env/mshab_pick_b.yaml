@@ -62,9 +62,9 @@ eval_lighting:
   enabled: true
   scene: v3_sc0_staging_00.scene_instance.json
 
-# Three videos an evaluation, from the policy's own cameras. The
-# third-person camera would be rendered for every environment in the
-# panel and thrown away for all but those three.
+# One video an evaluation, from the policy's own cameras. The third-person
+# camera would be rendered for every environment in the panel and thrown away
+# for all but that one.
 eval_video_source: policy
 
 progress_mode: task_schedule

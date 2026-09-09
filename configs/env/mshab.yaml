@@ -51,9 +51,9 @@ eval_lighting:
   scene: ''
   envs_per_condition: 10
   conditions:
-    dim: 0.4
+    dim: 0.1
     nominal: 1.0
-    bright: 2.0
+    bright: 4.0
 
 split: train
 eval_split: train

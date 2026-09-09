@@ -33,7 +33,7 @@ from envs.evaluation import (
     EvalCase, check_lighting_reset, construction_lighting,
     verify_construction_lighting)
 
-CONDITIONS = (("dim", 0.4), ("nominal", 1.0), ("bright", 2.0))
+CONDITIONS = (("dim", 0.1), ("nominal", 1.0), ("bright", 4.0))
 NOMINAL = [name for name, _ in CONDITIONS].index("nominal")
 INTENSITIES = [value for _, value in CONDITIONS]
 

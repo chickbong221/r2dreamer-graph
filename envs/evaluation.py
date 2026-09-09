@@ -185,38 +185,19 @@ def build_panel(by_object, config):
 def evaluation_video_rows(cases, training_scenes):
     """Which environments are filmed. Nothing outside this mapping is.
 
+    Exactly one row, always: a training-scene episode at nominal light.
     Rendering happens per selected environment, so this is the whole video
     cost of an evaluation -- a 70-case panel does not produce 70 films, it
-    produces however many rows are named here, at every evaluation, for the
-    length of the run.
+    produces this one, at every evaluation, for the length of the run.
 
-    A lighting panel gets one episode per illumination and nothing else.
-    They are matched by repetition, so the three share a scene, a task plan
-    and a spawn: what differs between the videos is the light and what the
-    policy did about it, which is the comparison C exists to show. Watching
-    the same policy fail in an unseen apartment adds nothing the thirty
-    held-out numbers do not already say, so no video is made of it.
-
-    Any other panel -- A's objects, or B with lighting switched off -- gets
-    exactly one.
+    A lighting panel used to add a film per illumination on top, matched by
+    repetition. They are gone. The comparison C exists to show is read off
+    ``eval_light/*`` -- rgb MAE, changed-pixel fraction, success delta -- and
+    the films were paying render time in every evaluation to restate it.
     """
     rows = {"eval/video": 0}
     if not cases:
         return rows
-    conditions = sorted({c.condition for c in cases if c.group == "light"})
-    if conditions:
-        by_repetition = defaultdict(dict)
-        for i, case in enumerate(cases):
-            if case.group == "light":
-                by_repetition[case.repetition][case.condition] = i
-        # The first repetition that carries every condition. There is always
-        # one; falling through rather than raising keeps a malformed panel
-        # from costing an evaluation.
-        matched = next((rep for rep in sorted(by_repetition)
-                        if len(by_repetition[rep]) == len(conditions)), None)
-        if matched is not None:
-            return {f"eval/video_{name}": by_repetition[matched][name]
-                    for name in conditions}
     training = set(training_scenes)
     nominal = [i for i, c in enumerate(cases)
                if c.group != "light" and c.intensity == 1.0]

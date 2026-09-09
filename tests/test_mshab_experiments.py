@@ -266,7 +266,7 @@ class ExperimentConfigTest(unittest.TestCase):
         base = yaml.safe_load(Path("configs/env/mshab.yaml").read_text())
         self.assertEqual(base["eval_lighting"]["envs_per_condition"], 10)
         self.assertEqual(base["eval_lighting"]["conditions"],
-                         {"dim": 0.4, "nominal": 1.0, "bright": 2.0})
+                         {"dim": 0.1, "nominal": 1.0, "bright": 4.0})
         self.assertTrue(self._config("b")["eval_lighting"]["enabled"])
 
     def test_the_base_config_changes_nothing_by_default(self):
