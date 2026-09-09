@@ -23,6 +23,11 @@ from ..tools.collect_maniskill_interactions import get_solver, success_flag
 
 ResetHook = Callable[[dict], None]
 StepHook = Callable[[dict, dict], None]
+# The whole transition, for a caller that needs what ``on_step`` drops: reward
+# and the two end-of-episode flags. Separate from ``on_step`` rather than a
+# widening of it, so the figure exporters keep the signature they were written
+# against.
+TransitionHook = Callable[[dict, object, object, object, dict], None]
 
 
 @dataclass
@@ -44,7 +49,8 @@ class Attempt:
 
 
 def capture_wrapper(env, *, on_reset: Optional[ResetHook] = None,
-                    on_step: Optional[StepHook] = None):
+                    on_step: Optional[StepHook] = None,
+                    on_transition: Optional[TransitionHook] = None):
     """Wrap ``env`` so every reset and control step reaches the hooks.
 
     The scripted solutions call ``planner.env.step``, and the planner is built
@@ -64,6 +70,8 @@ def capture_wrapper(env, *, on_reset: Optional[ResetHook] = None,
             out = self.env.step(action)
             if on_step is not None:
                 on_step(out[0], out[4])
+            if on_transition is not None:
+                on_transition(*out)
             return out
 
     return _Capture(env)
@@ -78,11 +86,15 @@ class MotionPlanRunner:
     """
 
     def __init__(self, env, env_id: str, *, on_reset: Optional[ResetHook] = None,
-                 on_step: Optional[StepHook] = None):
+                 on_step: Optional[StepHook] = None,
+                 on_transition: Optional[TransitionHook] = None):
         self._on_reset = on_reset
         self._on_step = on_step
         self.env = capture_wrapper(
-            env, on_reset=self._handle_reset, on_step=self._handle_step
+            env, on_reset=self._handle_reset, on_step=self._handle_step,
+            # Passed straight through: step accounting and the success verdict
+            # are already done in ``_handle_step``, which runs first.
+            on_transition=on_transition,
         )
         self.solve = get_solver(str(env_id))
         self._success = False
