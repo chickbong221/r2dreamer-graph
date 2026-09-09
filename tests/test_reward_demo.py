@@ -20,8 +20,8 @@ import numpy as np
 
 from scenegraph.tools import demo_motionplanning_reward as demo
 from scenegraph.tools.demo_motionplanning_reward import (
-    RewardTrace, draw_return_figure, figure_title, printed_steps,
-    read_csv_trace, scalar,
+    RewardTrace, draw_return_figure, figure_title, percent_ticks,
+    printed_steps, read_csv_trace, scalar,
 )
 
 
@@ -187,7 +187,7 @@ class TestFigure(unittest.TestCase):
         trace = _trace([0.1] * 12, successes=[9], discount=0.9)
         with tempfile.TemporaryDirectory() as tmp:
             path = draw_return_figure(
-                trace, Path(tmp) / "nested" / "return.png", horizon=10,
+                trace, Path(tmp) / "nested" / "return.png",
                 title=figure_title("PegInsertionSide-v1", 3, "normalized_dense"),
                 dpi=110)
             self.assertTrue(path.exists())
@@ -195,13 +195,12 @@ class TestFigure(unittest.TestCase):
         self.assertEqual(head, bytes.fromhex("89504e470d0a1a0a"))
         # ^ the PNG magic number, spelled without escapes
 
-    def test_an_episode_with_no_success_and_no_overrun_still_draws(self):
-        # Both vertical rules are absent here, which is the branch a figure
-        # drawn only from successful episodes never exercises.
+    def test_an_episode_with_no_success_still_draws(self):
+        # No success rule at all, which is the branch a figure drawn only from
+        # successful episodes never exercises.
         trace = _trace([0.0, 0.1, 0.2])
         with tempfile.TemporaryDirectory() as tmp:
-            path = draw_return_figure(trace, Path(tmp) / "flat.png",
-                                      horizon=100, dpi=90)
+            path = draw_return_figure(trace, Path(tmp) / "flat.png", dpi=90)
         self.assertIsNotNone(path)
 
     def test_an_empty_trace_is_declined_rather_than_drawn(self):
@@ -210,10 +209,32 @@ class TestFigure(unittest.TestCase):
             self.assertIsNone(draw_return_figure(RewardTrace(), target))
             self.assertFalse(target.exists())
 
+    def test_percent_ticks_end_at_100_whatever_the_length(self):
+        for length in (84, 176):
+            positions, labels = percent_ticks(list(range(1, length + 1)))
+            self.assertEqual(labels, ["0", "20", "40", "60", "80", "100"])
+            # Presentation only: the ticks span the real steps, so the curve
+            # drawn against those steps keeps its shape.
+            self.assertAlmostEqual(positions[0], 1.0)
+            self.assertAlmostEqual(positions[-1], float(length))
+            self.assertAlmostEqual(positions[3], 1.0 + 0.6 * (length - 1))
+
+    def test_percent_ticks_survive_a_one_step_episode(self):
+        positions, labels = percent_ticks([1])
+        self.assertEqual(len(positions), len(labels))
+        self.assertAlmostEqual(positions[0], 1.0)
+
     def test_title_names_the_episode_in_ascii(self):
         title = figure_title("PegInsertionSide-v1", 7, "sparse")
         self.assertEqual(title, "PegInsertionSide-v1, seed 7, sparse")
         self.assertTrue(title.isascii())
+
+    def test_title_carries_no_underscore(self):
+        # cmr10 puts TeX's dot accent in the underscore slot, so an underscore
+        # that reaches a title prints as "normalized-dot-dense".
+        title = figure_title("PegInsertionSide-v1", 2, "normalized_dense")
+        self.assertNotIn("_", title)
+        self.assertEqual(title, "PegInsertionSide-v1, seed 2, normalized dense")
 
 
 class TestRedraw(unittest.TestCase):

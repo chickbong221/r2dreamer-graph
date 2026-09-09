@@ -276,36 +276,58 @@ INK = "#1a1a1a"
 MUTED = "#6b6b6b"
 GRID = "#d8d8d8"
 RETURN_COLOUR = "#1F77B4"
-DISCOUNTED_COLOUR = "#C2700A"
 SUCCESS_COLOUR = "#9467BD"
-HORIZON_COLOUR = "#D62728"
 
 
 def figure_title(env_id: str, seed: Optional[int], reward_mode: str) -> str:
     """One title spelling, so a redrawn figure names its episode the way the
     run that produced it did.
 
-    ASCII only: the serif stack falls through to whatever a machine has, and a
-    dash or a middot that one font lacks prints as a box.
+    ASCII only, and no underscores: the serif stack falls through to whatever a
+    machine has, and on one with only cmr10 -- matplotlib's bundled fallback --
+    the underscore slot holds TeX's dot accent, so ``normalized_dense`` prints
+    as ``normalized-dot-dense``. The exact mode string is kept in the JSON
+    beside the figure, which is where it is read from rather than off a title.
     """
     parts = [str(env_id)]
     if seed is not None:
         parts.append(f"seed {int(seed)}")
     if reward_mode:
         parts.append(str(reward_mode))
-    return ", ".join(parts)
+    return ", ".join(parts).replace("_", " ")
 
 
-def draw_return_figure(trace: RewardTrace, path: Path, *,
-                       horizon: Optional[int] = None, title: str = "",
+def percent_ticks(steps: Sequence[int], count: int = 6):
+    """Tick positions and labels that read 0-100 across whatever length the
+    episode had.
+
+    Presentation only. The curves stay plotted against their true step index,
+    so the line keeps the shape it had; what changes is where the ticks sit and
+    what they are called. Positions are interpolated across ``[first, last]``,
+    which is why an episode of 176 steps and one of 84 both end at 100 without
+    either being resampled, padded or cut.
+    """
+    first, last = float(steps[0]), float(steps[-1])
+    span = max(last - first, 1.0)
+    fractions = [i / (count - 1) for i in range(count)]
+    positions = [first + span * f for f in fractions]
+    labels = [f"{100 * f:g}" for f in fractions]
+    return positions, labels
+
+
+def draw_return_figure(trace: RewardTrace, path: Path, *, title: str = "",
                        dpi: int = 300) -> Optional[Path]:
-    """Return against control step, with the per-step reward beneath it.
+    """Return against episode progress, with the per-step reward beneath it.
 
     Return is the subject and takes the tall panel; the reward strip below is
     what explains the shape it has -- a dense reward climbing steadily, or a
-    sparse one paying once at the end. The two vertical rules carry what a
-    return curve alone cannot say: where the task first called the episode a
-    success, and where its horizon fell when the plan ran past it.
+    sparse one paying once at the end. One vertical rule carries what a return
+    curve alone cannot say: where the task first called the episode a success.
+
+    The x axis is relabelled 0-100 rather than rescaled -- see
+    ``percent_ticks`` -- so two episodes of different lengths can be laid side
+    by side. The real length is not thrown away: it is named in the axis label,
+    and the success rule is still annotated with its true step number.
 
     Optional in the sense that matplotlib is: a headless run that only wants
     the CSV should not fail for want of a plotting library.
@@ -334,33 +356,28 @@ def draw_return_figure(trace: RewardTrace, path: Path, *,
     steps = [s.step for s in trace.steps]
     last = trace.steps[-1]
     first = trace.first_success_step()
-    marked = bool(horizon) and int(horizon) < steps[-1]
     fig, (top, low) = plt.subplots(
         2, 1, figsize=(5.6, 3.9), sharex=True,
         gridspec_kw=dict(height_ratios=(2.1, 1.0), hspace=0.14),
     )
 
+    # Both curves stay in step units. Only the ticks below are relabelled.
     top.plot(steps, [s.ret for s in trace.steps], color=RETURN_COLOUR,
              linewidth=2.0, zorder=3)
-    top.plot(steps, [s.discounted for s in trace.steps],
-             color=DISCOUNTED_COLOUR, linewidth=2.0, linestyle="--", zorder=3)
-    # The two final values ride in the legend rather than as labels pinned to
-    # the end of each curve: a return curve ends at its own maximum, in the one
-    # corner where a label has neither the curve nor the axis out of its way.
     low.plot(steps, [s.reward for s in trace.steps], color=RETURN_COLOUR,
              linewidth=1.3, zorder=3)
 
+    positions, labels = percent_ticks(steps)
     for ax in (top, low):
         if first is not None:
             ax.axvline(first, color=SUCCESS_COLOUR, linewidth=1.2,
                        linestyle=(0, (4, 3)), zorder=2)
-        if marked:
-            ax.axvline(int(horizon), color=HORIZON_COLOUR, linewidth=1.2,
-                       linestyle=(0, (1, 2)), zorder=2)
         ax.grid(True, which="major", color=GRID, linewidth=0.6,
                 linestyle="-", zorder=0)
         ax.set_axisbelow(True)
         ax.set_xlim(steps[0], steps[-1])
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
         for side in ("left", "bottom"):
@@ -370,25 +387,21 @@ def draw_return_figure(trace: RewardTrace, path: Path, *,
 
     top.set_ylabel("Return", fontsize=11, color=INK, labelpad=4)
     low.set_ylabel("Reward", fontsize=11, color=INK, labelpad=4)
-    low.set_xlabel("Control step", fontsize=11, color=INK, labelpad=3)
+    low.set_xlabel("Steps", fontsize=11, color=INK, labelpad=3)
     if title:
         top.set_title(title, fontsize=10.5, color=INK, pad=6)
 
+    # The final return rides in the legend rather than as a label pinned to the
+    # end of the curve: a return curve ends at its own maximum, in the one
+    # corner where a label has neither the curve nor the axis out of its way.
     handles = [
         Line2D([], [], color=RETURN_COLOUR, linewidth=2.0,
                label=f"Return (final {last.ret:.2f})"),
-        Line2D([], [], color=DISCOUNTED_COLOUR, linewidth=2.0, linestyle="--",
-               label=f"Discounted, $\\gamma$ = {trace.discount:.3f} "
-                     f"(final {last.discounted:.2f})"),
     ]
     if first is not None:
         handles.append(Line2D([], [], color=SUCCESS_COLOUR, linewidth=1.2,
                               linestyle=(0, (4, 3)),
                               label=f"First success (step {first})"))
-    if marked:
-        handles.append(Line2D([], [], color=HORIZON_COLOUR, linewidth=1.2,
-                              linestyle=(0, (1, 2)),
-                              label=f"Task horizon ({int(horizon)})"))
     # "best", not a fixed corner: which corner is empty depends on the task's
     # reward. A dense return fills the upper right and a sparse one leaves the
     # left flat, and a demo run against an unfamiliar task has to survive both.
@@ -512,7 +525,7 @@ def write_episode(trace: RewardTrace, summary: Dict[str, Any],
     }, indent=2), encoding="utf-8")
     if args.plot:
         png = draw_return_figure(
-            trace, out / f"{tag}.png", horizon=horizon, dpi=args.dpi,
+            trace, out / f"{tag}.png", dpi=args.dpi,
             title=figure_title(args.env_id, attempt.seed, reward_mode))
         if png is not None:
             paths["figure"] = png
@@ -552,8 +565,7 @@ def replot(args) -> int:
     print_summary(trace.summary(horizon))
 
     target = Path(args.figure) if args.figure else source.with_suffix(".png")
-    png = draw_return_figure(trace, target, horizon=horizon, title=title,
-                             dpi=args.dpi)
+    png = draw_return_figure(trace, target, title=title, dpi=args.dpi)
     if png is None:
         return 1
     print(f"wrote figure: {png}", flush=True)
