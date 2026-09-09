@@ -26,8 +26,8 @@ progress:
   # disagreed with the command that overrides it is how two arms end up
   # differing by a number nobody chose.
   beta: 0.1
-  beta_warmup_start: 200000
-  beta_warmup_end: 700000
+  beta_warmup_start: 400000
+  beta_warmup_end: 900000
 
 loss_scales:
   node: 1.0
