@@ -278,6 +278,17 @@ GRID = "#d8d8d8"
 REWARD_COLOUR = "#1F77B4"
 SUCCESS_COLOUR = "#9467BD"
 
+# Weights and sizes, in one place. Sized for a figure that gets scaled down
+# into a column: at 5.6 inches wide the defaults matplotlib picks are legible
+# on screen and not on paper. The success rule tracks the curve rather than
+# holding a fixed width -- a hairline beside a thick curve reads as an artifact
+# of the renderer rather than as a mark someone put there.
+CURVE_WIDTH = 2.6
+RULE_WIDTH = 1.9
+TICK_SIZE = 12.5
+LABEL_SIZE = 15.0
+TITLE_SIZE = 15.5
+
 
 def figure_title(env_id: str) -> str:
     """The task's name, and nothing else.
@@ -334,7 +345,6 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.lines import Line2D
     except Exception as exc:                               # noqa: BLE001
         print(f"[warn] no figure ({type(exc).__name__}: {exc})", flush=True)
         return None
@@ -354,11 +364,11 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
 
     # The curve stays in step units. Only the ticks below are relabelled.
     ax.plot(steps, [s.reward for s in trace.steps], color=REWARD_COLOUR,
-            linewidth=1.6, zorder=3)
+            linewidth=CURVE_WIDTH, zorder=3)
 
     positions, labels = percent_ticks(steps)
     if first is not None:
-        ax.axvline(first, color=SUCCESS_COLOUR, linewidth=1.2,
+        ax.axvline(first, color=SUCCESS_COLOUR, linewidth=RULE_WIDTH,
                    linestyle=(0, (4, 3)), zorder=2)
     ax.grid(True, which="major", color=GRID, linewidth=0.6,
             linestyle="-", zorder=0)
@@ -378,29 +388,17 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(GRID)
-    ax.tick_params(labelsize=9, labelcolor=INK, color=GRID,
-                   length=3, width=0.7, pad=2)
+    ax.tick_params(labelsize=TICK_SIZE, labelcolor=INK, color=GRID,
+                   length=4, width=0.9, pad=3)
 
-    ax.set_ylabel("Reward", fontsize=11, color=INK, labelpad=4)
-    ax.set_xlabel("Steps", fontsize=11, color=INK, labelpad=3)
+    ax.set_ylabel("Reward", fontsize=LABEL_SIZE, color=INK, labelpad=5)
+    ax.set_xlabel("Steps", fontsize=LABEL_SIZE, color=INK, labelpad=4)
     if title:
-        ax.set_title(title, fontsize=10.5, color=INK, pad=6)
+        ax.set_title(title, fontsize=TITLE_SIZE, color=INK, pad=8)
 
-    # Only the rule needs explaining -- the curve is named by the y axis -- so
-    # an episode that never succeeded gets no legend at all rather than one
-    # entry restating the axis label.
-    if first is not None:
-        handle = Line2D([], [], color=SUCCESS_COLOUR, linewidth=1.2,
-                        linestyle=(0, (4, 3)),
-                        label=f"First success (step {first})")
-        # "best", not a fixed corner: which corner is empty depends on the
-        # task's reward. A dense reward climbs into the upper right and a
-        # sparse one leaves everything but the end flat, and a demo run against
-        # an unfamiliar task has to survive both.
-        ax.legend(handles=[handle], labels=[handle.get_label()],
-                  loc="best", frameon=False, fontsize=8.5,
-                  labelcolor=INK, handlelength=1.9, handletextpad=0.6,
-                  borderaxespad=0.4, labelspacing=0.35)
+    # No legend: the curve is named by the y axis, and the success rule is left
+    # for the caption to explain. Its step number stays in the summary and the
+    # JSON sidecar, which is where a caption would be written from anyway.
 
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(path), dpi=dpi, bbox_inches="tight", pad_inches=0.02,
