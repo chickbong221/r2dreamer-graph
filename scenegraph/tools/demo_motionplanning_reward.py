@@ -366,6 +366,14 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
     ax.set_xlim(steps[0], steps[-1])
     ax.set_xticks(positions)
     ax.set_xticklabels(labels)
+    # Both axes start at the corner rather than each at its own inset: the
+    # default 5% y margin puts the first tick above the x axis, so the two
+    # zeroes print in two different places. Headroom is kept at the top only,
+    # and the floor drops below zero only if a reward actually goes there.
+    rewards = [s.reward for s in trace.steps]
+    floor = min(0.0, min(rewards))
+    ceiling = max(rewards)
+    ax.set_ylim(floor, ceiling + 0.06 * (max(ceiling - floor, 1e-9)))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
