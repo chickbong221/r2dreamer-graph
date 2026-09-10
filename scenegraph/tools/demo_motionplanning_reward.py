@@ -4,7 +4,7 @@ Drives the task's own scripted solution -- the same solver the interaction
 miner and the paper figures use -- and records what the task paid at every
 control step, keeping the episodes that succeeded. Out comes one successful
 episode's per-step table (reward, undiscounted return, discounted return,
-success flag) as CSV and JSON, and the return figure drawn from it as a PNG.
+success flag) as CSV and JSON, and the reward figure drawn from it as a PNG.
 
     python -m scenegraph.tools.demo_motionplanning_reward \
         --env-id PegInsertionSide-v1 --episodes 1 --out data/reward_demos
@@ -275,26 +275,22 @@ FONT_STACK = [
 INK = "#1a1a1a"
 MUTED = "#6b6b6b"
 GRID = "#d8d8d8"
-RETURN_COLOUR = "#1F77B4"
+REWARD_COLOUR = "#1F77B4"
 SUCCESS_COLOUR = "#9467BD"
 
 
-def figure_title(env_id: str, seed: Optional[int], reward_mode: str) -> str:
-    """One title spelling, so a redrawn figure names its episode the way the
-    run that produced it did.
+def figure_title(env_id: str) -> str:
+    """The task's name, and nothing else.
 
-    ASCII only, and no underscores: the serif stack falls through to whatever a
-    machine has, and on one with only cmr10 -- matplotlib's bundled fallback --
-    the underscore slot holds TeX's dot accent, so ``normalized_dense`` prints
-    as ``normalized-dot-dense``. The exact mode string is kept in the JSON
-    beside the figure, which is where it is read from rather than off a title.
+    Which seed and which reward mode produced the episode are properties of the
+    run, not of the task the figure is about; both are recorded in the JSON
+    sidecar, which is where they are read from.
+
+    No underscores: the serif stack falls through to whatever a machine has,
+    and on one with only cmr10 -- matplotlib's bundled fallback -- the
+    underscore slot holds TeX's dot accent, so ``a_b`` prints as ``a-dot-b``.
     """
-    parts = [str(env_id)]
-    if seed is not None:
-        parts.append(f"seed {int(seed)}")
-    if reward_mode:
-        parts.append(str(reward_mode))
-    return ", ".join(parts).replace("_", " ")
+    return str(env_id).replace("_", " ")
 
 
 def percent_ticks(steps: Sequence[int], count: int = 6):
@@ -315,19 +311,18 @@ def percent_ticks(steps: Sequence[int], count: int = 6):
     return positions, labels
 
 
-def draw_return_figure(trace: RewardTrace, path: Path, *, title: str = "",
+def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
                        dpi: int = 300) -> Optional[Path]:
-    """Return against episode progress, with the per-step reward beneath it.
+    """The per-step reward across one episode.
 
-    Return is the subject and takes the tall panel; the reward strip below is
-    what explains the shape it has -- a dense reward climbing steadily, or a
-    sparse one paying once at the end. One vertical rule carries what a return
-    curve alone cannot say: where the task first called the episode a success.
+    One vertical rule carries what the reward curve alone cannot say: where the
+    task first called the episode a success. The return is still computed,
+    printed and written to the CSV -- it is only absent from the drawing.
 
     The x axis is relabelled 0-100 rather than rescaled -- see
     ``percent_ticks`` -- so two episodes of different lengths can be laid side
-    by side. The real length is not thrown away: it is named in the axis label,
-    and the success rule is still annotated with its true step number.
+    by side. The success rule keeps its true step number, which is the one
+    place in the figure the episode's real length still shows.
 
     Optional in the sense that matplotlib is: a headless run that only wants
     the CSV should not fail for want of a plotting library.
@@ -354,61 +349,50 @@ def draw_return_figure(trace: RewardTrace, path: Path, *, title: str = "",
     })
 
     steps = [s.step for s in trace.steps]
-    last = trace.steps[-1]
     first = trace.first_success_step()
-    fig, (top, low) = plt.subplots(
-        2, 1, figsize=(5.6, 3.9), sharex=True,
-        gridspec_kw=dict(height_ratios=(2.1, 1.0), hspace=0.14),
-    )
+    fig, ax = plt.subplots(figsize=(5.6, 2.8))
 
-    # Both curves stay in step units. Only the ticks below are relabelled.
-    top.plot(steps, [s.ret for s in trace.steps], color=RETURN_COLOUR,
-             linewidth=2.0, zorder=3)
-    low.plot(steps, [s.reward for s in trace.steps], color=RETURN_COLOUR,
-             linewidth=1.3, zorder=3)
+    # The curve stays in step units. Only the ticks below are relabelled.
+    ax.plot(steps, [s.reward for s in trace.steps], color=REWARD_COLOUR,
+            linewidth=1.6, zorder=3)
 
     positions, labels = percent_ticks(steps)
-    for ax in (top, low):
-        if first is not None:
-            ax.axvline(first, color=SUCCESS_COLOUR, linewidth=1.2,
-                       linestyle=(0, (4, 3)), zorder=2)
-        ax.grid(True, which="major", color=GRID, linewidth=0.6,
-                linestyle="-", zorder=0)
-        ax.set_axisbelow(True)
-        ax.set_xlim(steps[0], steps[-1])
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(GRID)
-        ax.tick_params(labelsize=9, labelcolor=INK, color=GRID,
-                       length=3, width=0.7, pad=2)
-
-    top.set_ylabel("Return", fontsize=11, color=INK, labelpad=4)
-    low.set_ylabel("Reward", fontsize=11, color=INK, labelpad=4)
-    low.set_xlabel("Steps", fontsize=11, color=INK, labelpad=3)
-    if title:
-        top.set_title(title, fontsize=10.5, color=INK, pad=6)
-
-    # The final return rides in the legend rather than as a label pinned to the
-    # end of the curve: a return curve ends at its own maximum, in the one
-    # corner where a label has neither the curve nor the axis out of its way.
-    handles = [
-        Line2D([], [], color=RETURN_COLOUR, linewidth=2.0,
-               label=f"Return (final {last.ret:.2f})"),
-    ]
     if first is not None:
-        handles.append(Line2D([], [], color=SUCCESS_COLOUR, linewidth=1.2,
-                              linestyle=(0, (4, 3)),
-                              label=f"First success (step {first})"))
-    # "best", not a fixed corner: which corner is empty depends on the task's
-    # reward. A dense return fills the upper right and a sparse one leaves the
-    # left flat, and a demo run against an unfamiliar task has to survive both.
-    top.legend(handles=handles, labels=[h.get_label() for h in handles],
-               loc="best", frameon=False, fontsize=8.5,
-               labelcolor=INK, handlelength=1.9, handletextpad=0.6,
-               borderaxespad=0.4, labelspacing=0.35)
+        ax.axvline(first, color=SUCCESS_COLOUR, linewidth=1.2,
+                   linestyle=(0, (4, 3)), zorder=2)
+    ax.grid(True, which="major", color=GRID, linewidth=0.6,
+            linestyle="-", zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_xlim(steps[0], steps[-1])
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(GRID)
+    ax.tick_params(labelsize=9, labelcolor=INK, color=GRID,
+                   length=3, width=0.7, pad=2)
+
+    ax.set_ylabel("Reward", fontsize=11, color=INK, labelpad=4)
+    ax.set_xlabel("Steps", fontsize=11, color=INK, labelpad=3)
+    if title:
+        ax.set_title(title, fontsize=10.5, color=INK, pad=6)
+
+    # Only the rule needs explaining -- the curve is named by the y axis -- so
+    # an episode that never succeeded gets no legend at all rather than one
+    # entry restating the axis label.
+    if first is not None:
+        handle = Line2D([], [], color=SUCCESS_COLOUR, linewidth=1.2,
+                        linestyle=(0, (4, 3)),
+                        label=f"First success (step {first})")
+        # "best", not a fixed corner: which corner is empty depends on the
+        # task's reward. A dense reward climbs into the upper right and a
+        # sparse one leaves everything but the end flat, and a demo run against
+        # an unfamiliar task has to survive both.
+        ax.legend(handles=[handle], labels=[handle.get_label()],
+                  loc="best", frameon=False, fontsize=8.5,
+                  labelcolor=INK, handlelength=1.9, handletextpad=0.6,
+                  borderaxespad=0.4, labelspacing=0.35)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(path), dpi=dpi, bbox_inches="tight", pad_inches=0.02,
@@ -524,9 +508,8 @@ def write_episode(trace: RewardTrace, summary: Dict[str, Any],
         "steps": [record.row() for record in trace.steps],
     }, indent=2), encoding="utf-8")
     if args.plot:
-        png = draw_return_figure(
-            trace, out / f"{tag}.png", dpi=args.dpi,
-            title=figure_title(args.env_id, attempt.seed, reward_mode))
+        png = draw_reward_figure(trace, out / f"{tag}.png", dpi=args.dpi,
+                                 title=figure_title(args.env_id))
         if png is not None:
             paths["figure"] = png
     return paths
@@ -555,17 +538,14 @@ def replot(args) -> int:
     trace = read_csv_trace(source, discount)
     if not trace.steps:
         raise SystemExit(f"{source} holds no steps")
-    attempt = dict(meta.get("attempt") or {})
-    title = figure_title(
-        meta.get("env_id", args.env_id), attempt.get("seed"),
-        meta.get("reward_mode", ""))
+    title = figure_title(meta.get("env_id", args.env_id))
     print(f"redrawing {source} ({len(trace.steps)} steps, "
           f"horizon={horizon}, discount={discount:.4f})", flush=True)
     print_trace(trace, every=args.print_every, horizon=horizon)
     print_summary(trace.summary(horizon))
 
     target = Path(args.figure) if args.figure else source.with_suffix(".png")
-    png = draw_return_figure(trace, target, title=title, dpi=args.dpi)
+    png = draw_reward_figure(trace, target, title=title, dpi=args.dpi)
     if png is None:
         return 1
     print(f"wrote figure: {png}", flush=True)
