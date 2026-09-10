@@ -100,12 +100,31 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
+# No videos on either arm. `trainer.eval_video_log=false` drops the one
+# evaluation film and `trainer.video_every=0` drops the training film that
+# `tools.Every` would otherwise record at the first episode and every 1M steps
+# after it.
+#
+# The cost is on the graph arm, not this one: there the camera strip is
+# enlarged to the node-link panel's native 1200px height, so one composited
+# frame is 1200x3600x3 rather than 112x224x3, a 200-step evaluation film holds
+# 2.4 GiB of frames, and TensorBoard's writer converts the whole array to
+# float32 before encoding a GIF -- about 36 GiB of host RAM on top of a replay
+# buffer already heading for ~100 GiB.
+#
+# It is switched off here anyway. The two arms are read against each other, so
+# they have to log the same things and pay the same overheads; leaving films on
+# in the arm that can afford them is how a difference nobody chose gets into
+# the comparison.
+
 echo "=== Experiment B ==="
 python train.py \
   env=mshab_pick_b \
   model=size100M \
   env.steps=8000000 \
   env.obs_mode=rgb \
+  trainer.eval_video_log=false \
+  trainer.video_every=0 \
   checkpoint.enabled=true \
   checkpoint.start_step=6000000 \
   checkpoint.metric=eval_scene/training/success_once \
@@ -122,6 +141,8 @@ python train.py \
   model=size100M \
   env.steps=8000000 \
   env.obs_mode=rgb \
+  trainer.eval_video_log=false \
+  trainer.video_every=0 \
   checkpoint.enabled=true \
   checkpoint.start_step=6000000 \
   checkpoint.metric=eval/success_once \
