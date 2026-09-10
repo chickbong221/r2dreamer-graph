@@ -538,7 +538,10 @@ def replot(args) -> int:
     trace = read_csv_trace(source, discount)
     if not trace.steps:
         raise SystemExit(f"{source} holds no steps")
-    title = figure_title(meta.get("env_id", args.env_id))
+    # A sidecar that recorded its own title keeps it: the MS-HAB demo writes
+    # one, because a gym id like CloseSubtaskTrain-v0 does not name the target.
+    title = str(meta.get("title") or figure_title(
+        meta.get("env_id", args.env_id)))
     print(f"redrawing {source} ({len(trace.steps)} steps, "
           f"horizon={horizon}, discount={discount:.4f})", flush=True)
     print_trace(trace, every=args.print_every, horizon=horizon)
