@@ -1,0 +1,22 @@
+# Preprocessing environment only. Install into its own venv/conda env so the
+# training environment's pins (torch==2.8.0, numpy==1.26.0, ...) never move:
+#
+#   conda create -n realrobot-prep python=3.11 -y
+#   conda activate realrobot-prep
+#   pip install -r real_robot/requirements-preprocess.txt
+#   pip install git+https://github.com/apple/ml-depth-pro.git
+#   # Depth Pro weights (about 1.9 GB) -- see real_robot/README.md
+#
+# Depth Pro brings its own torch; that torch belongs to this environment.
+
+huggingface_hub>=0.30
+pandas>=2.2
+pyarrow>=16
+numpy>=1.26
+PyYAML>=6
+av>=12              # decodes the AV1 source videos, writes the H.264 copies Gemini reads
+opencv-python-headless>=4.9
+pillow>=10
+matplotlib>=3.8
+scipy>=1.11
+google-genai>=1.30  # generate_content backend; >=2.3 also provides the Interactions API

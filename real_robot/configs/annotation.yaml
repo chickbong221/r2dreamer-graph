@@ -1,0 +1,141 @@
+# Perception: the videos Gemini reads, the Gemini calls themselves, tracking
+# and Depth Pro geometry. Everything here is preprocessing; training never
+# opens this file except to check identities.
+
+gemini:
+  # generate_content is the long-standing API (documented as legacy but fully
+  # supported); interactions is the newer one, needed for models that launch
+  # only there. The model id is recorded in every annotation and in the cache
+  # identity, so switching it re-annotates rather than mixes.
+  # temperature is sent by both backends; null leaves the model's default.
+  # Gemini 2.5 models honour it. The general-use Gemini 3.x models ignore
+  # temperature, top-p and top-k on either API, so there it changes nothing and
+  # repeatability comes from the response cache.
+  backend: generate_content
+  model: gemini-2.5-pro
+  api_key_env: GEMINI_API_KEY
+  temperature: 0.0
+  max_output_tokens: 65536
+  # default | low | medium | high. Low is ~66 tokens per frame, default ~258.
+  media_resolution: default
+  # Gemini samples static video at 1 FPS unless told otherwise. Every recorded
+  # frame is wanted, so sampling is set explicitly to the dataset rate.
+  video_fps: 15
+  # Transient service errors (408, 429, 5xx, timeouts) are retried with backoff.
+  # A response cut off at max_output_tokens is never asked again identically:
+  # the annotator asks for smaller pieces. Malformed JSON is asked again at
+  # most this many times. Every failed response is saved under
+  # cache_dir/failures, and its tokens count towards the reported usage.
+  max_retries: 6
+  malformed_json_retries: 1
+  retry_base_seconds: 5.0
+  upload_poll_seconds: 5.0
+  cache_dir: real_robot/outputs/gemini_cache
+
+videos:
+  # Burn the camera name, frame number and timestamp into every frame. Gemini
+  # reads the frame number off the image, which is what makes frame-exact
+  # interval boundaries possible at all.
+  overlay: true
+  codec: libx264
+  crf: 18
+  font_size: 18
+
+bins:
+  # Representative episodes the bins are proposed from. auto: the shortest,
+  # median and longest episode, or an explicit list of episode indices. The
+  # frozen bins are shared by every episode.
+  episodes: auto
+  count: 3
+  # The one-time proposal needs motion, not frame-exact timing, and sends
+  # three episodes in one request. Relation annotation keeps gemini.video_fps.
+  video_fps: 5
+
+annotation:
+  mode: full_episode            # full_episode | past_only
+  # full_episode makes two main calls -- events with tracking anchors, then
+  # absolute and temporal relations together -- and targeted repairs.
+  # Validation problems are sent back for a corrected answer this many rounds
+  # before the episode is marked invalid. Code never fills a label in itself.
+  # The events pass gets at most this many rounds before relations are asked
+  # for, and the combined answers at most this many again.
+  repair_rounds: 2
+  # How far apart, in frames, an event and the label change it implies may be
+  # before they count as contradicting each other (and are sent back).
+  consistency_tolerance_frames: 5
+  anchors:
+    # No two consecutive anchors of the gripper, of a carried object, or of
+    # anything a moving camera sees may be further apart than this.
+    max_gap_frames: 15
+    event_tolerance_frames: 1   # an event's anchors may sit this far from its frame
+    moving_cameras: [wrist_right]
+    # The table plane is fitted on a keyframe of the first camera whose table
+    # surface points include a triangle with every side at least min_separation
+    # and an area of at least min_area, in normalised image units (0.08 is about
+    # 50 px across a 640 px image). Validation requires one such keyframe.
+    table_plane: {min_separation: 0.08, min_area: 0.005}
+  repairs:
+    # A repair confined to a short stretch sends a clip of it (plus this
+    # margin, and K frames before for temporal labels) instead of the whole
+    # episode, unless the stretch covers more than this fraction of it.
+    # Reconciliation always sends the whole episode.
+    clip_margin_frames: 15
+    full_video_fraction: 0.6
+  # A cut-off answer is asked for in halves, at most this many times over.
+  truncation_splits: 3
+  past_only:
+    update_stride_frames: 5     # graph update rate: 3 Hz
+    window_frames: 45           # the last 3 s are shown with each update
+
+tracking:
+  max_corners: 40
+  quality_level: 0.01
+  min_distance_px: 4
+  lk_window_px: 21
+  lk_levels: 3
+  forward_backward_px: 1.5      # a point whose round trip drifts further is dropped
+  min_points: 4                 # fewer surviving features and the box is held, not moved
+  max_hold_frames: 15           # ...for at most this many frames, then the track is lost
+  bidirectional: true           # full_episode only; past_only tracks forward
+
+geometry:
+  checkpoint: real_robot/outputs/depth_pro/depth_pro.pt
+  device: cuda
+  half_precision: true
+  # Depth maps are cached at this resolution (H, W).
+  cache_resolution: [240, 320]
+  frame_stride: 1
+  focal_sample_frames: 60       # frames the fixed focal length is estimated on, from the first episodes processed
+  camera_fixed_tolerance_px: 3.0
+  point_window_px: 3
+  background_tolerance_m: 0.03  # depth samples further than this behind the nearest surface are background
+  plane_ransac_iters: 500
+  plane_inlier_m: 0.01
+  # Table depth samples spread less than this along their second principal
+  # axis lie on a line, and are refused rather than fitted.
+  plane_min_extent_m: 0.01
+  # A point that goes unmeasured (tracking lost, hidden, no depth) for at most
+  # max_fill_frames frames is interpolated between its measurements (whole
+  # episodes) or held from the last one (past only). A longer gap stays
+  # unknown -- no position, no speed -- and the reward counts the frames that
+  # need it as fallbacks. Every gap is recorded beside the positions.
+  gaps:
+    max_fill_frames: 5
+  # The pot rim alone is held through gaps of any length, and only when its
+  # measurements verify that the pot does not move: per-axis spread below
+  # tolerance_m over at least min_samples frames (past only: from the frames
+  # measured so far).
+  stationary_pot:
+    tolerance_m: 0.02
+    min_samples: 3
+  # Camera -> robot-base alignment from the tracked gripper point and the
+  # recorded end-effector position. Refused above this median residual, in
+  # which case geometry is reported in the table-aligned camera frame instead
+  # and every artifact says so.
+  alignment_max_median_residual_m: 0.03
+  alignment_ransac_iters: 2000
+  alignment_inlier_m: 0.04
+  pot_entry_height_m: 0.05
+  smoothing:
+    full_episode: {method: savgol, window: 9, order: 2}
+    past_only: {method: ema, alpha: 0.4}

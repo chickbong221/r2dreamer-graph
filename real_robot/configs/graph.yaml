@@ -1,0 +1,68 @@
+# The kitchen graph contract: which vertices exist, which facts each pair
+# carries, and which image points are localised for geometry. Changing any of
+# it changes the cache identity of everything downstream.
+
+version: kitchen-graph-v1
+
+# Frames between the two values a temporal label compares: v_t - v_{t-K}.
+# 5 frames is 0.33 s at 15 Hz (the simulator used 5 frames at 20 Hz).
+temporal_window_frames: 5
+
+n_max: 8
+e_max: 168
+
+# Camera axis of graph_node_bbox. Must name the cameras in dataset.yaml.
+cameras: [high, wrist_right]
+
+# Row order among the unreserved rows follows this list. Row 0 is always the
+# end effector and row 1 the active target (banana, then lid).
+entities:
+  - {id: ee, key: "<ee>", name: right gripper, type: ee}
+  - {id: banana, key: "actor:banana", name: banana, type: object}
+  - {id: pot, key: "actor:pot", name: pot, type: object}
+  - {id: lid, key: "actor:lid", name: lid, type: object}
+  - {id: table, key: "actor:table", name: table, type: object}
+
+targets: [banana, lid]
+
+# Unordered pairs. The code stores each fact in the repository's canonical
+# order (end effector first, object pairs sorted by key) and mirrors
+# direction-carrying labels when it has to swap.
+facts:
+  - pair: [ee, banana]
+    relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+  - pair: [ee, lid]
+    relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+  - pair: [ee, pot]
+    relations: [contact, planar-distance, height-offset]
+  - pair: [banana, pot]
+    relations: [contact, contain, planar-distance, height-offset, contain-compatibility]
+  - pair: [lid, pot]
+    relations: [contact, support, planar-distance, height-offset, support-compatibility]
+  - pair: [banana, lid]
+    relations: [contact]
+  - pair: [banana, table]
+    relations: [support]
+  - pair: [lid, table]
+    relations: [support]
+  - pair: [pot, table]
+    relations: [support]
+
+# Named image points Gemini places at initialisation and correction frames
+# and tracking propagates. Geometry reads them from the high camera. Every
+# point lies on a physical surface: depth is read where the point is, so the
+# gripper's closing point is not annotated directly (between open fingertips
+# there is table or object) but derived as the midpoint of the two lifted
+# fingertips.
+points:
+  ee: [fingertip_1, fingertip_2]
+  banana: [center, grasp_region]
+  pot: [rim_left, rim_right, rim_near, rim_far]
+  lid: [center, handle]
+  table: [surface_1, surface_2, surface_3, surface_4]
+
+# Fixed centroid normalisation for GraphEncoder, in the declared scene frame
+# (metres). Fixed, not fitted to the batch: a stationary pot must encode
+# identically in every episode.
+centroid_origin: [0.0, 0.0, 0.0]
+centroid_scale: 1.0

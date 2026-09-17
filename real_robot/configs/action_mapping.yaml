@@ -1,0 +1,91 @@
+# What the recorded `action` field commands, stated explicitly.
+#
+# audit_dataset.py measures the recordings and compares the measurements with
+# this declaration. Measurements can contradict a claim here; they cannot
+# establish one. audit/action_spec.json is `verified` only when:
+#
+#   * `confirmed` is true and `confirmed_by` names who checked the evidence;
+#   * every command dimension has a representation and a known unit;
+#   * the command claim and the gripper claim each cite at least one piece of
+#     evidence that is not a measurement;
+#   * the gripper's open and closed values are given;
+#   * no measurement contradicts the declaration, unless that contradiction is
+#     listed under `accepted_contradictions` with a reason.
+#
+# Evidence kinds:
+#   metadata        the dataset's own files (meta/info.json, a dataset card)
+#   documentation   documentation of the robot or the recording software
+#   recording_code  the code that wrote the dataset
+#   hardware        a check on the robot, e.g. replaying recorded commands
+#   author          a statement by whoever recorded the data
+#   measurement     numbers computed from the recordings (never enough alone)
+#
+# The entries below are what the dataset itself shows. They are not yet enough:
+# the metadata records no units, calls the fields "displacement", and mislabels
+# velocity/effort as left-arm fields, so its names cannot settle the question.
+# Add evidence for the representation, the units and the gripper values (for
+# example the recording code, the author, or a hardware replay), then confirm.
+
+version: v1
+confirmed: false
+confirmed_by: ''
+confirmed_on: ''
+
+command:
+  indices: [0, 1, 2, 3, 4, 5, 6]
+  names: [waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate, gripper]
+  # absolute_joint_position: the target joint angle to move to.
+  # joint_displacement: a change relative to the current joint angle.
+  representation: absolute_joint_position
+  # One unit per command dimension. `unknown` is refused.
+  units:
+    waist: unknown
+    shoulder: unknown
+    elbow: unknown
+    forearm_roll: unknown
+    wrist_angle: unknown
+    wrist_rotate: unknown
+    gripper: unknown
+  evidence:
+    - kind: metadata
+      source: meta/info.json at the revision pinned in source.json
+      statement: >-
+        robot_type is ALOHA. `action` is float32[13] named right_waist,
+        right_shoulder, right_elbow, right_forearm_roll, right_wrist_angle,
+        right_wrist_rotate, right_gripper, right_eef_x, right_eef_y,
+        right_eef_z, right_eef_roll, right_eef_pitch, right_eef_yaw, listed
+        under a key called "displacement". No units are recorded, there is no
+        dataset card, and the same file names the right arm's velocity and
+        effort as left-arm fields.
+    - kind: measurement
+      source: frame-by-frame check of episode 0 and statistics over all 150 episodes
+      statement: >-
+        action[t][0:7] follows state[t+1][0:7] with small shoulder, elbow and
+        gripper offsets, the pattern of leader-arm position targets, and does
+        not follow state[t+1] - state[t].
+
+# Dimensions that are not commands. They are dropped from the policy's action.
+derived:
+  indices: [7, 8, 9, 10, 11, 12]
+  rule: action[t][i] == state[t+1][i]
+  evidence:
+    - kind: measurement
+      source: frame-by-frame check of episode 0 and statistics over all 150 episodes
+      statement: >-
+        action[t][7:13] equals state[t+1][7:13] exactly: the end-effector
+        pose is written after the fact, not commanded.
+
+gripper:
+  action_index: 6
+  state_index: 6
+  units: unknown
+  # The recorded values for a fully open and a fully closed gripper, in `units`.
+  open_value: null
+  closed_value: null
+  evidence: []
+
+# Measurement contradictions accepted on evidence, each with its check name as
+# the audit prints it and the reason, e.g.
+#   - check: command_representation:gripper
+#     reason: the gripper command saturates while squeezing; confirmed on the robot
+accepted_contradictions: []

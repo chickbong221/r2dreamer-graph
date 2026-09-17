@@ -1,0 +1,22 @@
+# Implicit Q-learning (Kostrikov, Nair and Levine, 2022) on frozen world-model
+# latents: the algorithm's own settings. The training run -- data, imagined
+# transitions, steps, seeds, checkpoints -- is model_assisted_iql.yaml.
+#
+# Starting settings, not selected results. Reward scale and task duration both
+# change what suits this task. The actor learns only from IQL's clipped
+# advantage weights; there is no behaviour-cloning term.
+
+expectile: 0.7
+beta: 3.0
+max_weight: 100.0
+gamma: 0.99
+polyak: 0.005
+lr: 3.0e-4
+actor_cosine_decay: true
+
+network:
+  hidden: [512, 512]
+  layernorm: true
+  activation: SiLU
+  log_std_min: -5.0
+  log_std_max: 2.0

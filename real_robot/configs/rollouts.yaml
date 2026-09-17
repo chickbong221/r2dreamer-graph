@@ -1,0 +1,33 @@
+# Short imagined transitions for the critics, from the frozen world model a
+# latent cache was encoded with. Starting settings, not guarantees: a short
+# horizon and a small critic share limit how far predictions are trusted; they
+# do not make the predictions accurate.
+
+device: cuda:0
+seed: 0
+
+count: 200000              # imagined transitions to generate
+# Every rollout starts from a recorded latent state with a valid transition.
+start_states: recorded
+horizon: 1                 # lengthen only after the world model's open-loop errors are checked
+# Gaussian noise added on top of the behaviour policy's own sample. Zero does
+# not make actions deterministic: the policy samples from its distribution.
+action_noise_std: 0.0
+shard_size: 50000
+
+# An auxiliary imitation model that proposes plausible actions for imagined
+# rollouts. It is fitted to every recorded latent/action pair of the cache and
+# checked on the diagnostic rows. It is not the IQL actor: it adds no loss to
+# the actor, does not initialise it, and is not a benchmark.
+behavior_policy:
+  network:
+    hidden: [512, 512]
+    layernorm: true
+    activation: SiLU
+    log_std_min: -5.0
+    log_std_max: 2.0
+  steps: 200000
+  batch_size: 256
+  lr: 3.0e-4
+  log_every: 1000
+  seed: 0

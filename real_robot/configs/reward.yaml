@@ -1,0 +1,75 @@
+# Dense environment reward for the kitchen task. Computed once from saved
+# geometry, Gemini milestone labels and the recorded gripper; training only
+# reads the column. The progress-aware signal is not part of it.
+
+version: kitchen-dense-v2
+
+stages: [reach_banana, transport_banana, release_banana, reach_lid, seat_lid, release_lid]
+
+# Within-stage score q is kept in [0, 1 - eps] so a stage can never reach the
+# next integer on geometry alone.
+closeness_eps: 1.0e-3
+
+scales:
+  # Fitted on training episodes by `python -m real_robot.rewards.kitchen
+  # fit-scales`, then frozen; the fitted file is part of the reward identity.
+  path: real_robot/outputs/reward/reward_scales.json
+  # s is chosen so a stage's typical entry distance scores this closeness.
+  target_entry_closeness: 0.25
+  min_samples: 5
+  # Used only when a quantity has fewer than min_samples training entries.
+  defaults_m:
+    reach_banana: 0.15
+    transport_banana: 0.20
+    placement: 0.05
+    reach_lid: 0.15
+    lid_lateral: 0.05
+    lid_height: 0.03
+  # Median lid-centre height above the pot rim once seated, fitted on the
+  # frames Gemini labels seated. The height error is measured against it.
+  lid_seated_offset_m: 0.0
+
+gripper:
+  # Closure = (open - value) / (open - closed), from the audit's gripper range.
+  closing_fraction: 0.35
+  released_fraction: 0.15
+
+placement_region_m: 0.08      # banana within this of the pot entry counts as over the pot
+settle:
+  frames: 8                   # the last this-many frames all below the speed
+  speed_m_per_s: 0.03
+  # Once the banana (lid) has settled in (on) the pot, unheld, it stays settled
+  # until it is grasped, leaves (is lifted off), or is measured moving faster
+  # than the speed above -- an object the lid or the pot walls hide is not
+  # unsettled by being hidden. What an unmeasured speed means before it has
+  # settled is stated, not implied:
+  #   not_settled     settling has to be measured (default)
+  #   defer_to_label  unmeasured frames count as slow while the labels say the
+  #                   object lies in (on) the pot, unheld
+  unknown_speed: not_settled
+
+lid_seated:
+  # Gemini's support label decides seating and geometry has to agree with it.
+  # What an unknown lid or rim position means is stated, not implied:
+  #   not_seated      seating needs known geometry (a lid that cannot be
+  #                   measured is not counted as seated)
+  #   defer_to_label  the label alone decides while geometry is unknown
+  unknown_geometry: not_seated
+  lateral_m: 0.04
+  height_m: 0.02
+
+# Frames whose stage score needs a distance that is unknown hold the last score
+# or score the known parts, and are flagged. An episode with more than this is
+# refused by build_dataset: its dense reward would be long flat stretches.
+fallbacks:
+  max_fraction: 0.2
+  max_run_frames: 30          # 2 s at 15 Hz
+
+completion_reward: 1.0
+
+# Off: recorded episodes end without an explicit failure event. If enabled,
+# the failure transition pays failure_penalty, which must not exceed the
+# worst return of continuing (-1 / (1 - gamma)) or failing becomes a shortcut.
+failure_termination: false
+failure_penalty: -100.0
+gamma: 0.99

@@ -1,0 +1,49 @@
+# Model-assisted IQL: the policy-training path. The value and the actor learn
+# from recorded transitions only; the critics also learn from a small share of
+# imagined transitions (rollouts.yaml). IQL's own settings are in iql.yaml.
+# This is an extension of IQL, not the unchanged algorithm.
+
+device: cuda:0
+
+critic:
+  synthetic_fraction: 0.1      # of each critic batch; value and actor batches are recorded only
+
+# Separate streams, so the progress branch cannot shift the base run: the
+# actor, critic and value start from the same weights, and recorded and
+# imagined batches are drawn in the same order, with or without --progress.
+seeds:
+  networks: 0
+  recorded_sampling: 1
+  synthetic_sampling: 2
+  progress_head: 3
+
+train:
+  steps: 500000
+  batch_size: 256
+  log_every: 1000
+  diagnostics_every: 10000
+  checkpoint_every: 10000      # latest.pt, for resumption
+  snapshot_every: 100000       # step_XXXXXXXX.pt, kept; 0 keeps none
+  # The policy a run produces is final.pt. No checkpoint is chosen by action
+  # error: imitation error on recorded episodes does not rank RL policies.
+
+diagnostics:
+  # Recorded diagnostics run on the diagnostic rows of the latent cache (also
+  # trained on); imagined ones on this many fixed imagined transitions.
+  synthetic_rows: 16384
+
+# The progress-aware branch. Shares the world model, latent cache, task
+# rewards and imagined transitions with the base run; changes the actor's
+# objective only.
+progress:
+  enabled: false
+  schedule: real_robot/configs/kitchen_schedule.json
+  beta: 0.1
+  head:
+    # Fitted on every recorded transition with a valid potential, measured on
+    # the diagnostic rows.
+    hidden: [512, 512]
+    steps: 50000
+    batch_size: 256
+    lr: 3.0e-4
+    huber_delta: 0.1

@@ -1,0 +1,111 @@
+{
+  "_schema_version": 1,
+  "env_id": "real_robot/aloha_kitchen",
+  "_comment": "Progress ladder for the progress-aware extension only. The environment reward is rewards/kitchen.py and never reads this file. Clauses name roles; the compiler resolves stored pair order and mirrors labels.",
+  "roles": {
+    "banana": "actor:banana",
+    "pot": "actor:pot",
+    "lid": "actor:lid"
+  },
+  "phases": [
+    {
+      "name": "approach_banana",
+      "weight": 0.1,
+      "clauses": [
+        {"relation": "planar-distance", "src": "ee", "dst": "banana", "labels": ["far", "medium", "near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "banana", "labels": ["medium", "near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "banana", "labels": ["near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "banana", "labels": ["very-near"], "weight": 0.015},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "banana", "labels": ["poor-match", "partial-match", "match"], "weight": 0.013333},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "banana", "labels": ["partial-match", "match"], "weight": 0.013333},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "banana", "labels": ["match"], "weight": 0.013334}
+      ],
+      "completion": {"relation": "contact", "src": "ee", "dst": "banana", "labels": ["holds"]}
+    },
+    {
+      "name": "grasp_banana",
+      "weight": 0.05,
+      "clauses": [
+        {"relation": "grasp", "src": "ee", "dst": "banana", "labels": ["holds"], "weight": 0.05}
+      ],
+      "completion": {"relation": "grasp", "src": "ee", "dst": "banana", "labels": ["holds"]}
+    },
+    {
+      "name": "transport_banana",
+      "weight": 0.15,
+      "requires": {"all_of": [{"relation": "grasp", "src": "ee", "dst": "banana", "labels": ["holds"]}]},
+      "clauses": [
+        {"relation": "planar-distance", "src": "banana", "dst": "pot", "labels": ["far", "medium", "near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "banana", "dst": "pot", "labels": ["medium", "near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "banana", "dst": "pot", "labels": ["near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "banana", "dst": "pot", "labels": ["very-near"], "weight": 0.025},
+        {"relation": "contain-compatibility", "src": "banana", "dst": "pot", "labels": ["poor-match", "partial-match", "match"], "weight": 0.016666},
+        {"relation": "contain-compatibility", "src": "banana", "dst": "pot", "labels": ["partial-match", "match"], "weight": 0.016667},
+        {"relation": "contain-compatibility", "src": "banana", "dst": "pot", "labels": ["match"], "weight": 0.016667}
+      ],
+      "completion": {"relation": "contact", "src": "banana", "dst": "pot", "labels": ["holds"]}
+    },
+    {
+      "name": "place_banana",
+      "weight": 0.2,
+      "clauses": [
+        {"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot", "weight": 0.2}
+      ],
+      "completion": {"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}
+    },
+    {
+      "name": "approach_lid",
+      "weight": 0.1,
+      "requires": {"all_of": [{"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}]},
+      "clauses": [
+        {"relation": "planar-distance", "src": "ee", "dst": "lid", "labels": ["far", "medium", "near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "lid", "labels": ["medium", "near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "lid", "labels": ["near", "very-near"], "weight": 0.015},
+        {"relation": "planar-distance", "src": "ee", "dst": "lid", "labels": ["very-near"], "weight": 0.015},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "lid", "labels": ["poor-match", "partial-match", "match"], "weight": 0.013333},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "lid", "labels": ["partial-match", "match"], "weight": 0.013333},
+        {"relation": "grasp-compatibility", "src": "ee", "dst": "lid", "labels": ["match"], "weight": 0.013334}
+      ],
+      "completion": {"relation": "contact", "src": "ee", "dst": "lid", "labels": ["holds"]}
+    },
+    {
+      "name": "grasp_lid",
+      "weight": 0.05,
+      "requires": {"all_of": [{"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}]},
+      "clauses": [
+        {"relation": "grasp", "src": "ee", "dst": "lid", "labels": ["holds"], "weight": 0.05}
+      ],
+      "completion": {"relation": "grasp", "src": "ee", "dst": "lid", "labels": ["holds"]}
+    },
+    {
+      "name": "seat_lid",
+      "weight": 0.15,
+      "requires": {"all_of": [
+        {"relation": "grasp", "src": "ee", "dst": "lid", "labels": ["holds"]},
+        {"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}
+      ]},
+      "clauses": [
+        {"relation": "planar-distance", "src": "lid", "dst": "pot", "labels": ["far", "medium", "near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "lid", "dst": "pot", "labels": ["medium", "near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "lid", "dst": "pot", "labels": ["near", "very-near"], "weight": 0.025},
+        {"relation": "planar-distance", "src": "lid", "dst": "pot", "labels": ["very-near"], "weight": 0.025},
+        {"relation": "support-compatibility", "src": "lid", "dst": "pot", "labels": ["poor-match", "partial-match", "match"], "weight": 0.016666},
+        {"relation": "support-compatibility", "src": "lid", "dst": "pot", "labels": ["partial-match", "match"], "weight": 0.016667},
+        {"relation": "support-compatibility", "src": "lid", "dst": "pot", "labels": ["match"], "weight": 0.016667}
+      ],
+      "completion": {"relation": "contact", "src": "lid", "dst": "pot", "labels": ["holds"]}
+    },
+    {
+      "name": "settle_lid",
+      "weight": 0.2,
+      "requires": {"all_of": [{"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}]},
+      "clauses": [
+        {"relation": "support", "src": "lid", "dst": "pot", "holder": "pot", "weight": 0.2}
+      ],
+      "completion": {"all_of": [
+        {"relation": "support", "src": "lid", "dst": "pot", "holder": "pot"},
+        {"relation": "contain", "src": "banana", "dst": "pot", "holder": "pot"}
+      ]}
+    }
+  ]
+}
