@@ -11,7 +11,7 @@ This reads a recorded ``trajectory.h5`` and its ``.json`` sidecar, and writes
 the pair back out holding only the episodes that earn their place:
 
     python -m scenegraph.tools.filter_demo_trajectories \
-        demos/PegInsertionSide-v1/motionplanning/trajectory.h5 \
+        demos/PegInsertionSide-v1/motionplanning/mp.h5 \
         --max-steps 150
 
 An episode is kept when three things hold, and each rejects a different kind of
@@ -45,10 +45,10 @@ the recorded file is not a budget met in the converted one, and the converted
 file is the one an imitation policy is trained on::
 
     python -m mani_skill.trajectory.replay_trajectory \
-        --traj-path demos/PegInsertionSide-v1/motionplanning/trajectory.h5 \
+        --traj-path demos/PegInsertionSide-v1/motionplanning/mp.h5 \
         --use-first-env-state -c pd_joint_delta_pos -o state --save-traj
     python -m scenegraph.tools.filter_demo_trajectories \
-        demos/PegInsertionSide-v1/motionplanning/trajectory.state.pd_joint_delta_pos.h5 \
+        demos/PegInsertionSide-v1/motionplanning/mp.state.pd_joint_delta_pos.physx_cpu.h5 \
         --max-steps 150
 
 Run it with ``--dry-run`` on the converted file first: that prints the length
@@ -200,8 +200,11 @@ def filter_trajectories(args) -> int:
               flush=True)
         return 0
 
+    # Underscore, not a dot: replay_trajectory names its output after
+    # everything before the first dot in the input, so "mp.le150.h5" would
+    # replay to the same file "mp.h5" does and quietly overwrite it.
     out = Path(args.out) if args.out else sources[0].with_name(
-        f"{sources[0].stem}.le{args.max_steps}.h5")
+        f"{sources[0].name.split('.')[0]}_le{args.max_steps}.h5")
     out.parent.mkdir(parents=True, exist_ok=True)
 
     # The sidecar of the first input carries env_info -- the task, its kwargs
@@ -210,12 +213,26 @@ def filter_trajectories(args) -> int:
     meta_out = dict(scans[0]["meta"])
     episodes: List[Dict[str, Any]] = []
     written = 0
+    # Two episodes on one seed are two recordings of the same initial state,
+    # and a demo set counted in episodes rather than scenes is smaller than it
+    # says it is. ManiSkill's parallel runner produces these whenever a process
+    # walks past its seed block, and its merge does not check.
+    seen_seeds: set = set()
+    repeats = 0
     with h5py.File(out, "w") as dst:
         for entry in scans:
             with h5py.File(entry["path"], "r") as src:
                 for row in entry["rows"]:
                     if not row["keep"]:
                         continue
+                    if args.limit and written >= args.limit:
+                        break
+                    seed = (row["meta"] or {}).get("episode_seed")
+                    if seed is not None:
+                        if seed in seen_seeds:
+                            repeats += 1
+                            continue
+                        seen_seeds.add(seed)
                     # Renumbered only when several files are merged: the h5
                     # group name is the episode id, and two recordings both
                     # start at zero.
@@ -245,6 +262,9 @@ def filter_trajectories(args) -> int:
     settled = sorted(int(ep["settled_steps"]) for ep in episodes)
     lengths = sorted(int(ep["elapsed_steps"]) for ep in episodes)
     print(f"\n[filter] wrote {written} episodes to {out}")
+    if repeats:
+        print(f"[filter] dropped {repeats} episode(s) repeating a seed already "
+              f"written; {len(seen_seeds)} distinct initial states")
     print(f"[filter] settled at: min={settled[0]} "
           f"med={settled[len(settled) // 2]} max={settled[-1]} "
           f"(budget {args.max_steps})")
@@ -267,6 +287,9 @@ def parse_args(argv=None):
     p.add_argument("--out", default="",
                    help="output .h5; the default sits beside the first input "
                         "as <name>.le<max-steps>.h5")
+    p.add_argument("--limit", type=int, default=0,
+                   help="stop after this many episodes; 0 writes every one "
+                        "that qualifies")
     p.add_argument("--pad", type=int, default=5,
                    help="steps kept after success settles, so a replay that "
                         "drifts still ends on a successful step")
