@@ -48,9 +48,10 @@ actor:
   # an empty value means the run is not pinned and resolves at load time.
   pretrained: lerobot/smolvla_base
   revision: ''
-  # The version this integration was read against. A different one is
-  # reported, not assumed compatible.
-  lerobot_version: '0.6.1'
+  # Verified by reading lerobot's source at 0.4.4 and 0.6.1 (identical SmolVLA
+  # interface). 0.4.4 is the pin here because 0.6.1 needs python >= 3.12 and
+  # this project is 3.11; run `python -m sim_vla.doctor` to check a machine.
+  lerobot_version: '0.4.4'
   # 0 means "take the checkpoint's own value", which is what the released
   # model was trained with. These are not defaults to be assumed: the loaded
   # config is what decides, and the tests assert against it.

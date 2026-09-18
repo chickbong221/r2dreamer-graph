@@ -10,11 +10,18 @@ revision is therefore resolved to a SHA *before* anything is loaded, that SHA is
 what gets loaded, and a resolution failure is an error rather than a silent
 fall-through to whatever happens to be cached.
 
-LeRobot's own version is pinned too, in :data:`SUPPORTED_LEROBOT`. The
-integration is written against the interface at that version -- ``embed_prefix``
-/ ``embed_suffix`` / ``denoise_step`` on ``policy.model``, with the flow
-convention and the action padding those imply -- and a different version is
-reported rather than assumed compatible.
+LeRobot's own version is pinned too. :data:`VERIFIED_LEROBOT` lists the
+versions whose source was actually read: ``embed_prefix`` / ``embed_suffix`` /
+``denoise_step(prefix_pad_masks, past_key_values, x_t, timestep)`` on
+``policy.model``, the flow convention ``x_t = t*noise + (1-t)*actions``, and
+``make_att_2d_masks`` defined inside ``modeling_smolvla``. Those are identical
+across the listed versions; an unlisted one is reported rather than assumed
+compatible.
+
+**0.4.4 is the default because 0.6.1 cannot be installed here.** LeRobot 0.6.1
+requires Python >= 3.12 and this project pins ``>=3.11,<3.12``; 0.4.4 requires
+>= 3.10 and accepts ``torch<2.11``, which the pinned torch 2.8.0 satisfies.
+0.3.3 is excluded for the opposite reason: it caps torch below 2.8.
 """
 
 from __future__ import annotations
@@ -25,8 +32,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 DEFAULT_REPO = "lerobot/smolvla_base"
-# The version this integration was written against, by reading its source.
-SUPPORTED_LEROBOT = "0.6.1"
+# Versions whose source was read and whose SmolVLA interface matches what this
+# integration calls. Ordered: the first is the one to install here.
+VERIFIED_LEROBOT = ("0.4.4", "0.6.1")
+SUPPORTED_LEROBOT = VERIFIED_LEROBOT[0]
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -83,7 +92,42 @@ def resolve_revision(repo_id: str, revision: str = "main") -> str:
     return str(sha)
 
 
+def check_environment() -> None:
+    """Name a broken transformers/huggingface_hub pair before it surfaces deep.
+
+    ``transformers`` imports ``is_offline_mode`` from ``huggingface_hub``, and
+    the two are released in coherent pairs: transformers 4.x with hub 0.3x, and
+    transformers 5.x with hub 1.x. A mixed pair fails on ``import
+    transformers`` with an ImportError that names neither package's version,
+    which is a bad first thing to see on a new machine.
+    """
+    try:
+        import huggingface_hub
+        import transformers
+    except ImportError as exc:
+        message = str(exc)
+        if "is_offline_mode" in message or "huggingface_hub" in message:
+            versions = []
+            for name in ("transformers", "huggingface_hub"):
+                try:
+                    from importlib.metadata import version
+
+                    versions.append(f"{name}=={version(name)}")
+                except Exception:                          # noqa: BLE001
+                    versions.append(f"{name}=?")
+            raise PretrainedError(
+                f"transformers and huggingface_hub are an incompatible pair "
+                f"({', '.join(versions)}): {message}. They ship in matched "
+                "pairs -- transformers 4.x with hub 0.3x, transformers 5.x "
+                "with hub 1.x. For lerobot "
+                f"{SUPPORTED_LEROBOT} install: "
+                "'transformers>=4.57.1,<5.0.0' 'huggingface-hub>=0.34.2,<0.36.0'"
+            ) from exc
+        raise PretrainedError(f"cannot import transformers: {exc}") from exc
+
+
 def lerobot_version() -> str:
+    check_environment()
     try:
         import lerobot
 
@@ -103,11 +147,12 @@ def load_policy(repo_id: str = DEFAULT_REPO, revision: str = "main", *,
     rather than implied.
     """
     version = lerobot_version()
-    if strict_version and version != SUPPORTED_LEROBOT:
+    if strict_version and version not in VERIFIED_LEROBOT:
         raise PretrainedError(
-            f"lerobot {version} is installed; this integration was written "
-            f"against {SUPPORTED_LEROBOT}. Pin it, or re-read "
-            "sim_vla/models/smolvla_actor.py against the installed source.")
+            f"lerobot {version} is installed; the SmolVLA interface was read "
+            f"and verified at {list(VERIFIED_LEROBOT)}. Pin one of those, or "
+            "re-read sim_vla/models/smolvla_actor.py against the installed "
+            "source before trusting it.")
 
     sha = resolve_revision(repo_id, revision)
     source: str | Path = repo_id
