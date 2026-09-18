@@ -314,6 +314,72 @@ class TestConfig(unittest.TestCase):
         check_dataset_compatibility(load_config("pickcube", "dreamer"), {})
 
 
+class TestModelConfig(unittest.TestCase):
+    """The simulator's config, resolved. Torch-free, so it runs anywhere.
+
+    The bug this exists for: ``${env.encoder.cnn_keys}`` was left unresolved,
+    matched no observation key, and MultiEncoder raised a bare
+    NotImplementedError from the line that discovers it has no encoders.
+    Nothing in that traceback mentioned an interpolation.
+    """
+
+    ARMS = (("pickcube", "dreamer"), ("pickcube", "graph"),
+            ("peginsertion", "graph_progress"))
+
+    def unresolved(self, node, path=""):
+        import re as _re
+
+        found = []
+        if isinstance(node, dict):
+            for key, value in node.items():
+                found += self.unresolved(value, f"{path}.{key}" if path else key)
+        elif isinstance(node, list):
+            for value in node:
+                found += self.unresolved(value, path)
+        elif isinstance(node, str) and _re.search(r"\$\{", node):
+            found.append(f"{path} = {node}")
+        return found
+
+    def test_no_interpolation_survives_for_any_arm(self):
+        from sim_vla.models.model_config import load_model_config
+
+        for task, arm in self.ARMS:
+            with self.subTest(task=task, arm=arm):
+                cfg = load_model_config(load_config(task, arm))
+                left = self.unresolved(cfg.to_dict())
+                self.assertEqual(left, [], f"unresolved: {left}")
+
+    def test_encoder_regexes_match_the_keys_the_loader_produces(self):
+        import re as _re
+
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph"))
+        fields = batch_fields({"camera_keys": {"base_camera": "image_base"}},
+                              graph_enabled=True)
+        # Every image key the loader emits must reach the CNN encoder, and the
+        # proprioception key must reach the MLP encoder. A regex that matches
+        # nothing leaves that encoder unbuilt.
+        for key in fields.images:
+            self.assertTrue(_re.match(cfg.encoder.cnn_keys, key), key)
+            self.assertTrue(_re.match(cfg.decoder.cnn_keys, key), key)
+        self.assertTrue(_re.match(cfg.encoder.mlp_keys, "proprio"))
+        self.assertTrue(_re.match(cfg.decoder.mlp_keys, "proprio"))
+        # ... and must not swallow the graph arrays, which go to the graph
+        # encoder and would otherwise be learned twice.
+        for key in GRAPH_KEYS:
+            self.assertIsNone(_re.match(cfg.encoder.cnn_keys, key), key)
+            self.assertIsNone(_re.match(cfg.encoder.mlp_keys, key), key)
+
+    def test_unknown_interpolation_is_refused(self):
+        from sim_vla.models.model_config import _resolve
+
+        with self.assertRaises(KeyError):
+            _resolve({"a": "${nope.deep}"}, {}, {})
+        with self.assertRaises(KeyError):
+            _resolve({"a": "${unknown_global}"}, {}, {}, globals_root={})
+
+
 class TestAudit(unittest.TestCase):
     def test_a_good_dataset_passes(self):
         with tempfile.TemporaryDirectory() as tmp:

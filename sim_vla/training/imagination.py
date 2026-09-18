@@ -27,13 +27,19 @@ import torch
 
 
 def flatten_start(post, graph_enabled: bool) -> tuple:
-    """Fold (batch, time) into one batch of imagination start states."""
-    stoch, deter = post[0], post[1]
+    """Fold (batch, time) into one batch of imagination start states.
+
+    ``observe`` returns ``(stoch, deter, post_logit)`` and then ``sem``, so the
+    semantic state is at index 3 and index 2 is a logit. Unpacked through the
+    world model's own helper rather than by position.
+    """
+    from ..models.world_model import WorldModel
+
+    stoch, deter, _logit, sem = WorldModel.unpack(post, graph_enabled)
     flat_stoch = stoch.reshape(-1, *stoch.shape[2:])
     flat_deter = deter.reshape(-1, deter.shape[-1])
     if not graph_enabled:
         return flat_stoch, flat_deter
-    sem = post[2]
     return flat_stoch, flat_deter, sem.reshape(-1, sem.shape[-1])
 
 

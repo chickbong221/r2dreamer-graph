@@ -20,13 +20,13 @@ def evaluate_world_model(model, batch: Dict[str, torch.Tensor], *,
     """Reconstruction, reward prediction and an open-loop rollout."""
     out = model.observe(batch)
     post = out["post"]
+    stoch, deter, _logit, sem = model.unpack(post, model.graph_enabled)
     feat = model.features(post)
     mask = batch["loss_mask"]
     denominator = mask.sum().clamp(min=1)
 
     metrics: Dict[str, float] = {}
-    recon = model.decoder(post[1], post[0],
-                          post[2] if model.graph_enabled else None)
+    recon = model.decoder(stoch, deter, sem)   # stoch first, then deter
     for key, dist in recon.items():
         if key in batch:
             error = ((dist.mode() - batch[key]) ** 2).flatten(2).mean(-1)
@@ -40,8 +40,8 @@ def evaluate_world_model(model, batch: Dict[str, torch.Tensor], *,
     # Open loop: condition on the first half, then predict forward with the
     # prior alone, which is what imagination will do.
     split = max(batch["action"].shape[1] // 2, 1)
-    stoch, deter = post[0][:, split - 1], post[1][:, split - 1]
-    sem = post[2][:, split - 1] if model.graph_enabled else None
+    stoch, deter = stoch[:, split - 1], deter[:, split - 1]
+    sem = sem[:, split - 1] if model.graph_enabled else None
     steps = max(min(int(horizon), batch["action"].shape[1] - split), 0)
     for offset in range(steps):
         action = batch["action"][:, split + offset]
@@ -61,7 +61,8 @@ def evaluate_world_model(model, batch: Dict[str, torch.Tensor], *,
         # How far the prior that drives imagination is from the posterior the
         # graph produced. A large gap here is a graph arm whose imagined g is
         # not the g it was trained on.
-        prior = model.rssm.semantic_prior_seq(post[1])
+        _, post_deter, _, post_sem = model.unpack(post, True)
+        prior = model.rssm.semantic_prior_seq(post_deter)
         metrics["semantic_prior_mse"] = float(
-            (((prior - post[2]) ** 2).mean(-1) * mask).sum() / denominator)
+            (((prior - post_sem) ** 2).mean(-1) * mask).sum() / denominator)
     return metrics

@@ -130,11 +130,24 @@ class WorldModel(nn.Module):
             embed, action, state, reset, graph_token=self.graph_token(batch))
         return {"embed": embed, "post": post}
 
+    @staticmethod
+    def unpack(post, graph_enabled: bool):
+        """``observe`` returns 3 values, or 4 with the graph branch on.
+
+        ``(stoch, deter, post_logit)`` and then ``sem``. There is no prior
+        logit in there -- it comes from ``rssm.prior`` -- and ``post[2]`` is
+        the posterior logit, not ``sem``. Unpacked in one place because
+        indexing it by number at each use is how that gets mixed up.
+        """
+        stoch, deter, post_logit = post[:3]
+        sem = post[3] if graph_enabled else None
+        return stoch, deter, post_logit, sem
+
     def features(self, post) -> torch.Tensor:
+        stoch, deter, _logit, sem = self.unpack(post, self.graph_enabled)
         if self.graph_enabled:
-            stoch, deter, sem = post[0], post[1], post[2]
             return self.rssm.get_feat(stoch, deter, sem)
-        return self.rssm.get_feat(post[0], post[1])
+        return self.rssm.get_feat(stoch, deter)
 
     # ------------------------------------------------------------------ loss
     def loss(self, batch: Mapping[str, torch.Tensor], initial=None
@@ -143,15 +156,16 @@ class WorldModel(nn.Module):
         scales = self.config.loss_scales
         out = self.observe(batch, initial)
         post = out["post"]
-        stoch, deter = post[0], post[1]
-        sem = post[2] if self.graph_enabled else None
+        stoch, deter, post_logit, sem = self.unpack(post, self.graph_enabled)
         feat = self.features(post)
         mask = batch["loss_mask"]
 
         losses: Dict[str, torch.Tensor] = {}
         metrics: Dict[str, torch.Tensor] = {}
 
-        recon = self.decoder(deter, stoch, sem)
+        # MultiDecoder takes stoch first, then deter. Passing them the other
+        # way round type-checks and trains on nonsense.
+        recon = self.decoder(stoch, deter, sem)
         for key, dist in recon.items():
             if key in batch:
                 losses[f"recon_{key}"] = masked_mean(-dist.log_prob(batch[key]), mask)
@@ -165,7 +179,9 @@ class WorldModel(nn.Module):
         losses["cont"] = masked_mean(
             -self.cont_head(feat).log_prob(cont_target), mask)
 
-        post_logit, prior_logit = post[3], post[4]
+        # The prior is not returned by observe: it is computed from the
+        # posterior deter, exactly as dreamer.py:1118 does.
+        _prior_stoch, prior_logit = self.rssm.prior(deter, sem)
         dyn, rep = self.rssm.kl_loss(
             post_logit, prior_logit, float(self.config.kl_free))
         losses["dyn"] = masked_mean(dyn, mask)
@@ -173,12 +189,25 @@ class WorldModel(nn.Module):
 
         if self.graph_enabled:
             prior_sem = self.rssm.semantic_prior_seq(deter)
-            losses["graphdyn"] = masked_mean(
-                ((sem.detach() - prior_sem) ** 2).mean(-1), mask)
-            losses["graphrep"] = masked_mean(
-                self.rssm.semantic_align_loss(sem, prior_sem.detach()), mask)
-            losses["graphamp"] = masked_mean(
-                self.rssm.semantic_amplitude_loss(sem, prior_sem.detach()), mask)
+            # One call gives both terms. They share a forward value and the
+            # loss scales express the asymmetry between them, so computing one
+            # of them by hand would be a different objective wearing the same
+            # name.
+            sem_dyn, sem_rep = self.rssm.semantic_align_loss(sem, prior_sem)
+            losses["graphdyn"] = masked_mean(sem_dyn, mask)
+            losses["graphrep"] = masked_mean(sem_rep, mask)
+            metrics["graph_align_mse"] = losses["graphdyn"].detach()
+            # Three return values: the error, and the two RMS gauges that say
+            # whether the prior is the right shape at the wrong scale.
+            amp_error, prior_rms, post_rms = self.rssm.semantic_amplitude_loss(
+                sem, prior_sem)
+            losses["graphamp"] = masked_mean(amp_error, mask)
+            with torch.no_grad():
+                metrics["graph_sem_prior_rms"] = masked_mean(prior_rms, mask)
+                metrics["graph_sem_post_rms"] = masked_mean(post_rms, mask)
+                metrics["graph_align_cos"] = masked_mean(
+                    (self.rssm.rms(sem) * self.rssm.rms(prior_sem)).mean(-1),
+                    mask)
             graph = {key: batch[key] for key in GRAPH_KEYS}
             compact = compact_graph(graph)
             flat_sem = sem.reshape(-1, sem.shape[-1])

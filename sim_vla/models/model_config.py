@@ -18,6 +18,16 @@ from typing import Any, Dict, Mapping
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = REPO / "configs/model/size50M_graph_simple.yaml"
 BASE_MODEL = REPO / "configs/model/_base_.yaml"
+DEFAULT_ENV = REPO / "configs/env/maniskill.yaml"
+
+# sim_vla's own observation contract. The simulator's env config names the
+# proprioception key "state"; the collected dataset names it "proprio", so the
+# encoder regexes are set here rather than inherited, and a mismatch would
+# silently leave the MLP encoder with nothing to read.
+OBSERVATION_KEYS = {
+    "cnn_keys": "^image_",
+    "mlp_keys": "^proprio$",
+}
 
 
 class Node:
@@ -49,26 +59,68 @@ class Node:
         return dict(object.__getattribute__(self, "_data"))
 
 
-def _resolve(node: Any, root: Mapping[str, Any]) -> Any:
-    """Substitute ``${model.x}`` against the preset's own top-level scalars.
+def _lookup(dotted: str, tree: Mapping[str, Any]) -> Any:
+    node: Any = tree
+    for part in dotted.split("."):
+        if not isinstance(node, Mapping) or part not in node:
+            raise KeyError(dotted)
+        node = node[part]
+    return node
 
-    The simulator's model configs are written for Hydra, where the size preset
-    supplies ``deter``, ``units``, ``act`` and the rest and every block refers
-    back to them. Reading the yaml without resolving these leaves the literal
-    string ``${model.deter}`` where a layer width belongs, and the failure
-    lands inside a constructor rather than here.
+
+def _resolve(node: Any, model_root: Mapping[str, Any],
+             env_root: Mapping[str, Any], path: str = "",
+             globals_root: Mapping[str, Any] | None = None) -> Any:
+    """Substitute the Hydra interpolations, and refuse to leave one behind.
+
+    The simulator's model configs are written for Hydra: the size preset
+    supplies ``deter``, ``units`` and the rest, and the *env* config supplies
+    the encoder and decoder key regexes. Both forms appear, and an earlier
+    version of this resolved only ``${model.*}``.
+
+    What that cost is worth recording. ``${env.encoder.cnn_keys}`` survived as
+    a literal string, matched no observation key, and ``MultiEncoder`` was
+    handed an empty shape dict -- which it reports as a bare
+    ``NotImplementedError`` from the line that discovers it has no encoders.
+    Nothing said "unresolved interpolation" anywhere in that traceback.
+
+    So anything still shaped like ``${...}`` after this is an error here,
+    where the name of the setting is still in hand.
     """
+    globals_root = globals_root or {}
     if isinstance(node, dict):
-        return {k: _resolve(v, root) for k, v in node.items()}
+        return {k: _resolve(v, model_root, env_root,
+                            f"{path}.{k}" if path else k, globals_root)
+                for k, v in node.items()}
     if isinstance(node, list):
-        return [_resolve(v, root) for v in node]
-    if not isinstance(node, str) or not node.startswith("${model."):
+        return [_resolve(v, model_root, env_root, path, globals_root)
+                for v in node]
+    if not isinstance(node, str) or "${" not in node:
         return node
-    key = node[len("${model."):-1]
-    if key not in root:
+
+    # A bare ${name} is a Hydra global -- device, seed. They come from the
+    # sim_vla config, which is the thing that actually knows them here.
+    bare = node[2:-1] if node.startswith("${") and node.endswith("}") else ""
+    if bare and "." not in bare and ":" not in bare:
+        if bare in globals_root:
+            return globals_root[bare]
         raise KeyError(
-            f"{node} does not resolve; the preset defines {sorted(k for k, v in root.items() if not isinstance(v, dict))}")
-    return root[key]
+            f"{path or 'config'}: {node} is a global sim_vla does not set; "
+            f"it knows {sorted(globals_root)}")
+
+    for prefix, root in (("${model.", model_root), ("${env.", env_root)):
+        if node.startswith(prefix) and node.endswith("}"):
+            dotted = node[len(prefix):-1]
+            try:
+                return _lookup(dotted, root)
+            except KeyError:
+                raise KeyError(
+                    f"{path or 'config'}: {node} does not resolve; "
+                    f"{prefix[2:-1]} defines {sorted(root)[:20]}") from None
+    raise KeyError(
+        f"{path or 'config'}: {node} is an interpolation sim_vla does not "
+        "resolve. Set it explicitly rather than leaving it to be matched "
+        "against as a literal string.")
 
 
 def _merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
@@ -82,14 +134,36 @@ def _merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> Dict[str, An
 
 
 def load_model_config(sim_cfg: Mapping[str, Any],
-                      model_yaml: Path = DEFAULT_MODEL) -> Node:
-    """The simulator model config, with sim_vla's graph settings applied."""
+                      model_yaml: Path = DEFAULT_MODEL,
+                      env_yaml: Path = DEFAULT_ENV) -> Node:
+    """The simulator model config, with sim_vla's own settings applied."""
     import yaml
 
     base = yaml.safe_load(BASE_MODEL.read_text(encoding="utf-8")) or {}
     override = yaml.safe_load(Path(model_yaml).read_text(encoding="utf-8")) or {}
+    env = yaml.safe_load(Path(env_yaml).read_text(encoding="utf-8")) or {}
     merged = _merge(base, override)
-    merged = _resolve(merged, merged)
+
+    # sim_vla's observation contract wins over the simulator env's, because the
+    # collected dataset is what the encoder will actually be handed.
+    keys = dict(OBSERVATION_KEYS) | dict((sim_cfg.get("observation") or {}))
+    for block in ("encoder", "decoder"):
+        merged.setdefault(block, {})
+        merged[block] = dict(merged[block]) | keys
+
+    # progress.mode uses ${oc.select:...}, which is Hydra's and not resolvable
+    # here. sim_vla sets it from its own config or drops the key.
+    progress = dict(merged.get("progress") or {})
+    if isinstance(progress.get("mode"), str) and progress["mode"].startswith("${oc."):
+        progress["mode"] = str(((sim_cfg.get("model") or {}).get("progress")
+                                or {}).get("mode", "task_schedule"))
+        merged["progress"] = progress
+
+    globals_root = {
+        "device": str(sim_cfg.get("device", "cuda")),
+        "seed": int(sim_cfg.get("seed", (sim_cfg.get("data") or {}).get("seed", 0))),
+    }
+    merged = _resolve(merged, merged, env, globals_root=globals_root)
 
     graph_cfg = dict((sim_cfg.get("model") or {}).get("graph") or {})
     merged.setdefault("graph", {})
