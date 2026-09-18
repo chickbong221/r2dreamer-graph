@@ -141,14 +141,29 @@ class ActorCriticTrainer:
             # policy is left alone until the value head means something.
             metrics["actor_loss"] = float("nan")
         else:
+            trainable = [p for p in self.actor.parameters() if p.requires_grad]
+            if not trainable:
+                raise RuntimeError(
+                    "the actor has no trainable parameters; the adapter and "
+                    "the action expert are supposed to be")
             self.actor_opt.zero_grad(set_to_none=True)
             out["loss"].backward()
-            clipped = torch.nn.utils.clip_grad_norm_(
-                [p for p in self.actor.parameters() if p.requires_grad],
-                self.config.grad_clip)
+            # Measured from .grad rather than taken from clip_grad_norm_'s
+            # return, and reported alongside how many parameters actually
+            # received one. A single number cannot distinguish "the gradient
+            # is zero" from "nothing was measured".
+            with torch.no_grad():
+                populated = [p.grad for p in trainable if p.grad is not None]
+                raw_norm = (
+                    float(torch.sqrt(sum((g.detach() ** 2).sum()
+                                         for g in populated)))
+                    if populated else 0.0)
+            torch.nn.utils.clip_grad_norm_(trainable, self.config.grad_clip)
             self.actor_opt.step()
             metrics |= {"actor_loss": float(out["loss"].detach()),
-                        "actor_grad_norm": float(clipped)}
+                        "actor_grad_norm": raw_norm,
+                        "actor_params_with_grad": float(len(populated)),
+                        "actor_params_trainable": float(len(trainable))}
 
         # Detached inputs and detached targets: this builds its own small graph
         # and cannot disturb the one just consumed.

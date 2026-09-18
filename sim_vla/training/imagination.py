@@ -144,6 +144,9 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
     return {
         "feat": torch.stack(feats, 0),            # (horizon + 1, B, D)
         "action": torch.stack(actions, 0),        # (horizon, B, A)
+        # The stack is a *new* node; the objective's graph runs through these.
+        # Probing the stack with autograd.grad returns None and says nothing.
+        "action_steps": actions,
     }
 
 
@@ -161,14 +164,17 @@ def gradient_chain(objective: torch.Tensor, rollout: Dict[str, Any],
         report["dead_at"] = "objective"
         return report
 
-    action = rollout.get("action")
-    if action is not None and action.requires_grad:
-        grad = torch.autograd.grad(objective, action, retain_graph=True,
-                                   allow_unused=True)[0]
-        report["grad_to_action"] = (None if grad is None
-                                    else float(grad.abs().sum()))
+    # The per-step actions, not the stacked copy: the stack is built after the
+    # fact and is not on the path from action to objective, so probing it
+    # returns None whatever the truth is.
+    steps = [a for a in (rollout.get("action_steps") or []) if a.requires_grad]
+    if steps:
+        grads = torch.autograd.grad(objective, steps, retain_graph=True,
+                                    allow_unused=True)
+        report["grad_to_action"] = [
+            None if g is None else float(g.abs().sum()) for g in grads]
     else:
-        report["grad_to_action"] = "action does not require grad"
+        report["grad_to_action"] = "no imagined action requires grad"
 
     params = [p for p in getattr(actor, "adapter", actor).parameters()
               if p.requires_grad]
@@ -177,9 +183,20 @@ def gradient_chain(objective: torch.Tensor, rollout: Dict[str, Any],
                                     allow_unused=True)
         report["grad_to_adapter"] = [
             None if g is None else float(g.abs().sum()) for g in grads]
-    if report.get("grad_to_action") in (None, 0.0):
+    to_action = report.get("grad_to_action")
+    to_adapter = report.get("grad_to_adapter", [1.0])
+    live = lambda values: any(
+        isinstance(g, float) and g > 0.0 for g in values)
+    if isinstance(to_adapter, list) and live(to_adapter):
+        # The parameters do receive gradient. If a caller still measured zero,
+        # the loss is in how the norm was taken, not in the graph.
+        report["dead_at"] = None
+        report["note"] = ("gradient reaches the adapter; a zero norm means "
+                          ".grad was not populated or a different parameter "
+                          "list was measured")
+    elif isinstance(to_action, list) and not live(to_action):
         report["dead_at"] = "return -> action"
-    elif all(g in (None, 0.0) for g in report.get("grad_to_adapter", [1.0])):
+    else:
         report["dead_at"] = "action -> adapter"
     return report
 

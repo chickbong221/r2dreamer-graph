@@ -188,8 +188,16 @@ class TestPostWarmupUpdates(unittest.TestCase):
             self.assertFalse(np.isnan(metrics["actor_loss"]),
                              f"actor did not update at step {step}")
             self.assertTrue(np.isfinite(metrics["actor_grad_norm"]))
+            # How many parameters received a gradient, not only its norm: a
+            # single zero cannot distinguish an absent gradient from an
+            # unmeasured one.
+            self.assertEqual(metrics["actor_params_with_grad"],
+                             metrics["actor_params_trainable"],
+                             f"step {step}: only "
+                             f"{metrics['actor_params_with_grad']} of "
+                             f"{metrics['actor_params_trainable']} actor "
+                             "parameters received a gradient")
             if metrics["actor_grad_norm"] == 0.0:
-                # Say which link broke rather than only that the end is zero.
                 from sim_vla.training.actor_critic import actor_loss
                 from sim_vla.training.imagination import gradient_chain
 
