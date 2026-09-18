@@ -113,9 +113,17 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
 
 
 def imagined_rewards(world_model, feat: torch.Tensor) -> Dict[str, torch.Tensor]:
-    """Reward and continuation over an imagined rollout."""
+    """Reward and continuation over an imagined rollout.
+
+    The two heads are read differently, and not by preference. ``reward`` is a
+    ``symexp_twohot`` distribution whose ``mode()`` is a method; ``cont`` is a
+    ``binary`` one whose ``mode`` is a *property*, so ``.mode()`` there calls a
+    Tensor. ``dreamer.py:1280`` reads continuation as ``.mean`` -- the
+    probability of continuing -- and that is what the lambda-return wants
+    anyway, since a hard 0/1 mode would make the bootstrap discontinuous.
+    """
     reward = world_model.reward_head(feat).mode()
-    cont = world_model.cont_head(feat).mode()
+    cont = world_model.cont_head(feat).mean
     return {"reward": reward.squeeze(-1), "cont": cont.squeeze(-1)}
 
 

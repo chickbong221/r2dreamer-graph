@@ -40,6 +40,9 @@ class ValueCritic(nn.Module):
         self.feature_dim = int(feature_dim)
 
     def value(self, feat: torch.Tensor) -> torch.Tensor:
+        # symexp_twohot, whose mode() is a method -- unlike the binary
+        # continuation head, whose mode is a property. dreamer.py:1282 reads
+        # the value the same way.
         return self.net(feat).mode().squeeze(-1)
 
     def target_value(self, feat: torch.Tensor) -> torch.Tensor:

@@ -23,19 +23,45 @@ def build(graph_enabled):
 
 class TestCritic(unittest.TestCase):
     def test_target_starts_equal_and_then_lags(self):
+        """The slow copy moves a fraction of the way, not all of it.
+
+        The perturbation has to be random. The value head is a 255-bin
+        symexp_twohot, so adding the *same* constant to every parameter shifts
+        every logit equally and the softmax -- and therefore the mode -- does
+        not move at all.
+        """
         torch = require_torch()
+        torch.manual_seed(0)
         model, critic, _ = build(False)
         feat = torch.randn(4, model.feature_dim)
         self.assertTrue(torch.allclose(critic.value(feat),
                                        critic.target_value(feat), atol=1e-5))
+
         for parameter in critic.net.parameters():
-            parameter.data.add_(1.0)
-        # The slow copy moves a fraction of the way, not all of it.
-        self.assertFalse(torch.allclose(critic.value(feat),
-                                        critic.target_value(feat), atol=1e-3))
+            parameter.data.add_(torch.randn_like(parameter))
+        live, target = critic.value(feat), critic.target_value(feat)
+        self.assertFalse(torch.allclose(live, target, atol=1e-3),
+                         "the target moved with the live head")
+
         critic.update_target()
-        self.assertFalse(torch.allclose(critic.value(feat),
-                                        critic.target_value(feat), atol=1e-3))
+        after = critic.target_value(feat)
+        # It moved toward the live head without arriving.
+        self.assertFalse(torch.allclose(after, live, atol=1e-3))
+        self.assertFalse(torch.allclose(after, target, atol=1e-6))
+
+    def test_continuation_is_read_as_a_probability(self):
+        """cont is a binary head: .mode is a property, .mean is the probability."""
+        torch = require_torch()
+        from sim_vla.training.imagination import imagined_rewards
+
+        model, _critic, _ = build(False)
+        feat = torch.randn(3, 2, model.feature_dim)
+        heads = imagined_rewards(model, feat)
+        self.assertEqual(heads["cont"].shape, (3, 2))
+        self.assertEqual(heads["reward"].shape, (3, 2))
+        # A probability, not a 0/1 mode.
+        self.assertTrue(((heads["cont"] >= 0) & (heads["cont"] <= 1)).all())
+        self.assertTrue(torch.isfinite(heads["reward"]).all())
 
     def test_targets_are_detached(self):
         torch = require_torch()
