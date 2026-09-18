@@ -121,51 +121,234 @@ class TestShaping(unittest.TestCase):
                                0.5 * 4.0, places=5)
 
 
-class TestProgressArmIsRefused(unittest.TestCase):
-    """graph_progress has no supervision contract in this package.
+REPO = Path(__file__).resolve().parents[2]
 
-    Constructing the head and never training it would produce a third arm
-    identical to the second, reported as a different method. That reads as a
-    null result rather than a missing feature, so it is refused up front.
+
+class TestProgressAvailability(unittest.TestCase):
+    """What the arm needs, checked before anything expensive.
+
+    An earlier version of this refused the arm unconditionally, on the belief
+    that no task schedule existed and that the scorer needed decoder
+    probabilities. Both were wrong -- the repository ships a schedule per task
+    and the scorer reads observed labels -- so what is checked now is whether
+    *this* run has the pieces.
     """
 
-    def cfg(self, enabled=True, graph=True):
-        return {"model": {"graph": {"enabled": graph},
-                          "progress": {"enabled": enabled, "beta": 0.1}}}
+    def cfg(self, env_id="PickCube-v1", enabled=True, graph=True):
+        return {"task": {"env_id": env_id},
+                "model": {"graph": {"enabled": graph},
+                          "progress": {"enabled": enabled, "beta": 0.05}}}
 
-    def test_the_arm_is_refused_before_any_training(self):
-        require_torch()
+    def metadata(self, env_id="PickCube-v1"):
+        return {"graph": {
+            "whitelist_dir": str(
+                REPO / "scenegraph" / "configs" / "subtask_whitelists" / env_id),
+            "absolute_tokens": {"pad": 0, "near": 1, "above": 2}}}
+
+    def test_the_shipped_tasks_have_everything_the_arm_needs(self):
+        from sim_vla.training.progress import availability
+
+        for env_id in ("PickCube-v1", "PlaceSphere-v1", "PegInsertionSide-v1"):
+            with self.subTest(env_id=env_id):
+                missing = availability(self.cfg(env_id),
+                                       self.metadata(env_id))
+                self.assertEqual(missing, [], f"{env_id}: {missing}")
+
+    def test_a_task_with_no_schedule_is_refused(self):
         from sim_vla.training.progress import preflight
 
         with self.assertRaises(SystemExit) as caught:
-            preflight(self.cfg(), {})
-        message = str(caught.exception)
-        self.assertIn("graph_progress", message)
-        # It says what is missing, not just that something is.
-        self.assertIn("schedule", message)
-        self.assertIn("progress", message)
+            preflight(self.cfg("NoSuchTask-v9"), {})
+        self.assertIn("schedule", str(caught.exception))
+
+    def test_the_baseline_cannot_run_the_progress_arm(self):
+        from sim_vla.training.progress import preflight
+
+        with self.assertRaises(SystemExit) as caught:
+            preflight(self.cfg(graph=False), self.metadata())
+        self.assertIn("graph", str(caught.exception))
 
     def test_the_other_arms_pass_through(self):
-        require_torch()
         from sim_vla.training.progress import preflight
 
         preflight(self.cfg(enabled=False))
         preflight(self.cfg(enabled=False, graph=False))
 
-    def test_the_pipeline_refuses_it_before_stage_1a(self):
-        require_torch()
-        from sim_vla.training import pipeline, pretrain_world_model
 
-        called = []
-        original = pretrain_world_model.run
-        pretrain_world_model.run = lambda *a, **k: called.append(1)
-        self.addCleanup(
-            lambda: setattr(pretrain_world_model, "run", original))
-        with self.assertRaises(SystemExit):
-            pipeline.run(self.cfg() | {"task": {"dataset": "missing.h5"}},
-                         world_steps=1, imitation_steps=0, online_steps=0,
-                         device="cpu", root=Path("."))
-        self.assertFalse(called, "Stage 1A ran before the arm was refused")
+class TestWarmupScaling(unittest.TestCase):
+    """The warm-up has to fall inside the run, or the arm is not the arm."""
+
+    def test_the_warmup_lands_inside_the_budget(self):
+        from sim_vla.training.progress import ProgressConfig, beta_at, \
+            warmup_for
+
+        total = 200_000
+        start, end = warmup_for(total)
+        self.assertLess(start, end)
+        self.assertLess(end, total)
+        config = ProgressConfig(enabled=True, beta=0.05, warmup_start=start,
+                                warmup_end=end)
+        self.assertEqual(beta_at(config, 0), 0.0)
+        self.assertEqual(beta_at(config, start), 0.0)
+        self.assertAlmostEqual(beta_at(config, end), 0.05)
+        self.assertAlmostEqual(beta_at(config, total), 0.05)
+        # And it is genuinely on for most of the run.
+        self.assertGreater(beta_at(config, total // 2), 0.0)
+
+    def test_the_repository_defaults_would_never_fire_in_a_short_run(self):
+        """Why the scaling exists, stated as a test rather than a comment."""
+        from sim_vla.training.progress import ProgressConfig, beta_at
+
+        absolute = ProgressConfig(enabled=True, beta=0.05,
+                                  warmup_start=400_000, warmup_end=700_000)
+        self.assertEqual(beta_at(absolute, 200_000), 0.0)
+
+    def test_a_tiny_budget_still_produces_an_ordered_window(self):
+        from sim_vla.training.progress import warmup_for
+
+        for total in (0, 1, 10, 100):
+            start, end = warmup_for(total)
+            self.assertLess(start, end, f"total={total}")
+
+
+class TestShapingReachesTheActor(unittest.TestCase):
+    """The head is read by the actor objective, and its stream stays separate."""
+
+    def test_a_progress_head_changes_the_return_and_is_logged_apart(self):
+        torch = require_torch()
+        from types import SimpleNamespace
+
+        import sim_vla.training.actor_critic as module
+        from sim_vla.training.actor_critic import ActorCriticConfig
+        from sim_vla.training.progress import build_progress
+
+        _cfg, model_cfg = small_model_config(True)
+        head = build_progress(model_cfg, 2, graph_enabled=True,
+                              progress_enabled=True)
+        # A head that says something: the value head is zero-initialised.
+        with torch.no_grad():
+            for child in head.modules():
+                if isinstance(child, torch.nn.Linear) and not float(
+                        child.weight.abs().sum()):
+                    child.weight.copy_(
+                        torch.randn(child.weight.shape) * 0.1)
+
+        feat = torch.randn(3, 1, 2)
+        heads = {"reward": torch.zeros(3, 1), "cont": torch.ones(3, 1)}
+        original = (module.imagine, module.imagined_rewards)
+        module.imagine = lambda *a, **k: {"feat": feat,
+                                          "action": torch.zeros(2, 1, 2),
+                                          "action_steps": []}
+        module.imagined_rewards = lambda _m, _f: heads
+        self.addCleanup(lambda: setattr(module, "imagine", original[0]))
+        self.addCleanup(lambda: setattr(module, "imagined_rewards",
+                                        original[1]))
+
+        class Critic:
+            def parameters(self):
+                return iter(())
+
+            def value(self, f):
+                return torch.zeros(f.shape[0], f.shape[1])
+
+            def target_value(self, f, *, detach=False):
+                return torch.zeros(1, f.shape[1])
+
+        world = SimpleNamespace(parameters=lambda: iter(()))
+        config = ActorCriticConfig(horizon=2, discount=1.0, lam=1.0,
+                                   progress_beta=0.05)
+        out = module.actor_loss(world, None, Critic(), None, config,
+                                progress_head=head)
+        self.assertIsNotNone(out["shaping"])
+        # The environment stream is reported unshaped.
+        self.assertTrue(torch.allclose(out["reward"], torch.zeros(2, 1)))
+        self.assertFalse(torch.allclose(out["shaped_reward"],
+                                        torch.zeros(2, 1)),
+                         "the shaping term never reached the reward")
+
+    def test_beta_zero_leaves_the_reward_untouched(self):
+        torch = require_torch()
+        from types import SimpleNamespace
+
+        import sim_vla.training.actor_critic as module
+        from sim_vla.training.actor_critic import ActorCriticConfig
+        from sim_vla.training.progress import build_progress
+
+        _cfg, model_cfg = small_model_config(True)
+        head = build_progress(model_cfg, 2, graph_enabled=True,
+                              progress_enabled=True)
+        feat = torch.randn(3, 1, 2)
+        heads = {"reward": torch.ones(3, 1), "cont": torch.ones(3, 1)}
+        original = (module.imagine, module.imagined_rewards)
+        module.imagine = lambda *a, **k: {"feat": feat,
+                                          "action": torch.zeros(2, 1, 2),
+                                          "action_steps": []}
+        module.imagined_rewards = lambda _m, _f: heads
+        self.addCleanup(lambda: setattr(module, "imagine", original[0]))
+        self.addCleanup(lambda: setattr(module, "imagined_rewards",
+                                        original[1]))
+
+        class Critic:
+            def parameters(self):
+                return iter(())
+
+            def value(self, f):
+                return torch.zeros(f.shape[0], f.shape[1])
+
+            def target_value(self, f, *, detach=False):
+                return torch.zeros(1, f.shape[1])
+
+        out = module.actor_loss(
+            SimpleNamespace(parameters=lambda: iter(())), None, Critic(), None,
+            ActorCriticConfig(horizon=2, discount=1.0, lam=1.0,
+                              progress_beta=0.0),
+            progress_head=head)
+        # During warm-up beta is zero and the arm is exactly `graph`.
+        self.assertTrue(torch.allclose(out["shaped_reward"], out["reward"]))
+
+    def test_the_progress_head_is_frozen_during_the_actor_update(self):
+        torch = require_torch()
+        from types import SimpleNamespace
+
+        import sim_vla.training.actor_critic as module
+        from sim_vla.training.actor_critic import ActorCriticConfig
+        from sim_vla.training.progress import build_progress
+
+        _cfg, model_cfg = small_model_config(True)
+        head = build_progress(model_cfg, 2, graph_enabled=True,
+                              progress_enabled=True)
+        feat = torch.randn(3, 1, 2, requires_grad=True)
+        heads = {"reward": torch.zeros(3, 1), "cont": torch.ones(3, 1)}
+        original = (module.imagine, module.imagined_rewards)
+        module.imagine = lambda *a, **k: {"feat": feat,
+                                          "action": torch.zeros(2, 1, 2),
+                                          "action_steps": []}
+        module.imagined_rewards = lambda _m, _f: heads
+        self.addCleanup(lambda: setattr(module, "imagine", original[0]))
+        self.addCleanup(lambda: setattr(module, "imagined_rewards",
+                                        original[1]))
+
+        class Critic:
+            def parameters(self):
+                return iter(())
+
+            def value(self, f):
+                return torch.zeros(f.shape[0], f.shape[1])
+
+            def target_value(self, f, *, detach=False):
+                return torch.zeros(1, f.shape[1])
+
+        out = module.actor_loss(
+            SimpleNamespace(parameters=lambda: iter(())), None, Critic(), None,
+            ActorCriticConfig(horizon=2, discount=1.0, lam=1.0,
+                              progress_beta=0.05),
+            progress_head=head)
+        out["loss"].backward()
+        for name, parameter in head.named_parameters():
+            self.assertIsNone(
+                parameter.grad,
+                f"progress head parameter {name} was trained by the actor "
+                "update; it is fitted on observed targets, not on the return")
 
 
 if __name__ == "__main__":

@@ -103,8 +103,8 @@ def critic_loss(critic, feat: torch.Tensor, returns: torch.Tensor
 
 
 def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
-               *, instruction=None, progress_reward=None, coords=None,
-               differentiable: bool = True) -> Dict[str, Any]:
+               *, instruction=None, progress_reward=None, progress_head=None,
+               coords=None, differentiable: bool = True) -> Dict[str, Any]:
     """Imagine under the policy and maximise the return it earns.
 
     ``differentiable=False`` builds no actor graph at all: the flow sampler
@@ -114,7 +114,7 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
     full expert graph was built anyway and then kept alive by the returned
     tensors.
     """
-    with freeze_parameters(world_model, critic):
+    with freeze_parameters(world_model, critic, progress_head):
         rollout = imagine(world_model, actor, start, config.horizon,
                           flow_steps=config.flow_steps, instruction=instruction,
                           coords=coords, differentiable=differentiable)
@@ -124,11 +124,21 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
         # earned by the action that left s_t.
         reward = heads["reward"][1:]
         cont = heads["cont"][1:]
-        if progress_reward is not None and config.progress_beta:
+        shaping = progress_reward
+        if progress_head is not None and config.progress_beta:
+            from .progress import shaping_reward
+
+            # Computed here rather than handed in, because it is a function of
+            # *this* rollout's features: gamma * phi(s') - phi(s) over the
+            # imagined trajectory. A precomputed tensor could silently belong
+            # to a different rollout and would still have the right shape.
+            # Potential-based, so it cannot change which policy is optimal.
+            shaping = shaping_reward(progress_head, feat, config.discount)
+        if shaping is not None and config.progress_beta:
             # Kept as a separate addend, and logged separately: the evaluation
             # reports environment return, and a shaping term folded in here
             # would not be visible in it.
-            reward = reward + config.progress_beta * progress_reward
+            reward = reward + config.progress_beta * shaping
         # The live head for the values the actor differentiates through, and
         # the slow target for the bootstrap at the horizon -- which is what the
         # slow copy exists for. Both stay differentiable with respect to the
@@ -147,7 +157,11 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
         # "action" is built after the rollout and is not on the path to the
         # objective, so autograd.grad against it always returns None.
         "action_steps": rollout.get("action_steps", []),
-        "reward": reward.detach(),
+        # The *environment* reward stream, before shaping, so a run that scored
+        # only on its own shaping is visible as exactly that.
+        "reward": heads["reward"][1:].detach(),
+        "shaped_reward": reward.detach(),
+        "shaping": None if shaping is None else shaping.detach(),
         "cont": cont.detach(),
     }
 
@@ -156,12 +170,16 @@ class ActorCriticTrainer:
     """One optimizer for the policy, one for the critic, one warm-up."""
 
     def __init__(self, world_model, actor, critic, config: ActorCriticConfig,
-                 *, coords=None):
+                 *, coords=None, progress_head=None):
         self.world_model = world_model
         self.actor = actor
         self.critic = critic
         self.config = config
         self.coords = coords
+        # Read by the actor objective and frozen there: imagination consults
+        # the head, and the actor update must not train the head through the
+        # shaping term.
+        self.progress_head = progress_head
         if float(config.demo_anchor):
             raise NotImplementedError(
                 "ActorCriticConfig.demo_anchor is declared but the anchored "
@@ -176,8 +194,8 @@ class ActorCriticTrainer:
                                             lr=config.critic_lr)
         self.step = 0
 
-    def update(self, start, *, instruction=None, progress_reward=None
-               ) -> Dict[str, float]:
+    def update(self, start, *, instruction=None, progress_reward=None,
+               progress_beta: Optional[float] = None) -> Dict[str, float]:
         """Train the critic, then recompute and train the actor.
 
         The critic cannot be stepped while an actor graph that used its
@@ -198,6 +216,11 @@ class ActorCriticTrainer:
         raise on a particular PyTorch version.
         """
         self.step += 1
+        if progress_beta is not None:
+            # The warm-up is a function of environment steps, which the caller
+            # counts, so the schedule arrives per update rather than being
+            # recomputed from this trainer's own step counter.
+            self.config.progress_beta = float(progress_beta)
         # This rollout supplies detached critic targets only, so it builds no
         # actor graph. torch.no_grad() alone would not have been enough:
         # sample_actions re-enables grad inside it.
@@ -237,7 +260,13 @@ class ActorCriticTrainer:
             out = actor_loss(
                 self.world_model, self.actor, self.critic, start, self.config,
                 instruction=instruction, progress_reward=progress_reward,
+                progress_head=self.progress_head,
                 coords=self.coords, differentiable=True)
+            if out.get("shaping") is not None:
+                # Logged apart from the environment reward, always. An arm that
+                # improved only on its own shaping must be visible as that.
+                metrics |= {"shaping_reward": float(out["shaping"].mean()),
+                            "progress_beta": float(self.config.progress_beta)}
             trainable = [p for p in self.actor.parameters() if p.requires_grad]
             if not trainable:
                 raise RuntimeError(

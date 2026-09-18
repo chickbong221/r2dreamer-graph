@@ -245,7 +245,8 @@ class OnlineTrainer:
                  world_lr: float = 1e-4, device="cuda",
                  progress_head=None, checkpoint_dir: Optional[Path] = None,
                  meta: Optional[CheckpointMeta] = None, normalizer=None,
-                 coords=None, seed: int = 0):
+                 coords=None, seed: int = 0, potential=None,
+                 progress_config=None, progress_lr: float = 3e-4):
         self.world_model = world_model
         self.actor = actor
         self.critic = critic
@@ -260,8 +261,17 @@ class OnlineTrainer:
         # replay windows.
         self.replay = OnlineReplay(seed=int(seed))
         self.world_opt = torch.optim.AdamW(world_model.parameters(), lr=world_lr)
+        # The observed-graph potential, and the head that learns to predict it
+        # from a latent so imagination can read it. Separate optimizer, so
+        # fitting the head cannot move the world model or the critics.
+        self.potential = potential
+        self.progress_config = progress_config
+        self.progress_opt = (
+            torch.optim.AdamW(progress_head.parameters(), lr=progress_lr)
+            if progress_head is not None else None)
         self.ac = ActorCriticTrainer(world_model, actor, critic, ac_config,
-                                     coords=coords)
+                                     coords=coords,
+                                     progress_head=progress_head)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.meta = meta
         self.env_steps = 0
@@ -287,6 +297,8 @@ class OnlineTrainer:
         self.world_opt.step()
         metrics = {"world_loss": float(total.detach())}
 
+        metrics |= self.update_progress(batch)
+
         # Re-encoded after the step, not reused from before it. The posterior
         # in ``_aux`` came from the parameters that have just been replaced.
         start = start_states(self.world_model, batch,
@@ -294,8 +306,49 @@ class OnlineTrainer:
         metrics["imagination_starts"] = float(start[0].shape[0])
         self.updates += 1
         if self.updates % max(int(self.config.actor_every), 1) == 0:
-            metrics |= self.ac.update(start)
+            metrics |= self.ac.update(start, progress_beta=self.beta())
         return metrics
+
+    def beta(self) -> Optional[float]:
+        """The shaping weight at this point in the run, or None when off."""
+        if self.progress_config is None or self.ac.progress_head is None:
+            return None
+        from .progress import beta_at
+
+        return beta_at(self.progress_config, self.env_steps)
+
+    def update_progress(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+        """Fit the progress head to the observed-graph potential.
+
+        The targets come from the *recorded* graph labels, not from the
+        decoder's predictions, so the head is regressed onto something the
+        dataset actually contains. Features are detached: this trains the head
+        and nothing else, which is why it has its own optimizer.
+
+        Rows whose potential is invalid -- a role that matched no node, a
+        relation the frame never observed -- are masked rather than counted as
+        zero progress. A schedule role that never resolves would otherwise
+        teach the head that the task never advances.
+        """
+        if self.progress_opt is None or self.potential is None:
+            return {}
+        head = self.ac.progress_head
+        phi, phi_valid = self.potential.targets(batch)
+        with torch.no_grad():
+            feat = self.world_model.features(
+                self.world_model.observe(batch)["post"])
+        mask = batch["loss_mask"].bool() & phi_valid
+        if not bool(mask.any()):
+            return {"progress_valid": 0.0}
+        loss = head.loss(feat.detach(), phi, mask)
+        self.progress_opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(head.parameters(),
+                                       self.ac.config.grad_clip)
+        self.progress_opt.step()
+        return {"progress_loss": float(loss.detach()),
+                "progress_valid": float(mask.float().mean()),
+                "progress_target_mean": float(phi[mask].mean())}
 
     def checkpoint(self, tag: str = "latest") -> Optional[Path]:
         """Write the run, or do nothing if checkpointing is off.
@@ -326,6 +379,7 @@ class OnlineTrainer:
 def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
                env, *, config: OnlineConfig, ac_config: ActorCriticConfig,
                device="cuda", normalizer=None, coords=None, progress_head=None,
+               potential=None, progress_config=None,
                checkpoint_dir: Optional[Path] = None,
                meta: Optional[CheckpointMeta] = None,
                on_metrics: Optional[Callable[[Dict[str, float]], None]] = None,
@@ -347,7 +401,8 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
         world_model, actor, critic, demo_sampler, config=config,
         ac_config=ac_config, device=device, progress_head=progress_head,
         checkpoint_dir=checkpoint_dir, meta=meta, normalizer=normalizer,
-        coords=coords, seed=int(config.seed))
+        coords=coords, seed=int(config.seed), potential=potential,
+        progress_config=progress_config)
     policy = LatentPolicy(
         world_model, actor, device=device, normalizer=normalizer,
         coords=coords,

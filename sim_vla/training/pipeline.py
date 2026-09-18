@@ -132,17 +132,31 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
 
         critic = ValueCritic(stage_a.model_cfg,
                              int(stage_a.model.feature_dim)).to(device)
+        enabled = bool(cfg["model"]["progress"]["enabled"])
+        # The warm-up is scaled to this run's budget. The repository's absolute
+        # defaults (400k -> 700k env steps) never turn shaping on inside a
+        # shorter run, which would make the arm identical to plain `graph`
+        # while being reported as a different method.
+        warmup_start, warmup_end = progress_module.warmup_for(int(online_steps))
         progress_cfg = ProgressConfig(
-            enabled=bool(cfg["model"]["progress"]["enabled"]),
+            enabled=enabled,
             beta=float(cfg["model"]["progress"]["beta"]),
-            warmup_start=int(cfg["model"]["progress"]["beta_warmup_start"]),
-            warmup_end=int(cfg["model"]["progress"]["beta_warmup_end"]))
+            warmup_start=warmup_start, warmup_end=warmup_end)
         progress_head = build_progress(
             stage_a.model_cfg, int(stage_a.model.feature_dim),
             graph_enabled=bool(cfg["model"]["graph"]["enabled"]),
-            progress_enabled=progress_cfg.enabled)
+            progress_enabled=enabled)
+        potential = None
         if progress_head is not None:
             progress_head = progress_head.to(device)
+            potential = progress_module.build_potential(
+                cfg, stage_a.data.metadata, device=device)
+            print(f"[pipeline] progress: {potential.describe()} "
+                  f"beta={progress_cfg.beta} warmup="
+                  f"{warmup_start}->{warmup_end} env steps", flush=True)
+            report["progress"] = potential.describe() | {
+                "beta": progress_cfg.beta,
+                "warmup": [warmup_start, warmup_end]}
 
         env = SimVlaEnv(
             stage_a.data.metadata,
@@ -165,8 +179,9 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             eval_episodes=int(cfg["eval"]["episodes"]))
         ac_cfg = ActorCriticConfig(
             flow_steps=int(stage_b.actor.flow_steps),
-            progress_beta=float(progress_cfg.beta) if progress_cfg.enabled
-            else 0.0)
+            # Starts at zero and is set per update from the warm-up; the
+            # configured beta is the value it warms up *to*.
+            progress_beta=0.0)
 
         print(f"[pipeline] stage 2: online, {online_steps} env steps",
               flush=True)
@@ -175,7 +190,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
                 cfg, stage_a.model, stage_b.actor, critic, stage_a.sampler,
                 env, config=online_cfg, ac_config=ac_cfg, device=device,
                 normalizer=stage_a.normalizer, coords=stage_a.coords,
-                progress_head=progress_head,
+                progress_head=progress_head, potential=potential,
+                progress_config=progress_cfg,
                 checkpoint_dir=paths["online"], meta=stage_a.meta)
             report["online"] = {"env_steps": trainer.env_steps,
                                 "updates": trainer.updates}

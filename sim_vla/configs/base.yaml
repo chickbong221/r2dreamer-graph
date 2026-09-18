@@ -24,9 +24,20 @@ model:
 
   progress:
     enabled: false          # requires graph.enabled; rejected otherwise
-    beta: 0.1
+    # Matches configs/model/_base_.yaml, which is what the simulator's own
+    # graph arm uses.
+    beta: 0.05
+    # The compiled task schedule that defines what progress *is*, and the
+    # asset tree its roles resolve against. One schedule per task; the
+    # repository ships them.
+    schedule_dir: scenegraph/configs/schedules
+    configs: scenegraph/configs
+    # Absolute warm-up bounds are ignored by the pipeline, which scales the
+    # warm-up to the run's --online-steps budget instead: a 200k-step run under
+    # a 400k start would never turn shaping on, and the arm would silently be
+    # plain `graph`. Kept here for a caller that builds ProgressConfig itself.
     beta_warmup_start: 400000
-    beta_warmup_end: 900000
+    beta_warmup_end: 700000
 
 data:
   root: data/sim_vla_demos

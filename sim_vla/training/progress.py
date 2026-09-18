@@ -29,12 +29,40 @@ import torch.nn as nn
 import networks
 
 
+# Where the repository keeps the compiled task schedules and the assets they
+# resolve roles against. ``configs/model/_base_.yaml`` names the same directory.
+DEFAULT_SCHEDULE_DIR = "scenegraph/configs/schedules"
+DEFAULT_CONFIGS_DIR = "scenegraph/configs"
+
+# What fraction of an online budget is spent before shaping starts, and before
+# it reaches full strength.
+WARMUP_START_FRACTION = 0.2
+WARMUP_END_FRACTION = 0.6
+
+
 @dataclass
 class ProgressConfig:
     enabled: bool = False
-    beta: float = 0.1
+    beta: float = 0.05
     warmup_start: int = 400_000
-    warmup_end: int = 900_000
+    warmup_end: int = 700_000
+
+
+def warmup_for(total_steps: int,
+               start_fraction: float = WARMUP_START_FRACTION,
+               end_fraction: float = WARMUP_END_FRACTION) -> tuple:
+    """A warm-up scaled to the run, rather than to a longer one.
+
+    The repository's defaults start shaping at 400k environment steps and
+    reach full beta at 700k. A 200k-step run under those numbers never turns
+    shaping on at all: ``beta_at`` returns 0.0 for every step of it, the arm is
+    identical to plain ``graph``, and the comparison reports that progress
+    shaping does nothing. Scaling to the budget is what makes the arm the arm.
+    """
+    total = max(int(total_steps), 0)
+    start = int(total * float(start_fraction))
+    end = max(int(total * float(end_fraction)), start + 1)
+    return start, end
 
 
 def beta_at(config: ProgressConfig, step: int) -> float:
@@ -95,51 +123,156 @@ def build_progress(config, feature_dim: int, *, graph_enabled: bool,
     return ProgressHead(config, feature_dim)
 
 
-# What a trained progress head needs, and where each piece would come from.
-# Checked before any expensive work rather than discovered after Stage 1A.
-REQUIRED_PROGRESS_CONTRACT = (
-    ("model.progress.schedule", "the task schedule naming the stages whose "
-     "satisfaction defines progress; the repository's progress.load_stages "
-     "reads one, and no sim_vla config supplies a path to it"),
-    ("dataset.metadata['progress']", "per-step progress targets recorded "
-     "alongside the demonstrations; sim_vla/data/collect.py records graphs "
-     "and rewards but no schedule phase, so there is nothing to regress the "
-     "head onto"),
-    ("graph decoder relation probabilities", "TaskScheduleReplayPotential "
-     "consumes per-relation probabilities; SimpleGraphDecoder produces "
-     "reconstruction losses and does not expose them"),
-)
+class SchedulePotential:
+    """Observed-graph ``Phi`` for one task, from the compiled task schedule.
+
+    This is the supervision the progress head regresses onto. It reads the
+    *observed* packed-graph labels the collector recorded -- ``node_ent``,
+    ``edge_rel``, ``edge_abs`` and the edge index arrays -- and never the
+    decoder's predictions, which is why it needs nothing from the world model
+    and can be computed for a demonstration batch directly.
+
+    ``dreamer.py`` builds the same object from a live graph-enabled env, which
+    it needs because it reads the task identity and the whitelist directory off
+    that env. Here both are recorded in the dataset's metadata, so no simulator
+    has to be running to compile the schedule.
+    """
+
+    def __init__(self, env_id: str, whitelist_dir: str, n_abs: int,
+                 *, schedule_dir: str = DEFAULT_SCHEDULE_DIR,
+                 configs_dir: str = DEFAULT_CONFIGS_DIR, device=None):
+        from scenegraph.adapters.graph_vocab import build_entity_vocab
+        from scenegraph.core.schedule import maniskill_schedule_source, \
+            compile_from_source
+
+        from progress import TaskScheduleReplayPotential
+
+        self.env_id = str(env_id)
+        source = maniskill_schedule_source(
+            self.env_id, str(configs_dir), str(schedule_dir),
+            str(whitelist_dir or ""))
+        self.source = source
+        # The vocabulary comes from the directory the source resolved, so the
+        # compiled roles index the rows the packer actually wrote.
+        schedule = compile_from_source(
+            source, build_entity_vocab(source.whitelist_dir))
+        self.schedule = schedule
+        self.scorer = TaskScheduleReplayPotential(schedule, int(n_abs))
+        if device is not None:
+            self.scorer = self.scorer.to(device)
+        self.phases = len(schedule.phases)
+
+    @torch.no_grad()
+    def targets(self, batch):
+        """``(phi, valid)`` shaped like the batch's ``(batch, time)``.
+
+        ``compact_graph`` folds the batch and time axes into one graph axis, so
+        the result is reshaped back rather than returned flat -- the masks it
+        is combined with are per (batch, time).
+        """
+        from graph import compact_graph
+        from scenegraph.adapters.graph_pack import GRAPH_KEYS
+
+        packed = {key: batch[key] for key in GRAPH_KEYS}
+        reference = packed["graph_node_ent"]
+        shape = tuple(reference.shape[:-1])
+        compact = compact_graph(packed)
+        phi, valid = self.scorer(
+            compact.node_ent, compact.edge_rel, compact.edge_abs,
+            compact.edge_src_local, compact.edge_dst_local,
+            compact.edge_graph, compact.graph_count)
+        return phi.reshape(shape).float(), valid.reshape(shape).bool()
+
+    def describe(self) -> Dict[str, Any]:
+        return {"env_id": self.env_id, "phases": self.phases,
+                "schedule": self.source.schedule_path,
+                "whitelist_dir": self.source.whitelist_dir}
+
+
+def availability(cfg, metadata=None) -> list:
+    """What the progress arm is missing, or an empty list.
+
+    Checked from paths and recorded metadata rather than by trying to build
+    the thing, so it can run before Stage 1A.
+    """
+    import os
+
+    progress = dict((cfg.get("model") or {}).get("progress") or {})
+    graph_meta = dict((metadata or {}).get("graph") or {})
+    env_id = str((cfg.get("task") or {}).get("env_id") or "")
+    schedule_dir = str(progress.get("schedule_dir") or DEFAULT_SCHEDULE_DIR)
+    configs_dir = str(progress.get("configs") or DEFAULT_CONFIGS_DIR)
+
+    missing = []
+    if not bool((cfg.get("model") or {}).get("graph", {}).get("enabled")):
+        missing.append(
+            "model.graph.enabled is false: the schedule resolves roles against "
+            "the graph's entity vocabulary, and a baseline has no graph")
+    if not env_id:
+        missing.append("task.env_id is empty, so no schedule can be named")
+    else:
+        path = os.path.join(schedule_dir, f"{env_id}.json")
+        if not os.path.isfile(path):
+            missing.append(
+                f"no task schedule at {path}; the repository ships one per "
+                "supported task under " + DEFAULT_SCHEDULE_DIR)
+    whitelist = graph_meta.get("whitelist_dir") or os.path.join(
+        configs_dir, "subtask_whitelists", env_id)
+    if not os.path.isdir(str(whitelist)):
+        missing.append(
+            f"no whitelist directory at {whitelist}; roles are resolved "
+            "against the entity vocabulary it defines")
+    if not graph_meta.get("absolute_tokens") and not graph_meta.get(
+            "vocab_sizes"):
+        missing.append(
+            "the dataset metadata records no absolute-token vocabulary, so "
+            "the number of spatial bins the scorer needs is unknown")
+    return missing
 
 
 def preflight(cfg, metadata=None) -> None:
-    """Refuse ``graph_progress`` before anything expensive runs.
+    """Refuse the progress arm before anything expensive, if it cannot run.
 
-    The arm is declared in the configs and the head can be constructed, but
-    nothing in this package trains it and nothing supplies its targets. Running
-    anyway would produce a third arm that is bit-for-bit the second one while
-    being reported as a different method -- which is worse than not having it,
-    because the comparison would look like a null result rather than a missing
-    feature.
-
-    Inventing labels would be worse still. So this says exactly what is absent
-    and stops.
+    This used to refuse unconditionally on the belief that no schedule existed
+    and that the scorer needed decoder probabilities. Both were wrong: the
+    repository ships a schedule per task under ``scenegraph/configs/schedules``
+    and :class:`TaskScheduleReplayPotential` reads observed labels. What is
+    checked now is whether *this* run has the pieces.
     """
-    progress = dict((cfg.get("model") or {}).get("progress") or {})
-    if not bool(progress.get("enabled")):
+    if not bool((cfg.get("model") or {}).get("progress", {}).get("enabled")):
         return
-
-    recorded = dict((metadata or {}).get("progress") or {})
-    missing = []
-    if not progress.get("schedule"):
-        missing.append(REQUIRED_PROGRESS_CONTRACT[0])
-    if not recorded:
-        missing.append(REQUIRED_PROGRESS_CONTRACT[1])
-    missing.append(REQUIRED_PROGRESS_CONTRACT[2])
-
-    detail = "\n".join(f"  - {name}: {why}" for name, why in missing)
+    missing = availability(cfg, metadata)
+    if not missing:
+        return
+    detail = "\n".join(f"  - {item}" for item in missing)
     raise SystemExit(
-        "refusing to run the graph_progress arm: the progress supervision "
-        "contract is not available.\n" + detail + "\n"
-        "Run --experiment graph instead, or supply the contract above. This "
-        "stops here rather than training a head on invented targets or "
-        "silently running plain graph training under the graph_progress name.")
+        "refusing to run the graph_progress arm: its supervision is not "
+        "available for this run.\n" + detail + "\nRun --experiment graph "
+        "instead, or supply the pieces above. This stops here rather than "
+        "training a head on invented targets or silently running plain graph "
+        "training under the graph_progress name.")
+
+
+def build_potential(cfg, metadata, *, device=None):
+    """The schedule potential for this run, or None when progress is off."""
+    import os
+
+    if not bool((cfg.get("model") or {}).get("progress", {}).get("enabled")):
+        return None
+    preflight(cfg, metadata)
+    progress = dict(cfg["model"]["progress"])
+    graph_meta = dict((metadata or {}).get("graph") or {})
+    absolute = graph_meta.get("absolute_tokens") or {}
+    n_abs = (len(absolute) if absolute
+             else int(dict(graph_meta.get("vocab_sizes") or {}).get(
+                 "absolute", 0)))
+    if not n_abs:
+        raise SystemExit(
+            "the dataset records no absolute-token vocabulary; the scorer "
+            "needs its size to allocate one slot per spatial bin")
+    return SchedulePotential(
+        str(cfg["task"]["env_id"]), str(graph_meta.get("whitelist_dir") or ""),
+        n_abs,
+        schedule_dir=str(progress.get("schedule_dir") or DEFAULT_SCHEDULE_DIR),
+        configs_dir=str(progress.get("configs") or DEFAULT_CONFIGS_DIR),
+        device=device)
