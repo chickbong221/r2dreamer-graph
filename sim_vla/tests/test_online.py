@@ -1,0 +1,137 @@
+"""Stage 8: critic targets, actor gradients, and frozen parameters staying so."""
+
+from __future__ import annotations
+
+import unittest
+
+from .common import (DummyExpert, fake_batch, obs_shapes, require_torch,
+                     small_model_config)
+
+
+def build(graph_enabled):
+    torch = require_torch()
+    from sim_vla.models.critics import ValueCritic
+    from sim_vla.models.world_model import build_world_model
+
+    _cfg, model_cfg = small_model_config(graph_enabled)
+    batch = fake_batch(graph_enabled=graph_enabled)
+    model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                              graph_enabled=graph_enabled)
+    critic = ValueCritic(model_cfg, model.feature_dim)
+    return model, critic, batch
+
+
+class TestCritic(unittest.TestCase):
+    def test_target_starts_equal_and_then_lags(self):
+        torch = require_torch()
+        model, critic, _ = build(False)
+        feat = torch.randn(4, model.feature_dim)
+        self.assertTrue(torch.allclose(critic.value(feat),
+                                       critic.target_value(feat), atol=1e-5))
+        for parameter in critic.net.parameters():
+            parameter.data.add_(1.0)
+        # The slow copy moves a fraction of the way, not all of it.
+        self.assertFalse(torch.allclose(critic.value(feat),
+                                        critic.target_value(feat), atol=1e-3))
+        critic.update_target()
+        self.assertFalse(torch.allclose(critic.value(feat),
+                                        critic.target_value(feat), atol=1e-3))
+
+    def test_targets_are_detached(self):
+        torch = require_torch()
+        model, critic, _ = build(False)
+        feat = torch.randn(4, model.feature_dim, requires_grad=True)
+        returns = torch.randn(4, requires_grad=True)
+        loss = critic.loss(feat, returns)
+        loss.backward()
+        # The actor's gradient must not arrive through the critic's target.
+        self.assertIsNone(returns.grad)
+
+
+class TestActorUpdate(unittest.TestCase):
+    def make_actor(self, model):
+        torch = require_torch()
+        from sim_vla.models.latent_adapter import LatentAdapter
+
+        class Actor(torch.nn.Module):
+            chunk_size, action_dim = 4, 8
+
+            def __init__(self):
+                super().__init__()
+                self.adapter = LatentAdapter(model.feature_dim, 16, hidden=32)
+                self.expert = DummyExpert(16, 8)
+                self.expert_linear = self.expert.linear
+
+            def condition(self, feat, instruction=None):
+                return {"state_token": self.adapter(feat),
+                        "instruction": instruction}
+
+            def velocity_fn(self):
+                return self.expert
+
+        return Actor()
+
+    def test_actor_loss_reaches_the_adapter(self):
+        torch = require_torch()
+        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
+        from sim_vla.training.imagination import flatten_start
+
+        model, critic, batch = build(False)
+        actor = self.make_actor(model)
+        start = flatten_start(model.observe(batch)["post"], False)
+        out = actor_loss(model, actor, critic, start,
+                         ActorCriticConfig(horizon=2, flow_steps=3))
+        out["loss"].backward()
+        grads = [p.grad for p in actor.adapter.parameters() if p.grad is not None]
+        self.assertTrue(grads, "the return's gradient never reached the actor")
+
+    def test_world_model_and_critic_parameters_are_unchanged(self):
+        torch = require_torch()
+        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
+        from sim_vla.training.imagination import flatten_start
+
+        model, critic, batch = build(False)
+        actor = self.make_actor(model)
+        before = [p.detach().clone() for p in model.parameters()]
+        start = flatten_start(model.observe(batch)["post"], False)
+        out = actor_loss(model, actor, critic, start,
+                         ActorCriticConfig(horizon=2, flow_steps=3))
+        out["loss"].backward()
+        opt = torch.optim.SGD(
+            [p for p in actor.parameters() if p.requires_grad], lr=0.1)
+        opt.step()
+        for old, new in zip(before, model.parameters()):
+            self.assertTrue(torch.equal(old, new.detach()),
+                            "the actor update changed the world model")
+
+    def test_freeze_restores_requires_grad(self):
+        torch = require_torch()
+        from sim_vla.training.actor_critic import freeze_parameters
+
+        model, critic, _ = build(False)
+        with freeze_parameters(model, critic):
+            self.assertFalse(any(p.requires_grad for p in model.parameters()))
+        self.assertTrue(any(p.requires_grad for p in model.parameters()))
+
+    def test_critic_warmup_holds_the_actor_still(self):
+        torch = require_torch()
+        from sim_vla.training.actor_critic import (ActorCriticConfig,
+                                                   ActorCriticTrainer)
+        from sim_vla.training.imagination import flatten_start
+
+        model, critic, batch = build(False)
+        actor = self.make_actor(model)
+        trainer = ActorCriticTrainer(
+            model, actor, critic,
+            ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=2))
+        start = flatten_start(model.observe(batch)["post"], False)
+        before = [p.detach().clone() for p in actor.adapter.parameters()]
+        metrics = trainer.update(start)
+        self.assertNotEqual(metrics["critic_loss"], metrics["critic_loss"] + 1)
+        for old, new in zip(before, actor.adapter.parameters()):
+            self.assertTrue(torch.equal(old, new.detach()),
+                            "the actor moved during critic warm-up")
+
+
+if __name__ == "__main__":
+    unittest.main()

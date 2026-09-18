@@ -1,22 +1,28 @@
 #!/bin/bash
 # The sim_vla test suite, in stages, stopping at the first failure.
 #
-# Staged because the failures are ordered: a broken sequence loader makes every
-# later stage fail in a way that says nothing about the later stage. Running
-# them in dependency order means the first red stage is the one to read.
-#
 #   bash sim_vla/run_tests.sh              # every stage
-#   bash sim_vla/run_tests.sh 1 3          # stages 1 through 3
+#   bash sim_vla/run_tests.sh 1 4          # stages 1 through 4
 #   SIM_VLA_DEMOS=data/sim_vla_demos bash sim_vla/run_tests.sh
 #
-# This is testing, not training. Nothing here runs a full pretraining or an RL
-# session; the heaviest stages load the pretrained checkpoint, take a few
-# gradient steps on a handful of demonstrations, step the simulator for a few
-# episodes, and write and reload a checkpoint. Budget minutes, not hours.
+# Staged because the failures are ordered: a broken sequence loader makes every
+# later stage fail in a way that says nothing about the later stage.
 #
-# A stage whose module does not exist yet is reported as PENDING and does not
-# pass. That is deliberate: a suite that silently skips what has not been
-# written reports green for work that has not happened.
+# This is testing, not training. The heaviest stages load the pretrained
+# checkpoint, take a few hundred optimiser steps on tiny tensors, step the
+# simulator for a handful of transitions, and write and reload a checkpoint.
+# Budget minutes. Full pretraining and RL are separate entry points --
+# sim_vla/training/pretrain_world_model.py and sim_vla/training/online.py --
+# and nothing here invokes them.
+#
+# Three outcomes per stage, and only the first is success:
+#
+#   passed      something ran and nothing failed
+#   INCOMPLETE  every test skipped -- a missing dependency, weights or dataset
+#   FAILED      a test failed
+#
+# A stage that skipped everything exits non-zero. A suite that reported green
+# because lerobot was not installed would be worse than no suite.
 
 set -u
 FIRST="${1:-1}"
@@ -25,22 +31,22 @@ DEMOS="${SIM_VLA_DEMOS:-data/sim_vla_demos}"
 PY="${PYTHON:-python}"
 
 cd "$(dirname "$0")/.." || exit 1
+STAGE="$PY -m sim_vla.tests.run_stage"
 
-# stage | description | what it runs
 STAGES=(
   "1|data contract, sequence alignment, graph isolation|$PY -m unittest tests.test_sim_vla_data tests.test_sim_vla_pipeline"
-  "2|collected datasets on this machine|$PY -m sim_vla.data.audit --root $DEMOS --graph"
-  "3|conditional world model, both arms|$PY -m unittest sim_vla.tests.test_world_model"
-  "4|pretrained SmolVLA loads, adapter takes gradient|$PY -m unittest sim_vla.tests.test_pretrained sim_vla.tests.test_adapter"
-  "5|imitation trainer overfits a few demonstrations|$PY -m unittest sim_vla.tests.test_imitation"
-  "6|simulator integration: env, replay, final observations|$PY -m unittest sim_vla.tests.test_env"
-  "7|flow sampler and imagination gradients|$PY -m unittest sim_vla.tests.test_imagination"
-  "8|critics, online loop, checkpoint write and resume|$PY -m unittest sim_vla.tests.test_online sim_vla.tests.test_checkpoint"
-  "9|progress variant and its graph dependency|$PY -m unittest sim_vla.tests.test_progress"
+  "2|collected datasets, against their own metadata|$PY -m sim_vla.data.audit --root $DEMOS --graph"
+  "3|world model builds and trains in both arms|$STAGE sim_vla.tests.test_world_model"
+  "4|real pretrained SmolVLA, adapter, gradient flow|$STAGE sim_vla.tests.test_pretrained sim_vla.tests.test_adapter"
+  "5|flow-matching imitation, chunk masking, overfit|$STAGE sim_vla.tests.test_imitation"
+  "6|simulator integration: env, replay, final observation|$STAGE sim_vla.tests.test_env"
+  "7|flow sampler gradients and latent imagination|$STAGE sim_vla.tests.test_imagination"
+  "8|critics, actor update, checkpoint write and resume|$STAGE sim_vla.tests.test_online sim_vla.tests.test_checkpoint"
+  "9|progress shaping and its graph dependency|$STAGE sim_vla.tests.test_progress"
 )
 
-pending=()
-ran=0
+passed=0
+incomplete=()
 
 for entry in "${STAGES[@]}"; do
   num="${entry%%|*}"
@@ -49,32 +55,28 @@ for entry in "${STAGES[@]}"; do
   cmd="${rest#*|}"
   if [ "$num" -lt "$FIRST" ] || [ "$num" -gt "$LAST" ]; then continue; fi
 
-  # A unittest target that does not import yet is pending, not failing. Checked
-  # by import rather than by file path so a module that exists but cannot be
-  # imported still counts as a real failure.
-  module=$(echo "$cmd" | grep -o 'sim_vla\.tests\.[a-z_]*' | head -1)
-  if [ -n "$module" ] && ! $PY -c "import importlib,sys; sys.exit(0 if importlib.util.find_spec('$module') else 1)" 2>/dev/null; then
-    echo "=== stage $num: $desc"
-    echo "--- PENDING: $module is not implemented yet"
-    pending+=("$num:$desc")
-    continue
-  fi
-
   echo "=== stage $num: $desc"
   echo "--- $cmd"
-  if ! eval "$cmd"; then
+  eval "$cmd"
+  status=$?
+  if [ $status -eq 2 ]; then
+    echo "--- stage $num INCOMPLETE (nothing verified)"
+    incomplete+=("$num:$desc")
+  elif [ $status -ne 0 ]; then
     echo
-    echo "!!! stage $num failed: $desc"
+    echo "!!! stage $num FAILED: $desc"
     echo "!!! later stages were not run; fix this one first"
     exit 1
+  else
+    passed=$((passed + 1))
   fi
-  ran=$((ran + 1))
   echo
 done
 
-echo "=== $ran stage(s) passed"
-if [ ${#pending[@]} -gt 0 ]; then
-  echo "=== ${#pending[@]} stage(s) pending, not passed:"
-  for item in "${pending[@]}"; do echo "    $item"; done
+echo "=== $passed stage(s) passed"
+if [ ${#incomplete[@]} -gt 0 ]; then
+  echo "=== ${#incomplete[@]} stage(s) INCOMPLETE -- not verified, not passed:"
+  for item in "${incomplete[@]}"; do echo "    $item"; done
+  echo "=== install the missing dependency or collect the missing data, then re-run"
   exit 2
 fi
