@@ -147,6 +147,43 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
     }
 
 
+def gradient_chain(objective: torch.Tensor, rollout: Dict[str, Any],
+                   actor) -> Dict[str, Any]:
+    """Where an actor gradient dies, link by link.
+
+    The actor objective runs objective -> return -> reward/value -> feature ->
+    transition -> action -> flow sampler -> conditioning token -> adapter. A
+    zero at the end says nothing about which link broke, and the chain is long
+    enough that guessing is expensive. This reports each link separately.
+    """
+    report: Dict[str, Any] = {"objective_requires_grad": bool(objective.requires_grad)}
+    if not objective.requires_grad:
+        report["dead_at"] = "objective"
+        return report
+
+    action = rollout.get("action")
+    if action is not None and action.requires_grad:
+        grad = torch.autograd.grad(objective, action, retain_graph=True,
+                                   allow_unused=True)[0]
+        report["grad_to_action"] = (None if grad is None
+                                    else float(grad.abs().sum()))
+    else:
+        report["grad_to_action"] = "action does not require grad"
+
+    params = [p for p in getattr(actor, "adapter", actor).parameters()
+              if p.requires_grad]
+    if params:
+        grads = torch.autograd.grad(objective, params, retain_graph=True,
+                                    allow_unused=True)
+        report["grad_to_adapter"] = [
+            None if g is None else float(g.abs().sum()) for g in grads]
+    if report.get("grad_to_action") in (None, 0.0):
+        report["dead_at"] = "return -> action"
+    elif all(g in (None, 0.0) for g in report.get("grad_to_adapter", [1.0])):
+        report["dead_at"] = "action -> adapter"
+    return report
+
+
 def imagined_rewards(world_model, feat: torch.Tensor) -> Dict[str, torch.Tensor]:
     """Reward and continuation over an imagined rollout.
 
@@ -172,10 +209,14 @@ def lambda_return(reward: torch.Tensor, value: torch.Tensor,
     than being cut short by a terminal the online env never produces.
     """
     horizon = reward.shape[0]
-    out = torch.empty_like(reward)
+    # Accumulated into a list and stacked, as dreamer.py:_lambda_return does.
+    # Writing into a preallocated tensor works, but this objective is
+    # differentiated -- unlike dreamer's, which detaches the advantage -- so
+    # the form that leaves no doubt about the graph is the one to use.
     carry = value[-1]
+    collected = []
     for step in reversed(range(horizon)):
         carry = reward[step] + discount * cont[step] * (
             (1.0 - lam) * value[step + 1] + lam * carry)
-        out[step] = carry
-    return out
+        collected.append(carry)
+    return torch.stack(list(reversed(collected)), 0)

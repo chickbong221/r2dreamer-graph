@@ -177,7 +177,10 @@ class TestPostWarmupUpdates(unittest.TestCase):
         trainer = ActorCriticTrainer(
             model, actor, critic,
             ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0))
-        start = flatten_start(model.observe(batch)["post"], False)
+        # Detached: the same start seeds three updates, and a live graph would
+        # be freed by the first backward.
+        start = tuple(t.detach() for t in
+                      flatten_start(model.observe(batch)["post"], False))
         before = [p.detach().clone() for p in model.parameters()]
 
         for step in range(3):
@@ -185,8 +188,15 @@ class TestPostWarmupUpdates(unittest.TestCase):
             self.assertFalse(np.isnan(metrics["actor_loss"]),
                              f"actor did not update at step {step}")
             self.assertTrue(np.isfinite(metrics["actor_grad_norm"]))
-            self.assertGreater(metrics["actor_grad_norm"], 0.0,
-                               "actor gradient was zero")
+            if metrics["actor_grad_norm"] == 0.0:
+                # Say which link broke rather than only that the end is zero.
+                from sim_vla.training.actor_critic import actor_loss
+                from sim_vla.training.imagination import gradient_chain
+
+                out = actor_loss(model, actor, critic, start, trainer.config)
+                chain = gradient_chain(out["loss"], out, actor)
+                self.fail(f"actor gradient was zero at step {step}; "
+                          f"gradient chain: {chain}")
             self.assertTrue(np.isfinite(metrics["critic_loss"]))
 
         # The world model is frozen throughout the actor optimisation.
