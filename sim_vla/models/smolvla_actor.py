@@ -151,6 +151,14 @@ class SmolVLAActor(nn.Module):
                 f"tokens; state_token_mode={self.state_token_mode!r} on this "
                 f"checkpoint needs {expected}")
 
+        # The pretrained stack decides the device. It arrives already placed
+        # -- from_pretrained does not necessarily leave it on CPU -- while a
+        # freshly built adapter is wherever torch defaults to, and the two
+        # meet inside an embedding lookup that reports "index is on cpu,
+        # different from other tensors on cuda". Aligning here means a caller
+        # never has to know which way round it was.
+        self.adapter.to(self.device)
+
         self.instruction = str(instruction)
         self.tokenizer_path = ""
         self._lang_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
@@ -162,6 +170,11 @@ class SmolVLAActor(nn.Module):
             self.frozen["model"] = freeze(self.model)
             if train_expert:
                 self.frozen["thawed_expert"] = -self._thaw_expert()
+
+    @property
+    def device(self) -> torch.device:
+        """Where the pretrained weights live. Everything else follows them."""
+        return next(self.model.parameters()).device
 
     # ------------------------------------------------------------- expert set
     def _expert_parameters(self) -> List[nn.Parameter]:
@@ -195,13 +208,14 @@ class SmolVLAActor(nn.Module):
         return count
 
     # ------------------------------------------------------------- language
-    def language(self, text: str, batch: int, device) -> Tuple[Any, Any]:
+    def language(self, text: str, batch: int, device=None) -> Tuple[Any, Any]:
         """Tokenize the fixed instruction once and reuse it.
 
         The instruction does not change within a task, so tokenizing it per
         forward pass is pure overhead; the cache is keyed by the text so a
         second task in the same process cannot inherit the first one's tokens.
         """
+        device = self.device
         key = f"{text}|{device}"
         if key not in self._lang_cache:
             tokenizer, path = resolve_attr(
@@ -225,12 +239,12 @@ class SmolVLAActor(nn.Module):
         several conditionings at once, and a cache on ``self`` would have them
         overwrite each other.
         """
+        features = features.to(self.device)
         token = self.adapter(features)                     # (B, 1, token_dim)
         batch = token.shape[0]
-        device = token.device
         lang_tokens, lang_masks = self.language(
             self.instruction if instruction is None else str(instruction),
-            batch, device)
+            batch)
 
         state = token.squeeze(-2)
         if self.state_token_mode == "state_proj":

@@ -97,8 +97,9 @@ class TestConditioning(unittest.TestCase):
         from sim_vla.models.smolvla_actor import SmolVLAActor
 
         loaded = load()
-        wrong = LatentAdapter(feature_dim=64,
-                              token_dim=int(model_facts(loaded)["vlm_hidden_size"]) + 1)
+        wrong = LatentAdapter(
+            feature_dim=64,
+            token_dim=int(model_facts(loaded)["vlm_hidden_size"]) + 1)
         with self.assertRaises(PretrainedError):
             SmolVLAActor(loaded, wrong, action_dim=8)
 
@@ -107,7 +108,7 @@ class TestConditioning(unittest.TestCase):
         for width in (BASELINE_FEATURE, GRAPH_FEATURE):
             with self.subTest(feature_dim=width):
                 actor, _facts = build_actor(width)
-                cond = actor.condition(torch.randn(2, width))
+                cond = actor.condition(torch.randn(2, width, device=actor.device))
                 self.assertIn("past_key_values", cond)
                 self.assertIn("prefix_pad_masks", cond)
                 self.assertEqual(cond["prefix_pad_masks"].shape[0], 2)
@@ -117,12 +118,35 @@ class TestConditioning(unittest.TestCase):
     def test_action_padding_matches_the_checkpoint(self):
         torch = require_torch()
         actor, facts = build_actor(BASELINE_FEATURE)
-        padded = actor.pad_actions(torch.randn(2, actor.chunk_size, 8))
+        padded = actor.pad_actions(
+            torch.randn(2, actor.chunk_size, 8, device=actor.device))
         self.assertEqual(padded.shape[-1], int(facts["max_action_dim"]))
         self.assertTrue(torch.all(padded[..., 8:] == 0))
-        mask = actor.action_dim_mask()
+        mask = actor.action_dim_mask(actor.device)
         self.assertEqual(int(mask.sum()), 8)
         self.assertEqual(mask.numel(), int(facts["max_action_dim"]))
+
+
+class TestDevicePlacement(unittest.TestCase):
+    def test_adapter_is_moved_to_the_pretrained_weights(self):
+        """A CPU adapter and a CUDA policy meet inside an embedding lookup.
+
+        The failure is "index is on cpu, different from other tensors on
+        cuda:0", raised from the token embedding -- which names neither the
+        adapter nor the policy.
+        """
+        require_torch()
+        actor, _ = build_actor(BASELINE_FEATURE)
+        weights = next(actor.model.parameters()).device
+        for parameter in actor.adapter.parameters():
+            self.assertEqual(parameter.device.type, weights.type)
+
+    def test_condition_accepts_features_from_elsewhere(self):
+        torch = require_torch()
+        actor, _ = build_actor(BASELINE_FEATURE)
+        # A world model on another device should not be the caller's problem.
+        cond = actor.condition(torch.randn(2, BASELINE_FEATURE, device="cpu"))
+        self.assertEqual(cond["state_token"].device.type, actor.device.type)
 
 
 class TestFlowIntegration(unittest.TestCase):
@@ -134,8 +158,9 @@ class TestFlowIntegration(unittest.TestCase):
         for width in (BASELINE_FEATURE, GRAPH_FEATURE):
             with self.subTest(feature_dim=width):
                 actor, _ = build_actor(width)
-                cond = actor.condition(torch.randn(2, width))
-                actions = torch.randn(2, actor.chunk_size, actor.action_dim)
+                cond = actor.condition(torch.randn(2, width, device=actor.device))
+                actions = torch.randn(2, actor.chunk_size, actor.action_dim,
+                                      device=actor.device)
                 loss, metrics = flow_matching_loss(
                     actor.velocity_fn(), actions, cond)
                 self.assertTrue(torch.isfinite(loss), metrics)
@@ -166,10 +191,11 @@ class TestFlowIntegration(unittest.TestCase):
                                                  sample_actions)
 
         actor, _ = build_actor(GRAPH_FEATURE)
-        cond = actor.condition(torch.randn(2, GRAPH_FEATURE))
+        cond = actor.condition(torch.randn(2, GRAPH_FEATURE, device=actor.device))
         chunk = sample_actions(
             actor.velocity_fn(), cond, batch=2, chunk=actor.chunk_size,
-            dim=actor.action_dim, steps=2, differentiable=True)
+            dim=actor.action_dim, steps=2, differentiable=True,
+            device=actor.device)
         self.assertEqual(tuple(chunk.shape),
                          (2, actor.chunk_size, actor.action_dim))
         self.assertTrue(torch.isfinite(chunk).all())

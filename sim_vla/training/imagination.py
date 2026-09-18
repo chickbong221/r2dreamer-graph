@@ -74,8 +74,14 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
             chunk = sample_actions(
                 actor.velocity_fn(), cond, batch=batch,
                 chunk=actor.chunk_size, dim=actor.action_dim,
-                steps=int(flow_steps), device=feat.device, dtype=feat.dtype,
+                steps=int(flow_steps),
+                # The actor's device, not the feature's: condition() moves the
+                # feature to where the pretrained weights are, and the noise
+                # has to start there too.
+                device=getattr(actor, "device", feat.device), dtype=feat.dtype,
                 differentiable=True)
+            # Back to the world model's device for the next img_step.
+            chunk = chunk.to(feat.device)
             # The first action of the chunk is the one this transition uses,
             # which matches how the policy is executed online.
             action = chunk[:, 0]
