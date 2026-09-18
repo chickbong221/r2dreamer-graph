@@ -47,17 +47,24 @@ def load():
     return load._cached
 
 
-def build_actor(feature_dim: int, action_dim: int = 8):
+def build_actor(feature_dim: int, action_dim: int = 8,
+                state_token_mode: str = "embedding"):
     from sim_vla.models.latent_adapter import LatentAdapter
     from sim_vla.models.pretrained import model_facts
     from sim_vla.models.smolvla_actor import SmolVLAActor
 
     loaded = load()
     facts = model_facts(loaded)
-    adapter = LatentAdapter(feature_dim=feature_dim,
-                            token_dim=int(facts["vlm_hidden_size"]), hidden=256)
+    # The token width is decided by the mode: embed_prefix always projects, so
+    # "embedding" hands it a vlm_hidden_size token past an identity and
+    # "state_proj" hands it a max_state_dim one for the real projection.
+    token_dim = int(facts["vlm_hidden_size"] if state_token_mode == "embedding"
+                    else facts["max_state_dim"])
+    adapter = LatentAdapter(feature_dim=feature_dim, token_dim=token_dim,
+                            hidden=256)
     actor = SmolVLAActor(loaded, adapter, action_dim=action_dim,
-                         instruction="pick up the cube")
+                         instruction="pick up the cube",
+                         state_token_mode=state_token_mode)
     return actor, facts
 
 
@@ -125,6 +132,44 @@ class TestConditioning(unittest.TestCase):
         mask = actor.action_dim_mask(actor.device)
         self.assertEqual(int(mask.sum()), 8)
         self.assertEqual(mask.numel(), int(facts["max_action_dim"]))
+
+
+class TestStateTokenModes(unittest.TestCase):
+    """Both ways of filling SmolVLA's state slot, against the real model.
+
+    embed_prefix calls state_proj unconditionally: a 960-wide token meets a
+    32->960 Linear and fails with "mat1 and mat2 shapes cannot be multiplied".
+    "embedding" mode steps over that projection for the call; "state_proj"
+    mode feeds it a 32-wide token instead.
+    """
+
+    def test_state_proj_mode_uses_the_real_projection(self):
+        torch = require_torch()
+        actor, facts = build_actor(BASELINE_FEATURE,
+                                   state_token_mode="state_proj")
+        self.assertEqual(actor.adapter.token_dim, int(facts["max_state_dim"]))
+        cond = actor.condition(
+            torch.randn(2, BASELINE_FEATURE, device=actor.device))
+        self.assertIn("past_key_values", cond)
+
+    def test_embedding_mode_steps_over_the_projection(self):
+        torch = require_torch()
+        actor, facts = build_actor(BASELINE_FEATURE,
+                                   state_token_mode="embedding")
+        self.assertEqual(actor.adapter.token_dim,
+                         int(facts["vlm_hidden_size"]))
+        cond = actor.condition(
+            torch.randn(2, BASELINE_FEATURE, device=actor.device))
+        self.assertIn("past_key_values", cond)
+
+    def test_the_projection_is_restored_after_the_call(self):
+        """The swap is for the duration of embed_prefix and nothing longer."""
+        torch = require_torch()
+        actor, _ = build_actor(BASELINE_FEATURE, state_token_mode="embedding")
+        before = actor.model.state_proj
+        actor.condition(torch.randn(2, BASELINE_FEATURE, device=actor.device))
+        self.assertIs(actor.model.state_proj, before)
+        self.assertTrue(hasattr(actor.model.state_proj, "in_features"))
 
 
 class TestDevicePlacement(unittest.TestCase):

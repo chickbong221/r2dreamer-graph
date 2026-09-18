@@ -24,14 +24,21 @@ prefix inside the integration loop would be correct and ten times slower.
 over.** SmolVLA's prefix is images, language, then one state token projected by
 ``state_proj``. Here the observation has already been through the world model,
 so no images are supplied and the adapter produces the state slot directly.
-``state_token_mode`` decides at what width:
+``embed_prefix`` always calls ``state_proj(state)`` -- there is no path through
+it that takes an already-projected embedding -- so ``state_token_mode`` decides
+how that is handled:
 
-``embedding`` (default) the adapter emits ``vlm_hidden_size`` and ``state_proj``
-    is bypassed. The world-model feature is thousands of dimensions wide and
-    ``state_proj`` takes 32, so routing through it would put a 32-dimensional
-    bottleneck between the world model and the policy.
-``state_proj`` the adapter emits ``max_state_dim`` and the frozen projection is
-    used. Keeps the pretrained mapping, at that bottleneck.
+``embedding`` (default) the adapter emits ``vlm_hidden_size`` and
+    ``state_proj`` is swapped for an identity **for the duration of the
+    call**. The prefix is still built by ``embed_prefix``, so the token
+    ordering, the padding masks and the position ids are the pretrained ones;
+    only the projection is stepped over. Worth the small trick: ``state_proj``
+    takes 32 inputs, and routing a 4000-wide world-model feature through it
+    would put a 32-dimensional bottleneck between the world model and the
+    policy, which is most of what the world model is for.
+``state_proj`` the adapter emits ``max_state_dim`` and the frozen projection
+    runs normally. No swap, at that bottleneck. The conservative choice, and
+    the one to fall back to if the swap ever misbehaves.
 
 Actions are padded to ``max_action_dim`` (32 in the released checkpoint) before
 ``action_in_proj`` and sliced back to the task's width after
@@ -45,6 +52,7 @@ reason conditioning it works.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -246,14 +254,35 @@ class SmolVLAActor(nn.Module):
             self.instruction if instruction is None else str(instruction),
             batch)
 
+        # Handed over un-projected either way: in "state_proj" mode
+        # embed_prefix's own projection consumes it, and in "embedding" mode
+        # that projection is an identity for the call.
         state = token.squeeze(-2)
-        if self.state_token_mode == "state_proj":
-            state = self.model.state_proj(state)
         embs, pad_masks, att_masks = self._embed_prefix(
             lang_tokens, lang_masks, state)
         past_key_values = self._prefix_cache(embs, pad_masks, att_masks)
         return {"prefix_pad_masks": pad_masks, "past_key_values": past_key_values,
                 "state_token": token, "batch": batch}
+
+    @contextlib.contextmanager
+    def _state_projection(self):
+        """Step over ``state_proj`` when the adapter already emits its output.
+
+        ``embed_prefix`` projects unconditionally, so a token that is already
+        ``vlm_hidden_size`` wide has to meet an identity there or it hits a
+        ``mat1 and mat2 shapes cannot be multiplied (2x960 and 32x960)``.
+        Swapped only for the call, and restored in a finally: the module is
+        frozen, so nothing about it changes except what runs during the prefix.
+        """
+        if self.state_token_mode != "embedding":
+            yield
+            return
+        original = self.model.state_proj
+        self.model.state_proj = nn.Identity()
+        try:
+            yield
+        finally:
+            self.model.state_proj = original
 
     def _embed_prefix(self, lang_tokens, lang_masks, state
                       ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -264,9 +293,10 @@ class SmolVLAActor(nn.Module):
         tower would be encoding the same frame twice.
         """
         try:
-            return self.model.embed_prefix(
-                images=[], img_masks=[], lang_tokens=lang_tokens,
-                lang_masks=lang_masks, state=state)
+            with self._state_projection():
+                return self.model.embed_prefix(
+                    images=[], img_masks=[], lang_tokens=lang_tokens,
+                    lang_masks=lang_masks, state=state)
         except TypeError as exc:
             raise PretrainedError(
                 "embed_prefix rejected the imageless call "
