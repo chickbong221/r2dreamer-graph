@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
+
 from .common import require_torch
 
 # Widths standing in for a baseline (h, z) and a graph arm (h, z, g). The
@@ -256,6 +258,105 @@ class TestFlowIntegration(unittest.TestCase):
         self.assertGreater(report["parameters_trainable"], 0)
         self.assertLess(report["parameters_trainable"],
                         report["parameters_total"])
+
+
+class TestChunkSynchronisation(unittest.TestCase):
+    """The pretrained stack reads its own ``config.chunk_size``.
+
+    Setting only the wrapper's copy gave a policy supervised on one horizon
+    and predicting another, with nothing to show for it but a loss that
+    descended.
+    """
+
+    def test_the_checkpoint_value_is_taken_by_default(self):
+        require_torch()
+        actor, facts = build_actor(BASELINE_FEATURE)
+        self.assertEqual(actor.chunk_size, facts["chunk_size"])
+        self.assertEqual(int(actor.model.config.chunk_size), actor.chunk_size)
+
+    def test_an_override_reaches_the_model_config(self):
+        require_torch()
+        from sim_vla.models.latent_adapter import LatentAdapter
+        from sim_vla.models.pretrained import model_facts
+        from sim_vla.models.smolvla_actor import SmolVLAActor
+
+        loaded = load()
+        facts = model_facts(loaded)
+        wanted = max(int(facts["chunk_size"]) // 2, 1)
+        adapter = LatentAdapter(feature_dim=BASELINE_FEATURE,
+                                token_dim=int(facts["vlm_hidden_size"]),
+                                hidden=256)
+        actor = SmolVLAActor(loaded, adapter, action_dim=8,
+                             chunk_size=wanted, instruction="x")
+        try:
+            self.assertEqual(actor.chunk_size, wanted)
+            self.assertEqual(int(actor.model.config.chunk_size), wanted)
+            self.assertLessEqual(int(actor.model.config.n_action_steps), wanted)
+        finally:
+            # Restore, because load() caches the policy for the process.
+            actor._synchronise_chunk(int(facts["chunk_size"]))
+
+
+class TestRealSmokeRun(unittest.TestCase):
+    """A real forward and backward through the pretrained expert, and a short
+    recurrent inference run driving it.
+
+    A DummyExpert test proves the plumbing; it does not prove the pretrained
+    integration works. This does, on the real weights, in a handful of steps.
+    """
+
+    def test_forward_backward_updates_only_the_trainable_set(self):
+        torch = require_torch()
+        from sim_vla.models.flow_sampler import flow_matching_loss
+
+        actor, _ = build_actor(BASELINE_FEATURE)
+        feat = torch.randn(2, BASELINE_FEATURE, device=actor.device)
+        cond = actor.condition(feat)
+        targets = torch.zeros(2, actor.chunk_size, actor.action_dim,
+                              device=actor.device)
+        torch.manual_seed(0)
+        loss, _metrics = flow_matching_loss(actor.velocity_fn(), targets, cond)
+        loss.backward()
+
+        got = [n for n, p in actor.named_parameters()
+               if p.grad is not None and float(p.grad.abs().sum()) > 0]
+        self.assertTrue(any("adapter" in n for n in got),
+                        "no gradient reached the adapter")
+        frozen_with_grad = [n for n, p in actor.named_parameters()
+                            if not p.requires_grad and p.grad is not None]
+        self.assertFalse(frozen_with_grad,
+                         f"frozen parameters accumulated gradients: "
+                         f"{frozen_with_grad[:5]}")
+        for parameter in actor.parameters():
+            parameter.grad = None
+
+    def test_short_recurrent_inference_run(self):
+        torch = require_torch()
+        from sim_vla.tests.common import fake_batch, obs_shapes, \
+            small_model_config
+        from sim_vla.models.world_model import build_world_model
+        from sim_vla.training.online import LatentPolicy
+        from sim_vla.tests.test_inference import FakeEnv, coordinates
+
+        torch.manual_seed(0)
+        _cfg, model_cfg = small_model_config(False)
+        batch = fake_batch(graph_enabled=False)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=False)
+        actor, _ = build_actor(model.feature_dim)
+        actor.to("cpu")
+        policy = LatentPolicy(model, actor, device="cpu",
+                              coords=coordinates(), execute=1)
+        policy.reset()
+        env = FakeEnv(steps=3)
+        obs = env.reset(0)
+        for _ in range(3):
+            action = policy(obs)
+            self.assertEqual(action.shape, (8,))
+            self.assertTrue(np.isfinite(action).all())
+            np.testing.assert_allclose(policy._prev_action, action, atol=0)
+            obs = env.step(action)["obs"]
+        self.assertEqual(len(env.commands), 3)
 
 
 if __name__ == "__main__":

@@ -45,9 +45,25 @@ class ValueCritic(nn.Module):
         # the value the same way.
         return self.net(feat).mode().squeeze(-1)
 
-    def target_value(self, feat: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            return self.target(feat).mode().squeeze(-1)
+    def target_value(self, feat: torch.Tensor, *, detach: bool = False
+                     ) -> torch.Tensor:
+        """The slow head's value, differentiable with respect to ``feat``.
+
+        "Frozen" means the target's *parameters* do not move -- they are
+        excluded from every optimizer and updated only by
+        :meth:`update_target`. It does not mean the value is a constant. The
+        actor objective bootstraps off this at the horizon, and the last
+        imagined action reaches the return through nothing else: wrapping this
+        in ``no_grad`` left that action with no gradient at all, which looks
+        like a converged policy rather than a severed graph.
+
+        ``detach=True`` is for inference and diagnostics, where no graph is
+        wanted.
+        """
+        if detach:
+            with torch.no_grad():
+                return self.target(feat).mode().squeeze(-1)
+        return self.target(feat).mode().squeeze(-1)
 
     def loss(self, feat: torch.Tensor, returns: torch.Tensor,
              mask: Optional[torch.Tensor] = None) -> torch.Tensor:

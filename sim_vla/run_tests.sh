@@ -34,7 +34,7 @@ cd "$(dirname "$0")/.." || exit 1
 STAGE="$PY -m sim_vla.tests.run_stage"
 
 STAGES=(
-  "1|data contract, sequence alignment, graph isolation|$PY -m unittest tests.test_sim_vla_data tests.test_sim_vla_pipeline"
+  "1|data contract, sequence alignment, graph isolation|$PY -m unittest tests.test_sim_vla_data tests.test_sim_vla_pipeline tests.test_sim_vla_alignment"
   "2|collected datasets, against their own metadata|$PY -m sim_vla.data.audit --root $DEMOS --graph"
   "3|world model builds and trains in both arms|$STAGE sim_vla.tests.test_world_model"
   "4|real pretrained SmolVLA, adapter, gradient flow|$STAGE sim_vla.tests.test_pretrained sim_vla.tests.test_adapter"
@@ -43,6 +43,8 @@ STAGES=(
   "7|flow sampler gradients and latent imagination|$STAGE sim_vla.tests.test_imagination"
   "8|critics, actor update, checkpoint write and resume|$STAGE sim_vla.tests.test_online sim_vla.tests.test_checkpoint"
   "9|progress shaping and its graph dependency|$STAGE sim_vla.tests.test_progress"
+  "10|imagined timeline, bootstrap gradient, gradient policy|$STAGE sim_vla.tests.test_timeline"
+  "11|recurrent inference and one turn of the online loop|$STAGE sim_vla.tests.test_inference"
 )
 
 passed=0

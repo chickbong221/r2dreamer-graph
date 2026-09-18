@@ -21,6 +21,7 @@ is clipping, and the statistics are where that shows up first.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -108,6 +109,29 @@ class Normalizer:
             return arr * np.maximum(std, EPS) + mean
         span = np.maximum(high - low, EPS)
         return (arr + 1.0) * 0.5 * span + low
+
+    def statistics_fingerprint(self) -> str:
+        """A digest of the fitted numbers themselves.
+
+        ``identity`` says which dataset these came from, which is not the same
+        question. Two runs over the same episodes with a different fitter, a
+        different field set or a different mode share an identity and produce
+        weights that cannot be read against each other, so the numbers get
+        their own fingerprint.
+        """
+        payload = json.dumps(
+            {"mode": self.mode,
+             "fields": {name: asdict(self.fields[name])
+                        for name in sorted(self.fields)}},
+            sort_keys=True, default=float)
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    def descriptor(self) -> Dict[str, Any]:
+        """What a checkpoint has to record to be interpretable later."""
+        return {"mode": self.mode,
+                "fields": sorted(self.fields),
+                "statistics": self.statistics_fingerprint(),
+                "dataset": dict(self.identity)}
 
     def out_of_range(self, name: str, values: np.ndarray) -> np.ndarray:
         """Per-row flag: this value sits outside what was demonstrated."""

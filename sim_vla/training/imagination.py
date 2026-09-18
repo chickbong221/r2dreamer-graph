@@ -85,11 +85,26 @@ def flatten_start(post, graph_enabled: bool) -> tuple:
 
 def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
             instruction: Optional[torch.Tensor] = None,
-            action_fn: Optional[Callable] = None) -> Dict[str, Any]:
+            action_fn: Optional[Callable] = None, coords=None,
+            differentiable: bool = True) -> Dict[str, Any]:
     """Roll the latent dynamics forward under the actor.
 
     ``action_fn`` overrides how an action is produced from a feature, which is
     what lets a test drive this with a known policy rather than a flow sampler.
+
+    ``differentiable`` is the gradient policy for the whole rollout, threaded
+    into the flow sampler. It has to be explicit: ``sample_actions`` re-enables
+    grad internally, so an enclosing ``torch.no_grad()`` does not stop an
+    expert graph being built, and the returned tensors then keep it alive.
+    Critic targets and inference pass False; the actor update passes True.
+
+    ``coords`` applies the same transformation the online policy applies: the
+    sampled action is in normalized coordinates, it is clipped to the
+    environment's bounds there (straight-through, so a saturated dimension
+    still receives a gradient), and it is mapped into dynamics coordinates
+    before the RSSM consumes it. Without this, imagination steps the dynamics
+    with a value the environment would never accept, in units the world model
+    was not trained on.
     """
     from ..models.flow_sampler import sample_actions
 
@@ -119,20 +134,29 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
                 # feature to where the pretrained weights are, and the noise
                 # has to start there too.
                 device=getattr(actor, "device", feat.device), dtype=feat.dtype,
-                differentiable=True)
+                differentiable=differentiable)
             # Back to the world model's device for the next img_step.
             chunk = chunk.to(feat.device)
             # The first action of the chunk is the one this transition uses,
-            # which matches how the policy is executed online.
+            # which matches how the policy is executed online: LatentPolicy
+            # replans every ``execute`` steps and this replans every step, so
+            # the two agree exactly at the default execute=1. Anything larger
+            # is rejected before training rather than approximated here.
             action = chunk[:, 0]
+        # What the environment would actually run, in the actor's coordinates.
+        executed = coords.executed(action) if coords is not None else action
         feats.append(feat)
-        actions.append(action)
+        actions.append(executed)
+        # The RSSM reads dynamics coordinates. Converting here rather than
+        # inside the RSSM keeps rssm.py exactly as the simulator has it.
+        stepped = (coords.to_dynamics(executed) if coords is not None
+                   else executed)
         # img_step advances the semantic state itself -- it calls
         # semantic_prior internally and returns (stoch, deter, sem, sem_logit)
         # when the branch is on. Unpacking two values and then calling
         # semantic_prior again would advance g twice per transition, which is
         # a different rollout than the one the prior was trained for.
-        result = world_model.rssm.img_step(stoch, deter, action, sem)
+        result = world_model.rssm.img_step(stoch, deter, stepped, sem)
         if graph_enabled:
             stoch, deter, sem, _sem_logit = result
         else:

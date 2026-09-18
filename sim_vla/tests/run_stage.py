@@ -36,6 +36,8 @@ REQUIRED = {
     "sim_vla.tests.test_imitation",      # the flow loss actually descends
     "sim_vla.tests.test_checkpoint",     # resume, and the arm refusal
     "sim_vla.tests.test_progress",       # the shaping arithmetic
+    "sim_vla.tests.test_timeline",       # which index a reward is read at
+    "sim_vla.tests.test_inference",      # the recurrence, and one online turn
 }
 
 

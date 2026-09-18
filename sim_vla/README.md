@@ -97,10 +97,69 @@ capacity difference.
 ## Stages
 
 ```
-demonstrations ──► 1A world-model pretraining (per arm, separate checkpoints)
+demonstrations ──► 1A world-model pretraining (per arm, never shared)
                    └─► 1B adapter + SmolVLA action expert, frozen world model
                        └─► 2 online model-based RL
 ```
+
+### The action timeline
+
+A window's row `t` holds the observation `o_t`. What sits beside it:
+
+| array | is | read by |
+|---|---|---|
+| `action` | `a_(t-1)`, executed before arriving at `o_t` | `RSSM.obs_step` |
+| `action_target` | `a_t`, executed *at* `o_t` | the actor's flow loss |
+| `reward` | `r_(t-1)`, earned arriving at `o_t` | the reward head |
+
+Because the reward head predicts the reward that *arrived*, the reward earned by
+imagined transition `t` is the **successor's**: `heads["reward"][1:]`, and the
+same shift for continuation. Reading `[:-1]` takes a reward no imagined action
+caused and drops the one the last action earned.
+
+Two masks, because they answer two questions. `action_valid` is *availability* —
+a real action was loaded at this row. `loss_mask` is *eligibility* — this row is
+scored and may be conditioned on. The final row of every window has no action of
+its own unless action-only lookahead supplied one.
+
+A window has **two axes**. Observation-axis arrays have `burn_in + length + 1`
+rows; `action_target` and `action_valid` live on a *target axis* that is
+`lookahead` rows longer. That is what lets the last eligible row of a full
+interior window still be supervised on a whole chunk — a full interior window
+has no padding, so squeezing the lookahead into the observation axis left one
+slot no matter how long the chunk was. The lookahead is `chunk_size`, not
+`chunk_size - 1`: the last eligible row is the window's final observation, and
+the action taken *there* is already the first lookahead action.
+
+### Action units
+
+| coordinates | where |
+|---|---|
+| **raw** | the dataset, the replay, and `env.step` |
+| **normalized** | the actor: flow targets, sampled actions |
+| **dynamics** | `RSSM.obs_step` / `img_step` only |
+
+`rssm.py` projects any action outside the unit ball onto it, so standardized 2
+and 4 would reach the dynamics as the same value. `rssm.py` is left untouched;
+`sim_vla/models/action_space.py` maps normalized to dynamics with
+`tanh(x / 3)` instead, which is injective, differentiable and always inside the
+ball — so the projection is the identity, as it is for the original Dreamer
+pipeline's environment-unit actions.
+
+Clipping to the controller's bounds happens once, in the actor's coordinates,
+inside the policy — so the command sent to the environment is the one fed back
+as the next `a_(t-1)`. It is straight-through: clipped forward, identity
+backward, because a saturated dimension is the one the actor most needs pushing
+back from.
+
+### Stage handoff
+
+The three stages run in **one process** and pass Python objects, not files:
+Stage 1B trains against the very world model Stage 1A just produced, and
+Stage 2 continues with that model and that actor. **Checkpoints are off by
+default** — nothing is written and nothing is reloaded. `--save-checkpoints`
+turns writing on for a run long enough that losing it would matter; it changes
+what is persisted, never what is trained.
 
 ## Running it
 
@@ -136,10 +195,19 @@ strength of a lightweight test while its integration skipped. A checkpoint that
 loads but whose interface has moved **fails**; only an unreachable checkpoint
 skips.
 
-Training is separate and the suite never invokes it:
+Training is separate and the suite never invokes it. All three stages, one
+process, nothing written:
 
 ```bash
-python -m sim_vla.training.pretrain_world_model --task pickcube --experiment graph --steps 50000
+python -m sim_vla.training.pipeline --task pickcube --experiment graph --world-steps 50000 --imitation-steps 20000 --online-steps 200000
+```
+
+Add `--save-checkpoints` to keep each stage's weights under `--out`. A single
+stage can still be run on its own, but with checkpoints off it trains a model
+and then drops it, which it says on startup:
+
+```bash
+python -m sim_vla.training.pretrain_world_model --task pickcube --experiment graph --steps 50000 --save-checkpoints
 ```
 
 ## Layout

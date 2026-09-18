@@ -142,7 +142,14 @@ class SmolVLAActor(nn.Module):
         from .pretrained import model_facts
 
         self.facts = model_facts(loaded)
+        # The pretrained stack reads its *own* config.chunk_size when it builds
+        # the action attention mask and slices the expert's output. Setting
+        # only the wrapper's copy gave a policy that was supervised on one
+        # horizon and predicted another, with no error anywhere: the loss
+        # descends, the chunks just do not line up. So the override is applied
+        # to the config the model actually reads, and then verified.
         self.chunk_size = int(chunk_size or self.facts["chunk_size"])
+        self._synchronise_chunk(self.chunk_size)
         self.flow_steps = int(flow_steps or self.facts["num_steps"])
         self.max_action_dim = int(self.facts["max_action_dim"])
         self.vlm_hidden = int(self.facts["vlm_hidden_size"])
@@ -178,6 +185,53 @@ class SmolVLAActor(nn.Module):
             self.frozen["model"] = freeze(self.model)
             if train_expert:
                 self.frozen["thawed_expert"] = -self._thaw_expert()
+
+    def _synchronise_chunk(self, chunk: int) -> None:
+        """Push the requested chunk into every config the stack reads.
+
+        ``VLAFlowMatching`` and the policy wrapping it both hold a config, and
+        which of them is consulted differs by call path. Both are set, and then
+        read back: a config object that silently rejects the assignment (a
+        frozen dataclass, a property without a setter) would otherwise leave
+        the wrapper and the model disagreeing.
+        """
+        chunk = int(chunk)
+        configs = []
+        for owner in (self.model, self.policy, self.loaded):
+            config = getattr(owner, "config", None)
+            if config is not None and config not in configs:
+                configs.append(config)
+        for config in configs:
+            if getattr(config, "chunk_size", None) is None:
+                continue
+            if int(config.chunk_size) == chunk:
+                continue
+            try:
+                config.chunk_size = chunk
+            except Exception as exc:                       # noqa: BLE001
+                raise PretrainedError(
+                    f"cannot set chunk_size={chunk} on {type(config).__name__}: "
+                    f"{exc}. The pretrained checkpoint predicts "
+                    f"{self.facts['chunk_size']} actions per call and uses that "
+                    "value for its own attention mask and output slicing, so "
+                    "an unsynchronised override is not supported. Leave "
+                    "actor.chunk_size at 0 to take the checkpoint's value."
+                ) from exc
+            # n_action_steps is how many of the chunk the policy would execute.
+            # It can never exceed the chunk.
+            steps = getattr(config, "n_action_steps", None)
+            if steps is not None and int(steps) > chunk:
+                config.n_action_steps = chunk
+
+        disagree = {type(c).__name__: int(c.chunk_size) for c in configs
+                    if getattr(c, "chunk_size", None) is not None
+                    and int(c.chunk_size) != chunk}
+        if disagree:
+            raise PretrainedError(
+                f"chunk_size={chunk} was requested but {disagree} still "
+                "disagree after assignment; the pretrained stack would build "
+                "its attention mask for a different horizon than the one this "
+                "policy is supervised on.")
 
     @property
     def device(self) -> torch.device:

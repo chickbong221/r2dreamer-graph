@@ -13,11 +13,41 @@ simulator actor keeps its own loss; this is a different objective and it is the
 same for both arms, so a difference between them is a difference in the state
 and not in the update rule.
 
-During the actor update the world-model and critic *parameters* are frozen and
-their outputs are not detached -- the gradient has to pass through them to
-reach the action. :func:`freeze_parameters` is the context manager that makes
-that distinction operational, and a test asserts the frozen parameters are
-unchanged afterwards.
+The timeline
+------------
+
+An imagined rollout of horizon ``H`` produces ``H + 1`` features
+``f_0 .. f_H`` and ``H`` actions ``a_0 .. a_(H-1)``, where ``a_t`` takes
+``s_t`` to ``s_(t+1)``.
+
+The reward head is trained -- in ``world_model.loss`` -- against
+``batch["reward"]``, which the window layout defines as ``r_(t-1)``: the reward
+earned by the transition that *arrived* at ``o_t``. So the head at a state
+predicts the reward that got there, not the reward that leaves it. The reward
+belonging to transition ``t`` is therefore read at the **successor**::
+
+    reward[t]  ==  heads["reward"][t + 1]        for t in 0 .. H-1
+
+which is ``heads["reward"][1:]``. Reading ``[:-1]`` instead took the reward
+that preceded the rollout -- a value no imagined action can influence -- and
+dropped the reward earned by the final action, which is the only reward that
+action produces. The same shift applies to continuation: the flag at ``f_t``
+describes the transition that arrived at ``s_t``, so whether transition ``t``
+permits a bootstrap is ``heads["cont"][t + 1]``.
+
+Values line up with states rather than transitions, so they are read at every
+one of the ``H + 1`` features. The bootstrap at the horizon comes from the slow
+target head, whose *parameters* are frozen but whose output stays
+differentiable with respect to its input -- see
+:meth:`~sim_vla.models.critics.ValueCritic.target_value`. The critic regresses
+on ``feat[:-1]``, detached, against those same returns.
+
+Frozen means "parameters do not move", not "outputs are constants": during the
+actor update the world-model and critic parameters are excluded from the
+gradient, but the gradient has to pass *through* their outputs to reach the
+action. :func:`freeze_parameters` is the context manager that makes that
+distinction operational, and a test asserts the frozen parameters are unchanged
+afterwards and accumulate no gradients.
 """
 
 from __future__ import annotations
@@ -58,7 +88,11 @@ class ActorCriticConfig:
     flow_steps: int = 10
     grad_clip: float = 1.0
     critic_warmup: int = 500
-    demo_anchor: float = 0.0        # optional flow loss on demonstrations
+    # Optional flow-matching anchor on demonstrations, mixed into the actor
+    # update. Zero disables it; a nonzero value requires a demonstration
+    # sampler to be supplied, and ActorCriticTrainer refuses the combination
+    # rather than silently ignoring the weight.
+    demo_anchor: float = 0.0
     progress_beta: float = 0.0
 
 
@@ -69,14 +103,27 @@ def critic_loss(critic, feat: torch.Tensor, returns: torch.Tensor
 
 
 def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
-               *, instruction=None, progress_reward=None) -> Dict[str, Any]:
-    """Imagine under the policy and maximise the return it earns."""
+               *, instruction=None, progress_reward=None, coords=None,
+               differentiable: bool = True) -> Dict[str, Any]:
+    """Imagine under the policy and maximise the return it earns.
+
+    ``differentiable=False`` builds no actor graph at all: the flow sampler
+    runs under ``no_grad`` and the rollout is only good for detached critic
+    targets. The previous code wrapped this call in ``torch.no_grad()`` and
+    relied on that, but ``sample_actions`` re-enables grad internally, so a
+    full expert graph was built anyway and then kept alive by the returned
+    tensors.
+    """
     with freeze_parameters(world_model, critic):
         rollout = imagine(world_model, actor, start, config.horizon,
-                          flow_steps=config.flow_steps, instruction=instruction)
+                          flow_steps=config.flow_steps, instruction=instruction,
+                          coords=coords, differentiable=differentiable)
         feat = rollout["feat"]
         heads = imagined_rewards(world_model, feat)
-        reward = heads["reward"][:-1]
+        # Successor-indexed: see the module docstring. reward[t] is the reward
+        # earned by the action that left s_t.
+        reward = heads["reward"][1:]
+        cont = heads["cont"][1:]
         if progress_reward is not None and config.progress_beta:
             # Kept as a separate addend, and logged separately: the evaluation
             # reports environment return, and a shaping term folded in here
@@ -84,11 +131,12 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
             reward = reward + config.progress_beta * progress_reward
         # The live head for the values the actor differentiates through, and
         # the slow target for the bootstrap at the horizon -- which is what the
-        # slow copy exists for.
+        # slow copy exists for. Both stay differentiable with respect to the
+        # feature; only their parameters are frozen.
         value = critic.value(feat)
         value = torch.cat([value[:-1], critic.target_value(feat[-1:])], dim=0)
-        returns = lambda_return(reward, value, heads["cont"][:-1],
-                                config.discount, config.lam)
+        returns = lambda_return(reward, value, cont, config.discount,
+                                config.lam)
         objective = -returns.mean()
     return {
         "loss": objective,
@@ -100,17 +148,27 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
         # objective, so autograd.grad against it always returns None.
         "action_steps": rollout.get("action_steps", []),
         "reward": reward.detach(),
+        "cont": cont.detach(),
     }
 
 
 class ActorCriticTrainer:
     """One optimizer for the policy, one for the critic, one warm-up."""
 
-    def __init__(self, world_model, actor, critic, config: ActorCriticConfig):
+    def __init__(self, world_model, actor, critic, config: ActorCriticConfig,
+                 *, coords=None):
         self.world_model = world_model
         self.actor = actor
         self.critic = critic
         self.config = config
+        self.coords = coords
+        if float(config.demo_anchor):
+            raise NotImplementedError(
+                "ActorCriticConfig.demo_anchor is declared but the anchored "
+                "objective is not implemented: there is no demonstration "
+                "sampler threaded into the actor update. Leave it at 0.0, or "
+                "implement the anchor before switching it on -- a weight that "
+                "is read and never applied is worse than one that is absent.")
         self.actor_opt = torch.optim.AdamW(
             [p for p in actor.parameters() if p.requires_grad],
             lr=config.actor_lr)
@@ -118,7 +176,8 @@ class ActorCriticTrainer:
                                             lr=config.critic_lr)
         self.step = 0
 
-    def update(self, start, *, instruction=None) -> Dict[str, float]:
+    def update(self, start, *, instruction=None, progress_reward=None
+               ) -> Dict[str, float]:
         """Train the critic, then recompute and train the actor.
 
         The critic cannot be stepped while an actor graph that used its
@@ -127,22 +186,26 @@ class ActorCriticTrainer:
         first critic update can produce an exactly zero gradient because the
         distribution heads start flat. The safe order is therefore:
 
-        1. imagine once and update the critic from detached features/returns;
+        1. imagine once, with no actor graph at all, and update the critic from
+           detached features/returns;
         2. update the slow target;
-        3. if warm-up is over, imagine again through the updated, frozen critic
-           and immediately consume that fresh actor graph.
+        3. if warm-up is over, imagine again -- this time differentiably --
+           through the updated, frozen critic, and immediately consume that
+           fresh actor graph.
 
         Recomputing is intentional. Retaining the first graph across the
         critic optimizer step would be invalid even if it happened not to
         raise on a particular PyTorch version.
         """
         self.step += 1
-        # This rollout supplies detached critic targets only. Avoid retaining
-        # a full SmolVLA/world-model graph that can never be used.
+        # This rollout supplies detached critic targets only, so it builds no
+        # actor graph. torch.no_grad() alone would not have been enough:
+        # sample_actions re-enables grad inside it.
         with torch.no_grad():
             critic_out = actor_loss(
                 self.world_model, self.actor, self.critic, start, self.config,
-                instruction=instruction)
+                instruction=instruction, coords=self.coords,
+                differentiable=False)
 
         # Detached inputs and detached targets: this graph belongs only to the
         # critic and can be consumed before a new actor graph is constructed.
@@ -158,6 +221,9 @@ class ActorCriticTrainer:
         metrics = {"return": float(critic_out["returns"].mean()),
                    "reward": float(critic_out["reward"].mean()),
                    "critic_loss": float(closs.detach())}
+        # Dropped before a fresh graph is built, so the detached rollout's
+        # tensors are not kept alive alongside it.
+        del critic_out
 
         warming = self.step <= self.config.critic_warmup
         if warming:
@@ -170,7 +236,8 @@ class ActorCriticTrainer:
             # again.
             out = actor_loss(
                 self.world_model, self.actor, self.critic, start, self.config,
-                instruction=instruction)
+                instruction=instruction, progress_reward=progress_reward,
+                coords=self.coords, differentiable=True)
             trainable = [p for p in self.actor.parameters() if p.requires_grad]
             if not trainable:
                 raise RuntimeError(

@@ -93,11 +93,23 @@ def fake_batch(*, graph_enabled: bool, batch: int = 2, steps: int = 6,
             rng.standard_normal((batch, steps, action)).astype(np.float32)),
         "reward": torch.as_tensor(
             rng.standard_normal((batch, steps, 1)).astype(np.float32)),
+        # a_t, in the actor's coordinates: what the policy is supervised on.
+        # Distinct from "action" (a_(t-1)) on purpose -- a fixture where the
+        # two are equal cannot catch the alignment bug they had.
+        "action_target": torch.as_tensor(
+            rng.standard_normal((batch, steps, action)).astype(np.float32)),
         "is_first": torch.zeros((batch, steps), dtype=torch.bool),
         "is_terminal": torch.zeros((batch, steps), dtype=torch.bool),
         "loss_mask": torch.ones((batch, steps), dtype=torch.bool),
+        "valid": torch.ones((batch, steps), dtype=torch.bool),
+        # Availability, not eligibility: the final row of a window has no
+        # action loaded for it. See sim_vla/data/layout.py.
+        "action_valid": torch.ones((batch, steps), dtype=torch.bool),
+        "reward_valid": torch.ones((batch, steps), dtype=torch.bool),
     }
     out["is_first"][:, 0] = True
+    out["action_valid"][:, -1] = False
+    out["reward_valid"][:, 0] = False
     if graph_enabled:
         for key, high, shape in (
             ("graph_node_ent", 4, (batch, steps, n_max)),

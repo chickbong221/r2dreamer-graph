@@ -98,12 +98,17 @@ def _pad(array: np.ndarray, rows: int) -> np.ndarray:
 
 def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
                 length: Optional[int] = None, burn_in: Optional[int] = None,
-                ) -> Dict[str, np.ndarray]:
+                lookahead: int = 0) -> Dict[str, np.ndarray]:
     """One window's arrays, with its masks and episode flags.
 
     Transition-indexed arrays have ``length`` rows and observation-indexed ones
     have ``length + 1``: the observation each action led to is the next action's
     input, and the final one has no action of its own.
+
+    ``lookahead`` reads up to that many *actions* past the window, still inside
+    the same episode, so a chunked policy can be supervised on a full chunk at
+    the window's last eligible rows. Only actions are read; no observation is
+    extended, so nothing can condition on a future observation.
     """
     length = int(length if length is not None
                  else window.stop - window.start - window.burn_in)
@@ -121,6 +126,16 @@ def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
         prev_action = np.asarray(before["actions"])[-1]
         prev_reward = float(np.asarray(before["rewards"])[-1])
 
+    # Action-only lookahead, stopping at the episode boundary. A window that
+    # already reaches the end of its episode has nothing to look ahead to, and
+    # its target axis is padded and masked instead.
+    lookahead = max(int(lookahead), 0)
+    ahead = None
+    ahead_stop = min(window.stop + lookahead, ref.steps)
+    if ahead_stop > window.stop:
+        ahead = np.asarray(
+            data.read(ref, window.stop, ahead_stop)["actions"])
+
     observations = {key: value for key, value in raw.items()
                     if key not in data.fields.supervision}
     piece = layout.Slice(start=window.start, real=real, burn=window.burn_in,
@@ -130,7 +145,8 @@ def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
         actions=np.asarray(raw["actions"]),
         rewards=np.asarray(raw["rewards"]),
         prev_action=prev_action, prev_reward=prev_reward,
-        piece=piece, length=length, burn_in=burn_in)
+        piece=piece, length=length, burn_in=burn_in, lookahead=lookahead,
+        lookahead_actions=ahead)
 
     # Terminations follow the online env; the recorded flags stay diagnostics.
     out["is_terminal"] = np.zeros_like(out["valid"])
@@ -139,7 +155,7 @@ def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
         incoming = np.concatenate([[False], terminated])[: real + 1]
         out["is_terminal"] = layout._pad_to(
             incoming, out["valid"].shape[0]) & out["valid"]
-    layout.check(out, length, burn_in)
+    layout.check(out, length, burn_in, lookahead)
     return out
 
 
@@ -151,10 +167,16 @@ class SequenceSampler:
     """
 
     def __init__(self, data: DemoDataset, *, length: int = 64, burn_in: int = 8,
-                 stride: Optional[int] = None, seed: int = 0):
+                 stride: Optional[int] = None, seed: int = 0,
+                 lookahead: int = 0):
         self.data = data
         self.length = int(length)
         self.burn_in = int(burn_in)
+        # Set by Stage 1B to ``chunk_size - 1`` once the actor's chunk is
+        # known. Zero means "supervise only what the window loaded", which is
+        # still correctly masked -- lookahead is better supervision, not a
+        # precondition for valid supervision.
+        self.lookahead = int(lookahead)
         self.refs = {ref.episode_id: ref for ref in data.episodes}
         self.windows: List[Window] = [
             window for ref in data.episodes
@@ -168,7 +190,7 @@ class SequenceSampler:
 
     def load(self, window: Window) -> Dict[str, np.ndarray]:
         return load_window(self.data, self.refs[window.episode_id], window,
-                           self.length, self.burn_in)
+                           self.length, self.burn_in, self.lookahead)
 
     def iter_epoch(self, shuffle: bool = True) -> Iterator[Dict[str, np.ndarray]]:
         order = np.arange(len(self.windows))

@@ -35,8 +35,18 @@ def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
                     ) -> Dict[str, Any]:
     """Roll the policy out and report what the task says about it."""
     results: List[EpisodeResult] = []
+    reset_policy = getattr(policy, "reset", None)
+    # A policy that applies the environment's bounds itself returns the command
+    # it already fed back to its own recurrent state; re-clipping it here would
+    # desynchronise the two.
+    bounded = bool(getattr(policy, "bounded", False))
     for index in range(int(episodes)):
         seed = int(seed_start) + index
+        # A recurrent policy carries a state the env reset does not clear.
+        # Without this the second episode starts from the first one's final
+        # latent, which still produces a rollout and still reports a number.
+        if callable(reset_policy):
+            reset_policy()
         obs = env.reset(seed)
         total, clipped, first_success = 0.0, 0, None
         step = 0
@@ -45,7 +55,12 @@ def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
             # Counted, not silently saturated: a policy living on the action
             # bounds is a policy whose normalization is wrong.
             clipped += int(np.any((action < action_low) | (action > action_high)))
-            action = np.clip(action, action_low, action_high)
+            if not bounded:
+                # Only clip for a policy that does not bound itself. Clipping
+                # a LatentPolicy's output here would send the environment a
+                # different command than the one the policy fed back to its own
+                # posterior as a_(t-1), and the recurrence would drift.
+                action = np.clip(action, action_low, action_high)
             out = env.step(action)
             total += float(out["reward"])
             obs = out["obs"]
