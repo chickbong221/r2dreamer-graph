@@ -141,11 +141,53 @@ def build_cfg(overrides: Optional[Mapping[str, Any]] = None, *,
         cfg["episode_length"] = int(episode_length)
         cfg["seed_steps"] = max(1000, int(cfg["num_envs"]) * int(episode_length))
 
-    # ``work_dir`` is a Path in the upstream config and is used for logging
-    # only. Hydra normally supplies it; offline it is the run's output dir and
-    # the caller sets it.
-    cfg.setdefault("work_dir", str(Path.cwd()))
-    return Node(cfg)
+    # What ``parse_cfg`` writes into the ManiSkill blocks. Upstream's
+    # ``make_envs`` reads them and writes the control mode and horizon back,
+    # so they have to exist before an environment is built.
+    for block in ("env_cfg", "eval_env_cfg"):
+        node = dict(cfg.get(block) or {})
+        node["env_id"] = cfg["env_id"]
+        node["obs_mode"] = cfg["obs"]
+        node["reward_mode"] = "normalized_dense"
+        node["sim_backend"] = cfg["env_type"]
+        node.setdefault("partial_reset", False)
+        cfg[block] = node
+    cfg["env_cfg"]["num_envs"] = int(cfg["num_envs"])
+    cfg["eval_env_cfg"]["num_envs"] = int(cfg["num_eval_envs"])
+    cfg["eval_env_cfg"]["num_eval_episodes"] = (
+        int(cfg["eval_episodes_per_env"]) * int(cfg["num_eval_envs"]))
+
+    # ``work_dir`` is a Path in the upstream config -- ``Logger`` does
+    # ``cfg.work_dir / "models"`` -- and is used for logging only. Hydra
+    # normally supplies it; here the caller does.
+    cfg.setdefault("work_dir", Path.cwd())
+    return wrap(cfg)
+
+
+def wrap(cfg: Mapping[str, Any]):
+    """OmegaConf when it is installed, and a plain attribute node otherwise.
+
+    Upstream is written against Hydra's ``DictConfig`` and a couple of places
+    depend on it -- ``Logger`` serialises the whole config through
+    ``OmegaConf.to_container`` when wandb is on. So the real thing is used
+    whenever it is available, with ``allow_objects`` set because ``work_dir``
+    is a ``Path`` and ``obs_shape`` holds tuples.
+
+    :class:`sim_vla.models.model_config.Node` is the fallback, for offline
+    stages and for tests on a machine without omegaconf. It supports attribute
+    access, item access, assignment and ``get`` -- everything upstream's model
+    and agent touch.
+    """
+    try:
+        from omegaconf import OmegaConf
+    except Exception:                                      # noqa: BLE001
+        return Node(dict(cfg))
+    node = OmegaConf.create({})
+    node._set_flag("allow_objects", True)
+    OmegaConf.set_struct(node, False)
+    for key, value in dict(cfg).items():
+        node[key] = value
+    return node
 
 
 def architecture(cfg: Node) -> Dict[str, Any]:
@@ -160,7 +202,16 @@ def architecture(cfg: Node) -> Dict[str, Any]:
         value = cfg.get(key, None)
         if value is None:
             continue
-        out[key] = list(value) if isinstance(value, (list, tuple)) else value
+        # OmegaConf hands back ListConfig rather than list, and a checkpoint
+        # compared against a differently typed but equal value would report a
+        # difference that is not one.
+        if isinstance(value, (bool, int, float, str)):
+            out[key] = value
+        else:
+            try:
+                out[key] = [x for x in value]
+            except TypeError:
+                out[key] = str(value)
     return out
 
 
