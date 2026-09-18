@@ -2,6 +2,7 @@
 logdir/
 *.hydra/
 torch_compile_debug/
+/output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-svla-ps-gp
+#SBATCH --job-name=r2d-svla-pc-gp
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -13,26 +13,25 @@
 # the same default configs/model/_base_.yaml uses for the simulator's own
 # graph arm. Actor/critic state is (h, z, g); the progress head regresses onto
 # SchedulePotential's observed-graph phase (scenegraph/configs/schedules/
-# PlaceSphere-v1.json + subtask_whitelists/PlaceSphere-v1), and beta*(gamma*
-# phi(s') - phi(s)) is added to the imagined advantage during stage 2 only --
-# it is never added to the environment reward that gets reported.
+# PickCube-v1.json + subtask_whitelists/PickCube-v1), and beta*(gamma*phi(s')
+# - phi(s)) is added to the imagined advantage during stage 2 only -- it is
+# never added to the environment reward that gets reported.
 #
-# Compared against slurm_placesphere_baseline.sh's "dreamer" arm at the same
+# Compared against slurm_pickcube_baseline.sh's "dreamer" arm at the same
 # --world-steps/--imitation-steps/--online-steps: that isolates the graph +
 # progress method's effect, since every other setting matches.
 #
-# Needs data/sim_vla_demos/PlaceSphere-v1/demos.h5 -- run
-# slurm_collect_data.sh first. progress_module.preflight() (sim_vla/training/
-# progress.py) checks the schedule, the whitelist directory and the dataset's
-# recorded absolute-token vocabulary before Stage 1A starts, and refuses the
-# run rather than training a head on invented targets if any of them is
-# missing.
+# Needs data/sim_vla_demos/PickCube-v1/demos.h5 -- run slurm_collect_data.sh
+# first. progress_module.preflight() (sim_vla/training/progress.py) checks the
+# schedule, the whitelist directory and the dataset's recorded absolute-token
+# vocabulary before Stage 1A starts, and refuses the run rather than training
+# a head on invented targets if any of them is missing.
 
 echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PlaceSphere-v1, arm=graph_progress (beta=0.05)"
+echo "sim_vla: PickCube-v1, arm=graph_progress (beta=0.05)"
 echo "================================="
 
 # Activate conda
@@ -64,6 +63,14 @@ export VK_ICD_FILENAMES=$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json
 # Move to project directory
 cd $HOME/projects/r2dreamer-graph
 
+# Demos were collected by slurm_collect_data.sh into server 1's own storage,
+# not the repo-relative default (sim_vla/configs/base.yaml: data.root=
+# data/sim_vla_demos). sim_vla.training.pipeline has no --data-root flag, so
+# this symlink is what makes ${data.root}/<EnvId>/${data.name} resolve to the
+# real files.
+mkdir -p data
+ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
+
 export MS_ASSET_DIR=/mnt/data/tuannl
 
 export PYTHONUNBUFFERED=1
@@ -81,8 +88,8 @@ GPU_MONITOR_PID=$!
 # Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Must match slurm_placesphere_baseline.sh's stage budgets -- the comparison
-# is only valid at equal steps. beta itself is not overridden here: it comes
+# Must match slurm_pickcube_baseline.sh's stage budgets -- the comparison is
+# only valid at equal steps. beta itself is not overridden here: it comes
 # from sim_vla/configs/base.yaml (0.05) via configs/experiments/
 # graph_progress.yaml turning progress.enabled on.
 WORLD_STEPS=100000
@@ -90,14 +97,14 @@ IMITATION_STEPS=50000
 ONLINE_STEPS=500000
 
 python -m sim_vla.training.pipeline \
-  --task placesphere \
+  --task pickcube \
   --experiment graph_progress \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
   --online-steps $ONLINE_STEPS \
   --device cuda \
   --save-checkpoints \
-  --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/graph_progress
+  --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/pickcube/graph_progress
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID

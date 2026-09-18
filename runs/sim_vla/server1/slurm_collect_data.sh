@@ -23,9 +23,12 @@
 # see scenegraph/configs/loader.py and the note that mining several task
 # groups' worth of objects into one call silently pins them to one scene.
 #
-# Output: data/sim_vla_demos/<EnvId>/demos.h5, matching
-# sim_vla/configs/tasks/*.yaml's `task.dataset` and sim_vla/configs/base.yaml's
-# `data.root` / `data.name`.
+# Output: /home/tuannl/mnt_data/data/maniskill/<EnvId>/demos.h5 -- server 1's
+# storage, not the repo-relative data/sim_vla_demos that sim_vla/configs/
+# tasks/*.yaml's `task.dataset` and sim_vla/configs/base.yaml's `data.root` /
+# `data.name` resolve to. The training scripts in this folder symlink
+# data/sim_vla_demos to this directory before running, since
+# sim_vla.training.pipeline has no flag to point `data.root` elsewhere.
 #
 # Deliberately no `set -e`: a task whose seed block runs dry (collect.py exits
 # 1 and prints a top-up command) must not cancel the tasks after it.
@@ -90,7 +93,9 @@ GPU_MONITOR_PID=$!
 # so it scales with cores, not with the single GPU shared for rendering.
 NUM_TRAJ=500
 NUM_PROCS=16
-OUT_DIR=data/sim_vla_demos
+# Server 1's own storage, not the repo-relative default: this mount is what
+# the training scripts in this folder symlink data/sim_vla_demos to.
+OUT_DIR=/home/tuannl/mnt_data/data/maniskill
 
 for ENV_ID in PickCube-v1 PlaceSphere-v1 PegInsertionSide-v1; do
   echo "--------------------------------"

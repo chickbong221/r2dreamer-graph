@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-svla-pi-bl
+#SBATCH --job-name=r2d-svla-pc-bl
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -11,14 +11,14 @@
 # sim_vla arm 1: Dreamer + SmolVLA, no graph anywhere in the pipeline
 # (configs/experiments/dreamer.yaml). No graph encoder, no semantic latent, no
 # graph losses, no graph-derived progress -- actor/critic state is (h, z)
-# only. Compared against slurm_peginsertion_graph_progress.sh, which differs
-# by --experiment alone; every other flag here is identical on purpose.
+# only. Compared against slurm_pickcube_graph_progress.sh, which differs by
+# --experiment alone; every other flag here is identical on purpose.
 #
-# Needs data/sim_vla_demos/PegInsertionSide-v1/demos.h5 -- run
-# slurm_collect_data.sh first. That dataset does carry graphs (the collector
-# always records them), but sim_vla/data/dataset.py never opens the graph
-# arrays for this arm: the acceptance test corrupts and deletes the stored
-# graphs and asserts a baseline's batches are byte-identical.
+# Needs data/sim_vla_demos/PickCube-v1/demos.h5 -- run slurm_collect_data.sh
+# first. That dataset does carry graphs (the collector always records them),
+# but sim_vla/data/dataset.py never opens the graph arrays for this arm: the
+# acceptance test corrupts and deletes the stored graphs and asserts a
+# baseline's batches are byte-identical.
 #
 # Runs all three stages in one process (world model -> imitation -> online),
 # per sim_vla/training/pipeline.py. Checkpoints are saved so a crashed run's
@@ -29,7 +29,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PegInsertionSide-v1, arm=dreamer (baseline, no graph, no progress)"
+echo "sim_vla: PickCube-v1, arm=dreamer (baseline, no graph, no progress)"
 echo "================================="
 
 # Activate conda
@@ -61,6 +61,14 @@ export VK_ICD_FILENAMES=$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json
 # Move to project directory
 cd $HOME/projects/r2dreamer-graph
 
+# Demos were collected by slurm_collect_data.sh into server 1's own storage,
+# not the repo-relative default (sim_vla/configs/base.yaml: data.root=
+# data/sim_vla_demos). sim_vla.training.pipeline has no --data-root flag, so
+# this symlink is what makes ${data.root}/<EnvId>/${data.name} resolve to the
+# real files.
+mkdir -p data
+ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
+
 export MS_ASSET_DIR=/mnt/data/tuannl
 
 export PYTHONUNBUFFERED=1
@@ -84,25 +92,19 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # fractions to whatever --online-steps is given here, so the baseline and the
 # graph_progress run only need to agree on this number, not on an absolute
 # warm-up window.
-#
-# PegInsertionSide is the longest-horizon of the three tasks (100-step
-# registration budget vs. PickCube's 50) -- if this run needs more world/
-# imitation steps than the other two tasks to fit the demonstrations, raise
-# these two rather than --online-steps, which is what stays comparable to the
-# other tasks' step-for-step budgets.
 WORLD_STEPS=100000
 IMITATION_STEPS=50000
 ONLINE_STEPS=500000
 
 python -m sim_vla.training.pipeline \
-  --task peginsertion \
+  --task pickcube \
   --experiment dreamer \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
   --online-steps $ONLINE_STEPS \
   --device cuda \
   --save-checkpoints \
-  --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/peginsertion/dreamer
+  --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/pickcube/dreamer
 
 # Stop GPU monitor
 kill $GPU_MONITOR_PID
