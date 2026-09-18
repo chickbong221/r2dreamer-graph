@@ -45,9 +45,12 @@ def evaluate_world_model(model, batch: Dict[str, torch.Tensor], *,
     steps = max(min(int(horizon), batch["action"].shape[1] - split), 0)
     for offset in range(steps):
         action = batch["action"][:, split + offset]
-        stoch, deter = model.rssm.img_step(stoch, deter, action, sem=sem)
+        # Four values with the graph branch on; img_step advances g itself.
+        result = model.rssm.img_step(stoch, deter, action, sem)
         if model.graph_enabled:
-            sem, _ = model.rssm.semantic_prior(deter, sem)
+            stoch, deter, sem, _ = result
+        else:
+            stoch, deter = result
     if steps:
         open_feat = (model.rssm.get_feat(stoch, deter, sem)
                      if model.graph_enabled

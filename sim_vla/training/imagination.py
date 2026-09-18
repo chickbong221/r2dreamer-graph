@@ -12,6 +12,11 @@ from -- the states are predicted, not simulated -- so the graph arm's next
 trained for. A rollout that called the graph builder here would be conditioning
 on a scene the model did not predict.
 
+That prior runs inside ``img_step``: with the branch on it returns
+``(stoch, deter, sem, sem_logit)`` and has already advanced ``g``. This loop
+therefore unpacks four values and advances nothing itself, matching
+``dreamer.py:_imagine``.
+
 Gradients are kept throughout. The actor update differentiates the imagined
 return with respect to the actions that produced it, so every transition, the
 reward head and the flow sampler stay in the graph; the world model's
@@ -87,10 +92,16 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
             action = chunk[:, 0]
         feats.append(feat)
         actions.append(action)
-        stoch, deter = world_model.rssm.img_step(stoch, deter, action, sem=sem)
+        # img_step advances the semantic state itself -- it calls
+        # semantic_prior internally and returns (stoch, deter, sem, sem_logit)
+        # when the branch is on. Unpacking two values and then calling
+        # semantic_prior again would advance g twice per transition, which is
+        # a different rollout than the one the prior was trained for.
+        result = world_model.rssm.img_step(stoch, deter, action, sem)
         if graph_enabled:
-            # The prior, not an extractor: there is no scene here.
-            sem, _ = world_model.rssm.semantic_prior(deter, sem)
+            stoch, deter, sem, _sem_logit = result
+        else:
+            stoch, deter = result
 
     final = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
              else world_model.rssm.get_feat(stoch, deter))

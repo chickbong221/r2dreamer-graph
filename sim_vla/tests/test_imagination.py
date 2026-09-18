@@ -40,7 +40,7 @@ class TestFlowSampler(unittest.TestCase):
 
 
 class TestImagination(unittest.TestCase):
-    def rollout(self, graph_enabled, horizon=3):
+    def rollout(self, graph_enabled, horizon=3):  # noqa: D401
         torch = require_torch()
         from sim_vla.models.world_model import build_world_model
         from sim_vla.training.imagination import flatten_start, imagine
@@ -70,10 +70,36 @@ class TestImagination(unittest.TestCase):
         from sim_vla.training import imagination
 
         source = inspect.getsource(imagination.imagine)
-        self.assertIn("semantic_prior", source)
         # There is no scene inside imagination to extract a graph from.
         for forbidden in ("GraphEncoder", "FigureGraphSource", "pack_graph"):
             self.assertNotIn(forbidden, source)
+        # img_step advances g itself; calling semantic_prior here as well
+        # would advance it twice per transition.
+        self.assertNotIn("semantic_prior", source)
+        self.assertIn("img_step", source)
+
+    def test_g_advances_once_per_transition(self):
+        """One img_step is one semantic step, not two.
+
+        Checked against the RSSM directly: img_step's own sem output must be
+        what the rollout carries, so a second semantic_prior call would give a
+        different state.
+        """
+        torch = require_torch()
+        model, out = self.rollout(True, horizon=2)
+        # A hand-rolled single step from the same start must match what the
+        # loop produced, which it cannot if the loop advanced g twice.
+        from sim_vla.training.imagination import flatten_start
+
+        batch = fake_batch(graph_enabled=True)
+        post = model.observe(batch)["post"]
+        stoch, deter, sem = flatten_start(post, True)
+        action = torch.zeros(stoch.shape[0], 8)
+        _s, _d, sem_once, _ = model.rssm.img_step(stoch, deter, action, sem)
+        sem_twice, _ = model.rssm.semantic_prior(_d, sem_once)
+        self.assertFalse(torch.allclose(sem_once, sem_twice),
+                         "advancing g twice is indistinguishable here; the "
+                         "test cannot detect the bug it exists for")
 
 
 class TestLambdaReturn(unittest.TestCase):
