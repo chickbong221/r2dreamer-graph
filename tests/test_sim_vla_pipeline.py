@@ -481,6 +481,82 @@ class TestModelConfig(unittest.TestCase):
             _resolve({"a": "${unknown_global}"}, {}, {}, globals_root={})
 
 
+class TestBatchNaming(unittest.TestCase):
+    """Every source of a batch must agree on its key names.
+
+    Two bugs came from this. ImitationTrainer converted to tensors without
+    renaming, so observe() could not find "action". And the online replay
+    emitted the singular names while the demonstration sampler emitted the
+    plural ones, so mixed_batch -- which concatenates the keys both sources
+    share -- dropped the actions and rewards entirely.
+    """
+
+    def test_dataset_and_replay_agree(self):
+        from sim_vla.data.batch import STEP_KEYS
+        from sim_vla.data.dataset import SUPERVISION_FIELDS
+        from sim_vla.data.replay import OnlineEpisode
+
+        episode = OnlineEpisode()
+        for _ in range(3):
+            episode.add_observation({"proprio": np.zeros(4, np.float32)})
+        for index in range(2):
+            episode.add_transition(np.zeros(8, np.float32), float(index),
+                                   False, index == 1, False)
+        arrays = episode.arrays()
+        for field in SUPERVISION_FIELDS:
+            if field in ("terminated", "truncated"):
+                continue     # the replay records is_terminal / is_last instead
+            self.assertIn(field, arrays,
+                          f"replay must emit {field!r} like the dataset does")
+        for key in SUPERVISION_FIELDS:
+            self.assertIn(key, STEP_KEYS)
+
+    def test_mixed_batch_refuses_to_drop_actions(self):
+        from sim_vla.data.replay import OnlineEpisode, OnlineReplay, mixed_batch
+
+        class Demo:
+            def batch(self, n):
+                # A source that renamed early: the failure mode being guarded.
+                return {"action": np.zeros((n, 4, 8), np.float32),
+                        "proprio": np.zeros((n, 5, 4), np.float32)}
+
+        replay = OnlineReplay(seed=0)
+        for _ in range(6):
+            episode = OnlineEpisode()
+            for _ in range(5):
+                episode.add_observation({"proprio": np.zeros(4, np.float32)})
+            for index in range(4):
+                episode.add_transition(np.zeros(8, np.float32), 0.0, False,
+                                       index == 3, False)
+            replay.add(episode)
+        with self.assertRaises(KeyError):
+            mixed_batch(Demo(), replay, batch=8, length=4, burn_in=0)
+
+    def test_storage_names_are_renamed_once(self):
+        from sim_vla.data.batch import RENAMES, storage_keys
+
+        self.assertEqual(RENAMES, {"actions": "action", "rewards": "reward"})
+        storage_keys({"actions": 1, "rewards": 2})
+        with self.assertRaises(KeyError):
+            storage_keys({"action": 1})
+
+
+class TestEntryPoints(unittest.TestCase):
+    """Every module the README and the test runner name must exist."""
+
+    def test_documented_modules_are_importable(self):
+        import importlib.util
+
+        for name in ("sim_vla.training.pretrain_world_model",
+                     "sim_vla.training.train_imitation",
+                     "sim_vla.training.online",
+                     "sim_vla.data.audit",
+                     "sim_vla.download_pretrained",
+                     "sim_vla.doctor"):
+            self.assertIsNotNone(importlib.util.find_spec(name),
+                                 f"{name} does not exist")
+
+
 class TestAudit(unittest.TestCase):
     def test_a_good_dataset_passes(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 
+from ..data.batch import to_model_batch
+
 from ..models.flow_sampler import flow_matching_loss
 
 
@@ -85,13 +87,8 @@ class ImitationTrainer:
         self.step = 0
 
     def to_torch(self, batch: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
-        out = {}
-        for key, value in batch.items():
-            tensor = torch.as_tensor(np.asarray(value))
-            if tensor.dtype == torch.float64:
-                tensor = tensor.float()
-            out[key] = tensor.to(self.device)
-        return out
+        """Storage names to model names, in the one place that does it."""
+        return to_model_batch(batch, self.device)
 
     def features(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Causal posterior features. No gradient reaches the world model."""

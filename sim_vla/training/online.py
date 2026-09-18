@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
+from ..data.batch import to_model_batch
+
 from ..data.replay import OnlineEpisode, OnlineReplay, mixed_batch
 from ..runtime.checkpoint import CheckpointMeta, save
 from .actor_critic import ActorCriticConfig, ActorCriticTrainer
@@ -94,17 +96,8 @@ class OnlineTrainer:
         self.updates = 0
 
     def to_torch(self, batch: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
-        out = {}
-        for key, value in batch.items():
-            tensor = torch.as_tensor(np.asarray(value))
-            if tensor.dtype == torch.float64:
-                tensor = tensor.float()
-            out[key] = tensor.to(self.device)
-        if "actions" in out:
-            out["action"] = out.pop("actions").float()
-        if "rewards" in out:
-            out["reward"] = out.pop("rewards").float().unsqueeze(-1)
-        return out
+        """Storage names to model names, in the one place that does it."""
+        return to_model_batch(batch, self.device)
 
     def update(self) -> Dict[str, float]:
         """One world-model step, then one actor-critic step on fresh states."""

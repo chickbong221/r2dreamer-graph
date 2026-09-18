@@ -19,6 +19,8 @@ from typing import Any, Deque, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from .batch import STEP_KEYS
+
 
 @dataclass
 class OnlineEpisode:
@@ -51,9 +53,12 @@ class OnlineEpisode:
 
     def arrays(self) -> Dict[str, np.ndarray]:
         out = {key: np.stack(values) for key, values in self.obs.items()}
+        # Storage naming, matching the demonstration dataset. A mixed batch
+        # concatenates the keys both sources share, so a replay that emitted
+        # "action" while the sampler emitted "actions" would drop both.
         out |= {
-            "action": np.stack(self.action),
-            "reward": np.asarray(self.reward, dtype=np.float32),
+            "actions": np.stack(self.action),
+            "rewards": np.asarray(self.reward, dtype=np.float32),
             "is_terminal": np.asarray(self.is_terminal, dtype=bool),
             "is_last": np.asarray(self.is_last, dtype=bool),
             "success": np.asarray(self.success, dtype=bool),
@@ -74,7 +79,7 @@ class OnlineReplay:
             return
         arrays = episode.arrays()
         for key, value in arrays.items():
-            if key in ("action", "reward", "is_terminal", "is_last", "success"):
+            if key in STEP_KEYS:
                 continue
             # The observation count has to be one more than the action count,
             # or the final observation was dropped by the reset that followed.
@@ -90,7 +95,7 @@ class OnlineReplay:
 
     @property
     def steps(self) -> int:
-        return sum(int(ep["action"].shape[0]) for ep in self.episodes)
+        return sum(int(ep["actions"].shape[0]) for ep in self.episodes)
 
     def sample(self, batch: int, length: int, burn_in: int = 0
                ) -> Dict[str, np.ndarray]:
@@ -100,7 +105,7 @@ class OnlineReplay:
         picks = []
         for _ in range(int(batch)):
             episode = self.episodes[int(self._rng.integers(len(self.episodes)))]
-            steps = int(episode["action"].shape[0])
+            steps = int(episode["actions"].shape[0])
             span = min(int(length), steps)
             start = int(self._rng.integers(0, max(steps - span, 0) + 1))
             picks.append(self._window(episode, start, start + span, int(length),
@@ -114,8 +119,7 @@ class OnlineReplay:
         pad = max(0, length - steps)
         out: Dict[str, np.ndarray] = {}
         for key, value in episode.items():
-            is_obs = key not in ("action", "reward", "is_terminal", "is_last",
-                                 "success")
+            is_obs = key not in STEP_KEYS
             block = value[start:stop + 1] if is_obs else value[start:stop]
             if pad:
                 block = np.concatenate(
@@ -149,4 +153,12 @@ def mixed_batch(demo_sampler, replay: OnlineReplay, batch: int, length: int,
     if demo is None:
         return online
     shared = [k for k in demo if k in online]
+    # Both sources use the storage names, so the actions and rewards are in
+    # here. If they are not, something renamed early and the batch would train
+    # on observations alone.
+    for required in ("actions", "rewards"):
+        if required not in shared:
+            raise KeyError(
+                f"{required!r} is not in both sources: demo has "
+                f"{sorted(demo)[:8]}, online has {sorted(online)[:8]}")
     return {k: np.concatenate([demo[k], online[k]], axis=0) for k in shared}

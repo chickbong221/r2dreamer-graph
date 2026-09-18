@@ -70,36 +70,56 @@ class TestImagination(unittest.TestCase):
         from sim_vla.training import imagination
 
         source = inspect.getsource(imagination.imagine)
+        # Comments mention these names, so match the call rather than the word.
+        code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
         # There is no scene inside imagination to extract a graph from.
-        for forbidden in ("GraphEncoder", "FigureGraphSource", "pack_graph"):
-            self.assertNotIn(forbidden, source)
-        # img_step advances g itself; calling semantic_prior here as well
-        # would advance it twice per transition.
-        self.assertNotIn("semantic_prior", source)
-        self.assertIn("img_step", source)
+        for forbidden in ("GraphEncoder(", "FigureGraphSource(", "pack_graph("):
+            self.assertNotIn(forbidden, code)
+        # g is advanced by img_step, which returns it; nothing here calls the
+        # prior a second time.
+        self.assertNotIn("semantic_prior(", code)
+        self.assertIn("img_step(", code)
 
-    def test_g_advances_once_per_transition(self):
-        """One img_step is one semantic step, not two.
+    def test_img_step_returns_the_semantic_state_it_advanced(self):
+        """img_step owns the semantic step and returns four values.
 
-        Checked against the RSSM directly: img_step's own sem output must be
-        what the rollout carries, so a second semantic_prior call would give a
-        different state.
+        The prior is a function of ``deter`` alone -- ``semantic_prior(deter,
+        prev_sem)`` ignores ``prev_sem`` -- so calling it again after img_step
+        is redundant rather than wrong. What was actually broken was the
+        arity: unpacking two values from a four-value return.
         """
         torch = require_torch()
-        model, out = self.rollout(True, horizon=2)
-        # A hand-rolled single step from the same start must match what the
-        # loop produced, which it cannot if the loop advanced g twice.
+        from sim_vla.models.world_model import build_world_model
         from sim_vla.training.imagination import flatten_start
 
+        _cfg, model_cfg = small_model_config(True)
         batch = fake_batch(graph_enabled=True)
-        post = model.observe(batch)["post"]
-        stoch, deter, sem = flatten_start(post, True)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=True)
+        stoch, deter, sem = flatten_start(model.observe(batch)["post"], True)
         action = torch.zeros(stoch.shape[0], 8)
-        _s, _d, sem_once, _ = model.rssm.img_step(stoch, deter, action, sem)
-        sem_twice, _ = model.rssm.semantic_prior(_d, sem_once)
-        self.assertFalse(torch.allclose(sem_once, sem_twice),
-                         "advancing g twice is indistinguishable here; the "
-                         "test cannot detect the bug it exists for")
+
+        result = model.rssm.img_step(stoch, deter, action, sem)
+        self.assertEqual(len(result), 4, "graph img_step returns 4 values")
+        _s, next_deter, next_sem, _logit = result
+        # The sem it returned is the prior of the deter it returned, which is
+        # why a second call would change nothing.
+        expected, _ = model.rssm.semantic_prior(next_deter, next_sem)
+        self.assertTrue(torch.allclose(next_sem, expected))
+
+    def test_baseline_img_step_returns_two_values(self):
+        torch = require_torch()
+        from sim_vla.models.world_model import build_world_model
+        from sim_vla.training.imagination import flatten_start
+
+        _cfg, model_cfg = small_model_config(False)
+        batch = fake_batch(graph_enabled=False)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=False)
+        stoch, deter = flatten_start(model.observe(batch)["post"], False)
+        result = model.rssm.img_step(stoch, deter,
+                                     torch.zeros(stoch.shape[0], 8))
+        self.assertEqual(len(result), 2)
 
 
 class TestLambdaReturn(unittest.TestCase):
