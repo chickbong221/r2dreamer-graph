@@ -25,11 +25,13 @@ class TestLatentAdapter(unittest.TestCase):
         graph = LatentAdapter(feature_dim=64, token_dim=32, hidden=64)
         self.assertEqual(base.token_dim, graph.token_dim)
         self.assertEqual(base.hidden, graph.hidden)
-        gap = (graph.parameter_report()["total"]
-               - base.parameter_report()["total"])
-        # The graph arm's extra capacity is the wider first layer and nothing
-        # else, and it is reported rather than left to be discovered.
-        self.assertEqual(gap, (64 - 48) * 64)
+        left, right = base.parameter_report(), graph.parameter_report()
+        gap = right["total"] - left["total"]
+        # The graph arm's extra capacity is exactly the parameters that scale
+        # with the input width: the first linear's weight and the input
+        # LayerNorm's weight and bias. Nothing else differs.
+        self.assertEqual(gap, right["feature_scaled"] - left["feature_scaled"])
+        self.assertEqual(gap, (64 - 48) * 64 + 2 * (64 - 48))
 
     def test_wrong_feature_width_is_refused(self):
         torch = require_torch()

@@ -67,8 +67,19 @@ class LatentAdapter(nn.Module):
         return self.state_token(hidden).unsqueeze(-2)
 
     def parameter_report(self) -> Dict[str, int]:
-        """Counted, because the arms do not have the same number."""
-        total = sum(p.numel() for p in self.parameters())
-        first = self.feature_dim * self.hidden + self.hidden
-        return {"total": total, "input_layer": first,
-                "feature_dim": self.feature_dim, "token_dim": self.token_dim}
+        """Counted, because the arms do not have the same number.
+
+        ``feature_scaled`` is every parameter whose count depends on the input
+        width: the first linear's weight *and* the input LayerNorm's weight and
+        bias. The difference between the arms is exactly this number, and
+        leaving the LayerNorm out of a hand-derived formula is how that gets
+        stated wrongly.
+        """
+        return {
+            "total": sum(p.numel() for p in self.parameters()),
+            "feature_scaled": self.feature_dim * self.hidden + 2 * self.feature_dim,
+            "input_bias": self.hidden,
+            "feature_dim": self.feature_dim,
+            "token_dim": self.token_dim,
+            "hidden": self.hidden,
+        }

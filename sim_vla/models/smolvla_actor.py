@@ -1,9 +1,15 @@
 """The pretrained SmolVLA expert, conditioned on world-model latents.
 
-Written against lerobot 0.6.1, whose ``VLAFlowMatching`` exposes
+Read against lerobot 0.4.4 and 0.6.1, whose ``VLAFlowMatching`` exposes
 ``embed_prefix`` / ``embed_suffix`` / ``denoise_step`` on ``policy.model``. The
 flow methods are not on the policy: an earlier version of this file called
 ``policy.denoise_step`` and there is no such method.
+
+Nor does the policy own a tokenizer. Tokenization normally happens in a
+processor pipeline before a batch reaches the policy, so the tokenizer itself
+hangs off ``model.vlm_with_expert.processor``. sim_vla tokenizes one fixed
+instruction per task, so it resolves that object directly -- see
+:data:`TOKENIZER_PATHS`.
 
 What the real path is, and why it is not a one-line call:
 
@@ -39,7 +45,7 @@ reason conditioning it works.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -51,6 +57,18 @@ from .pretrained import PretrainedError
 REQUIRED_MODEL_METHODS = ("embed_prefix", "embed_suffix", "denoise_step")
 REQUIRED_MODEL_MODULES = ("state_proj", "action_in_proj", "action_out_proj")
 
+# Where the text tokenizer lives. In lerobot 0.4.4 and 0.6.1 the policy does
+# not own one -- tokenization is normally done by a processor pipeline before
+# the batch reaches the policy, and the tokenizer itself hangs off the VLM's
+# processor. sim_vla tokenizes its own fixed instruction, so it needs the
+# object rather than the pipeline.
+TOKENIZER_PATHS = (
+    "model.vlm_with_expert.processor.tokenizer",
+    "vlm_with_expert.processor.tokenizer",
+    "language_tokenizer",
+    "model.vlm_with_expert.processor",
+)
+
 
 def freeze(module: nn.Module) -> int:
     """Stop a module's own parameters training, without cutting the graph."""
@@ -60,6 +78,25 @@ def freeze(module: nn.Module) -> int:
             parameter.requires_grad_(False)
             count += 1
     return count
+
+
+def resolve_attr(root: Any, paths: Sequence[str], what: str) -> tuple:
+    """First dotted attribute path that exists, or an error naming all of them.
+
+    Not restricted to ``nn.Module``: a tokenizer is not one, and requiring it
+    to be was how the first attempt at this failed.
+    """
+    for path in paths:
+        node: Any = root
+        for part in path.split("."):
+            node = getattr(node, part, None)
+            if node is None:
+                break
+        if node is not None:
+            return node, path
+    raise PretrainedError(
+        f"could not find the {what} on this checkpoint. Tried: {list(paths)}. "
+        f"Submodules present: {module_tree(root)[:30]}")
 
 
 def module_tree(root: nn.Module, depth: int = 3) -> List[str]:
@@ -115,6 +152,7 @@ class SmolVLAActor(nn.Module):
                 f"checkpoint needs {expected}")
 
         self.instruction = str(instruction)
+        self.tokenizer_path = ""
         self._lang_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.frozen: Dict[str, int] = {}
         if freeze_vlm:
@@ -166,11 +204,9 @@ class SmolVLAActor(nn.Module):
         """
         key = f"{text}|{device}"
         if key not in self._lang_cache:
-            tokenizer = getattr(self.policy, "language_tokenizer", None)
-            if tokenizer is None:
-                raise PretrainedError(
-                    "this SmolVLAPolicy exposes no language_tokenizer; the "
-                    "instruction cannot be embedded")
+            tokenizer, path = resolve_attr(
+                self.policy, TOKENIZER_PATHS, "text tokenizer")
+            self.tokenizer_path = path
             max_length = int(self.facts.get("tokenizer_max_length") or 48)
             encoded = tokenizer(text, padding="max_length", truncation=True,
                                 max_length=max_length, return_tensors="pt")
@@ -283,6 +319,7 @@ class SmolVLAActor(nn.Module):
             "revision": self.loaded.revision,
             "lerobot_version": self.loaded.lerobot_version,
             "state_token_mode": self.state_token_mode,
+            "tokenizer_path": self.tokenizer_path,
             "chunk_size": self.chunk_size,
             "flow_steps": self.flow_steps,
             "action_dim": self.action_dim,
