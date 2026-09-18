@@ -13,12 +13,27 @@ encoder that happened to iterate its inputs. The graph-isolation test asserts
 this by corrupting the stored graphs and checking a baseline batch is
 byte-identical.
 
-Episodes stop at their first terminal step. ManiSkill sets ``terminated`` from
-the task's own success flag, and the collector keeps a few steps past the point
-success settles, so the recorded tail sits *after* a genuine terminal
-transition. Learning from it would teach a continuation head that episodes go
-on after they end. The steps are still on disk -- this drops them from batches,
-not from the dataset.
+**Terminations follow the online environment, not the recording.** The trainer
+builds its ManiSkill env with ``ignore_terminations=True``
+(``envs/maniskill.py:528``), so online an episode never terminates: it runs to
+the horizon and the value function bootstraps there. The demonstrations were
+recorded without that wrapper, and ManiSkill sets ``terminated`` from the
+task's own success flag, so every demo carries terminal transitions the online
+env would never produce.
+
+Honouring the recording would train a continuation head on a signal that does
+not exist at rollout time. So under the default policy the recorded
+``terminated`` is ignored, ``is_terminal`` is false everywhere, and the
+collector's post-success steps are ordinary steps rather than a tail after an
+ending. ``ignore_terminations=False`` restores the recording's own semantics
+and cuts each episode at its first terminal step; it is the right setting only
+for a trainer configured the same way.
+
+**First success is not settled success.** The flag flickers -- PickCube's
+success asks for a static robot as well as a placed cube -- so the step an
+episode *reaches* success and the step it *keeps* success are different
+numbers, and only the second is where a demonstration could be cut. Both are
+computed per episode and neither is inferred from the other.
 
 Arrays come out as numpy. Turning them into tensors is the trainer's job: it
 knows the device and the dtype policy, and keeping torch out of the loader is
@@ -88,8 +103,10 @@ class EpisodeRef:
     recorded_steps: int        # actions as stored
     seed: Optional[int]
     end_reason: str
-    settled_steps: Optional[int]
-    terminal: bool             # the usable window ends on a real terminal step
+    settled_steps: Optional[int]   # as the collector recorded it
+    terminal: bool                 # the usable window ends on a real terminal step
+    first_success: Optional[int]   # actions to the first success, flicker included
+    settled_success: Optional[int] # actions to the success that held to the end
 
     @property
     def observations(self) -> int:
@@ -102,6 +119,24 @@ def _first_terminal(terminated: np.ndarray) -> Optional[int]:
     return int(hits[0]) if hits.size else None
 
 
+def success_milestones(success: np.ndarray) -> Tuple[Optional[int], Optional[int]]:
+    """``(first, settled)`` in actions, from a per-step success array.
+
+    They differ whenever the flag drops again, which it does: the two are kept
+    apart because a demonstration can only be cut at the second, while the
+    first is what a naive reading of the array reports.
+    """
+    flags = np.asarray(success, dtype=bool).reshape(-1)
+    if flags.size == 0:
+        return None, None
+    hits = np.flatnonzero(flags)
+    first = int(hits[0]) + 1 if hits.size else None
+    if not bool(flags[-1]):
+        return first, None
+    misses = np.flatnonzero(~flags)
+    return first, (int(misses[-1]) + 2 if misses.size else 1)
+
+
 class DemoDataset:
     """One task's collected demonstrations, read under an arm's allowlist.
 
@@ -110,7 +145,7 @@ class DemoDataset:
     """
 
     def __init__(self, path: str | Path, *, graph_enabled: bool,
-                 stop_at_terminal: bool = True):
+                 ignore_terminations: bool = True):
         self.path = Path(path)
         self.sidecar = self.path.with_suffix(".json")
         if not self.path.exists() or not self.sidecar.exists():
@@ -119,7 +154,10 @@ class DemoDataset:
         payload = json.loads(self.sidecar.read_text(encoding="utf-8"))
         self.metadata: Dict[str, Any] = dict(payload.get("metadata") or {})
         self.graph_enabled = bool(graph_enabled)
-        self.stop_at_terminal = bool(stop_at_terminal)
+        # Matches the online env. See the module docstring: honouring the
+        # recording's terminations would train against a signal the rollout
+        # never produces.
+        self.ignore_terminations = bool(ignore_terminations)
         self.fields = batch_fields(self.metadata, graph_enabled=graph_enabled)
         self._handle = None
         self.episodes: List[EpisodeRef] = self._index(payload.get("episodes") or [])
@@ -132,11 +170,15 @@ class DemoDataset:
             group = f"traj_{int(entry['episode_id'])}"
             if group not in handle:
                 continue
-            terminated = np.asarray(handle[group]["terminated"][()], dtype=bool)
+            node = handle[group]
+            terminated = np.asarray(node["terminated"][()], dtype=bool)
             recorded = int(terminated.shape[0])
-            cut = _first_terminal(terminated) if self.stop_at_terminal else None
-            # The terminal transition itself is kept; what is dropped is
-            # everything after it.
+            first, settled = success_milestones(
+                np.asarray(node["success"][()], dtype=bool))
+            # Under the online policy there is no terminal to cut at, so every
+            # recorded step is usable -- including the collector's pad, which
+            # is only a tail if something ended before it.
+            cut = None if self.ignore_terminations else _first_terminal(terminated)
             steps = recorded if cut is None else cut + 1
             refs.append(EpisodeRef(
                 dataset=self.path, group=group,
@@ -146,6 +188,7 @@ class DemoDataset:
                 end_reason=str(entry.get("end_reason") or ""),
                 settled_steps=entry.get("settled_steps"),
                 terminal=cut is not None,
+                first_success=first, settled_success=settled,
             ))
         return refs
 

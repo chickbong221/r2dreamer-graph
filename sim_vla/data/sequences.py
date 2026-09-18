@@ -129,13 +129,18 @@ def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
     is_last = np.zeros(total, dtype=bool)
     if reached_end and steps > 0:
         is_last[steps - 1] = True
-    # A cut that the collector made is not a termination. Where the episode
-    # was stopped for any reason other than the task's own terminal signal,
-    # the value function has to bootstrap rather than treat the return as
-    # finished.
-    is_terminal = terminated & valid
-    if reached_end and not ref.terminal and steps > 0:
-        is_terminal[steps - 1] = False
+    # Under the online policy nothing terminates: the env is built with
+    # ignore_terminations=True, so the recorded terminal flags describe a
+    # signal that never reaches the trainer, and every episode end -- horizon
+    # or collector cut -- is a bootstrap. Honouring the recording instead would
+    # make the demonstrations the only place a terminal state exists.
+    if data.ignore_terminations:
+        is_terminal = np.zeros(total, dtype=bool)
+    else:
+        is_terminal = terminated & valid
+        # A cut that the collector made is still not a termination.
+        if reached_end and not ref.terminal and steps > 0:
+            is_terminal[steps - 1] = False
 
     out |= {
         "valid": valid,

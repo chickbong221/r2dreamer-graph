@@ -34,7 +34,7 @@ ACTION = 8
 
 
 def make_dataset(path, episodes=((30, 24), (18, 14), (50, 45)), pad=5,
-                 cameras=("image_base",)):
+                 cameras=("image_base",), flicker=None):
     """Write a dataset shaped like a collected one.
 
     Each entry is ``(recorded_steps, settled)``: success turns on at
@@ -60,6 +60,8 @@ def make_dataset(path, episodes=((30, 24), (18, 14), (50, 45)), pad=5,
         for index, (steps, settled) in enumerate(episodes):
             success = np.zeros(steps, bool)
             success[settled:] = True
+            if flicker:
+                success[flicker[0]:flicker[1]] = True
             writer.add(
                 images={c: rng.integers(0, 255, (steps + 1, H, W, 3), dtype=np.uint8)
                         for c in cameras},
@@ -104,19 +106,45 @@ class TestDataset(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_episodes_stop_at_the_first_terminal_step(self):
-        with DemoDataset(self.path, graph_enabled=False) as data:
-            # settled 24 -> terminal at index 24 -> 25 usable actions, and the
-            # five recorded after it are dropped from batches.
-            self.assertEqual([ref.steps for ref in data.episodes], [25, 15, 46])
-            self.assertEqual([ref.recorded_steps for ref in data.episodes],
-                             [30, 18, 50])
-            self.assertTrue(all(ref.terminal for ref in data.episodes))
+    def test_default_policy_matches_the_online_env(self):
+        """ignore_terminations=True, so every recorded step is usable.
 
-    def test_keeping_the_tail_is_available(self):
-        with DemoDataset(self.path, graph_enabled=False,
-                         stop_at_terminal=False) as data:
+        The online env is built with ignore_terminations=True, so nothing
+        terminates at rollout time and the collector's post-success steps are
+        ordinary steps rather than a tail after an ending.
+        """
+        with DemoDataset(self.path, graph_enabled=False) as data:
             self.assertEqual([ref.steps for ref in data.episodes], [30, 18, 50])
+            self.assertFalse(any(ref.terminal for ref in data.episodes))
+            ref = data.episodes[0]
+            window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
+            batch = load_window(data, ref, window)
+            # The recording says terminated; the trainer must not.
+            self.assertTrue(batch["terminated"].any())
+            self.assertFalse(batch["is_terminal"].any())
+            self.assertTrue(batch["is_last"][ref.steps - 1])
+
+    def test_honouring_terminations_cuts_at_the_first_one(self):
+        with DemoDataset(self.path, graph_enabled=False,
+                         ignore_terminations=False) as data:
+            # settled 24 -> terminal at index 24 -> 25 usable actions.
+            self.assertEqual([ref.steps for ref in data.episodes], [25, 15, 46])
+            self.assertTrue(all(ref.terminal for ref in data.episodes))
+            ref = data.episodes[0]
+            window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
+            batch = load_window(data, ref, window)
+            self.assertTrue(batch["is_terminal"][ref.steps - 1])
+
+    def test_first_success_is_not_settled_success(self):
+        """A flickering flag makes the two different numbers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "flicker.h5"
+            make_dataset(path, episodes=((30, 24),), flicker=(5, 9))
+            with DemoDataset(path, graph_enabled=False) as data:
+                ref = data.episodes[0]
+                self.assertEqual(ref.first_success, 6)     # the flicker
+                self.assertEqual(ref.settled_success, 25)  # where it holds
+                self.assertNotEqual(ref.first_success, ref.settled_success)
 
     def test_observations_are_one_longer_than_transitions(self):
         with DemoDataset(self.path, graph_enabled=True) as data:
@@ -200,23 +228,13 @@ class TestSequences(unittest.TestCase):
             self.assertTrue(np.array_equal(
                 batch["rewards"][: window.stop - window.start], expected))
 
-    def test_terminal_only_at_a_real_terminal_step(self):
+    def test_episode_end_bootstraps_under_the_online_policy(self):
         with DemoDataset(self.path, graph_enabled=False) as data:
-            ref = data.episodes[0]                       # ends terminal
-            window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
-            batch = load_window(data, ref, window)
-            self.assertTrue(batch["is_last"][ref.steps - 1])
-            self.assertTrue(batch["is_terminal"][ref.steps - 1])
-
-        # An episode cut without reaching a terminal step must bootstrap.
-        with DemoDataset(self.path, graph_enabled=False,
-                         stop_at_terminal=False) as data:
             ref = data.episodes[0]
-            object.__setattr__(ref, "terminal", False)
             window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
             batch = load_window(data, ref, window)
             self.assertTrue(batch["is_last"][ref.steps - 1])
-            self.assertFalse(batch["is_terminal"][ref.steps - 1])
+            self.assertFalse(batch["is_terminal"].any())
 
     def test_sampler_is_deterministic_given_a_seed(self):
         with DemoDataset(self.path, graph_enabled=False) as data:

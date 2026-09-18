@@ -32,9 +32,12 @@ data:
   sequence_length: 64
   burn_in: 8
   batch_size: 16
-  # Episodes stop at their first terminal step; the collector's post-success
-  # pad is not learned from. See sim_vla/data/dataset.py.
-  stop_at_terminal: true
+  # Matches envs/maniskill.py, which builds the online env with
+  # ignore_terminations=True. The demonstrations were recorded without that
+  # wrapper and do carry terminal flags; honouring them would train a
+  # continuation head on a signal the rollout never produces. Set false only
+  # for a trainer configured the same way.
+  ignore_terminations: true
   normalization: mean_std
   seed: 0
 
