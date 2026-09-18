@@ -59,7 +59,7 @@ from .schema import (
     END_SOLVER_ERROR, END_SOLVER_FINISHED, END_SUCCESS_CUT,
     build_metadata, flatten_proprio, privileged_fields, proprio_fields, unbatch,
 )
-from .writer import DatasetWriter, field_kinds
+from .writer import DatasetWriter, atomic_replace, field_kinds
 
 DEFAULT_STRIDE_FACTOR = 8
 
@@ -469,7 +469,7 @@ def attach_summary(path: Path, summary: Mapping[str, Any]) -> None:
     payload["metadata"]["collection"] = dict(summary)
     tmp = sidecar.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, sidecar)
+    atomic_replace(tmp, sidecar)
 
 
 def merge_shards(out: Path, shards: Sequence[Path], *,
@@ -526,7 +526,7 @@ def merge_shards(out: Path, shards: Sequence[Path], *,
          "episodes": episodes, "count": len(episodes)},
         indent=2, default=str), encoding="utf-8")
     os.replace(tmp_h5, out)
-    os.replace(tmp_json, out.with_suffix(".json"))
+    atomic_replace(tmp_json, out.with_suffix(".json"))
     return {"episodes": len(episodes)}
 
 

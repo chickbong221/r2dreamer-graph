@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -50,6 +51,33 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         return sorted(str(v) for v in value)
     return str(value)
+
+
+def atomic_replace(tmp: Path, target: Path, attempts: int = 5,
+                   delay: float = 0.05) -> None:
+    """Move ``tmp`` over ``target``, retrying a transient lock.
+
+    On Windows a freshly written file can be held briefly by the indexer or a
+    virus scanner, and ``os.replace`` then fails with a permission error even
+    though nothing in this process has it open. It is transient -- observed
+    about once in six runs of the test suite -- but this runs after every
+    episode of a collection that lasts hours, so once is enough to lose a
+    worker. POSIX never takes this path.
+
+    The last resort is a direct write, which gives up atomicity rather than the
+    run: a sidecar that might be torn is worth more than a dead worker with
+    hundreds of episodes already on disk.
+    """
+    for attempt in range(max(int(attempts), 1)):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                break
+            time.sleep(delay * (attempt + 1))
+    target.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+    tmp.unlink(missing_ok=True)
 
 
 def _leaves(prefix: str, payload: Mapping[str, Any]) -> List[tuple]:
@@ -212,7 +240,7 @@ class DatasetWriter:
         tmp = self.sidecar.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2, default=_json_default),
                        encoding="utf-8")
-        os.replace(tmp, self.sidecar)
+        atomic_replace(tmp, self.sidecar)
 
     @property
     def sidecar(self) -> Path:

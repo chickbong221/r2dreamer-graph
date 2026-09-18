@@ -1,0 +1,7 @@
+# Arm 2: the graph branch, with progress shaping off. Arms 1 and 2 differ in
+# exactly one switch, which is what isolates the graph's contribution.
+model:
+  graph:
+    enabled: true
+  progress:
+    enabled: false

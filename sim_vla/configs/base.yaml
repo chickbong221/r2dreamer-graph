@@ -1,0 +1,60 @@
+# Shared settings for every sim_vla arm. What separates the arms lives in
+# configs/experiments/ and is, deliberately, one switch plus its dependant.
+#
+# model.graph.enabled is not an actor-input flag. It decides whether the graph
+# encoder, the semantic latent g, the graph decoder, the graph losses and the
+# graph-derived progress supervision are constructed at all. An arm is chosen
+# before its world model is trained: a graph-trained world model with g hidden
+# from the actor is not a graph-free baseline, because the graph has already
+# reached h and z.
+
+model:
+  rep_loss: dreamer
+
+  graph:
+    enabled: false
+    # Read from the collected dataset's metadata at load time and checked
+    # against these; a mismatch is refused rather than reshaped.
+    n_max: 8
+    e_max: 168
+
+  progress:
+    enabled: false          # requires graph.enabled; rejected otherwise
+    beta: 0.1
+    beta_warmup_start: 400000
+    beta_warmup_end: 900000
+
+data:
+  root: data/sim_vla_demos
+  name: demos.h5
+  # Windows for world-model pretraining. burn_in rows rebuild the recurrent
+  # state and are excluded from the loss.
+  sequence_length: 64
+  burn_in: 8
+  batch_size: 16
+  # Episodes stop at their first terminal step; the collector's post-success
+  # pad is not learned from. See sim_vla/data/dataset.py.
+  stop_at_terminal: true
+  normalization: mean_std
+  seed: 0
+
+actor:
+  # Pinned, because "the pretrained checkpoint" is not a reproducible object
+  # without a revision.
+  pretrained: lerobot/smolvla_base
+  revision: ''             # filled by download_pretrained.py
+  chunk_size: 8            # actions predicted
+  execute: 1               # actions executed before replanning
+  flow_steps: 10
+  context_tokens: 8
+  state_tokens: 1
+
+diagnostics:
+  # Recording graphs is not learning from them. This may be true in a baseline
+  # run; the objects stay outside learning batches either way.
+  record_graphs: false
+
+eval:
+  episodes: 20
+  max_steps: 150
+  seeds_start: 900000      # disjoint from any collection seed block

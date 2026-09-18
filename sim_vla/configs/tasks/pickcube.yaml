@@ -1,0 +1,7 @@
+# Task-specific settings. The camera set, the proprioception width and the
+# graph capacities come from the dataset's metadata -- they are recorded there
+# by the collector, and this file must not restate them.
+task:
+  env_id: PickCube-v1
+  instruction: "pick up the cube and lift it to the goal"
+  dataset: ${data.root}/PickCube-v1/${data.name}

@@ -1,0 +1,7 @@
+# Arm 3: the graph branch plus progress shaping. Compared against arm 2, not
+# against arm 1: what it measures is the progress method's additional effect.
+model:
+  graph:
+    enabled: true
+  progress:
+    enabled: true

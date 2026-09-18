@@ -1,0 +1,6 @@
+# Arm 1: Dreamer + SmolVLA, no graph anywhere in the pipeline.
+model:
+  graph:
+    enabled: false
+  progress:
+    enabled: false
