@@ -88,6 +88,11 @@ class WorldModel(nn.Module):
         self.decoder = networks.MultiDecoder(
             config.decoder, int(config.rssm.deter), int(self.rssm.flat_stoch),
             model_shapes, flat_sem=self.graph_dim,
+            # dreamer.py:447 passes graph_simple here. Pixels may *read* g,
+            # but the image reconstruction gradient must not train the
+            # semantic branch through that input: g is supposed to be learned
+            # from the graph, not from whatever makes pixels easier to draw.
+            detach_sem_cnn=self.graph_enabled,
         )
         self.graph_decoder = (
             SimpleGraphDecoder(config.graph, self.graph_dim)
@@ -201,8 +206,11 @@ class WorldModel(nn.Module):
 
         # "rew" and "con", not "reward" and "cont": those are the names the
         # loss scales use.
+        # r_(t-1) arrives at o_t and does not exist at a reset, so the reward
+        # term is scored only where an incoming reward exists.
+        reward_mask = mask & batch.get("reward_valid", mask)
         losses["rew"] = masked_mean(
-            -self.reward_head(feat).log_prob(batch["reward"]), mask)
+            -self.reward_head(feat).log_prob(batch["reward"]), reward_mask)
         # 1 wherever the episode continues. Under ignore_terminations that is
         # everywhere inside a window, and the bootstrap at the end is the value
         # function's job rather than a zero taught here.

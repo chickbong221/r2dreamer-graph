@@ -118,11 +118,11 @@ class TestDataset(unittest.TestCase):
             self.assertFalse(any(ref.terminal for ref in data.episodes))
             ref = data.episodes[0]
             window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
-            batch = load_window(data, ref, window)
-            # The recording says terminated; the trainer must not.
-            self.assertTrue(batch["terminated"].any())
+            batch = load_window(data, ref, window, ref.steps, 0)
+            # is_last marks the final *observation*, one past the last action.
             self.assertFalse(batch["is_terminal"].any())
-            self.assertTrue(batch["is_last"][ref.steps - 1])
+            self.assertTrue(batch["is_last"][ref.steps])
+            self.assertFalse(batch["action_valid"][ref.steps])
 
     def test_honouring_terminations_cuts_at_the_first_one(self):
         with DemoDataset(self.path, graph_enabled=False,
@@ -132,8 +132,9 @@ class TestDataset(unittest.TestCase):
             self.assertTrue(all(ref.terminal for ref in data.episodes))
             ref = data.episodes[0]
             window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
-            batch = load_window(data, ref, window)
-            self.assertTrue(batch["is_terminal"][ref.steps - 1])
+            batch = load_window(data, ref, window, ref.steps, 0)
+            # The terminal transition arrives at the observation after it.
+            self.assertTrue(batch["is_terminal"][ref.steps])
 
     def test_first_success_is_not_settled_success(self):
         """A flickering flag makes the two different numbers."""
@@ -207,14 +208,14 @@ class TestSequences(unittest.TestCase):
             ref = data.episodes[1]                       # 15 usable steps
             windows = plan_windows(ref, length=10, burn_in=4)
             last = windows[-1]
-            batch = load_window(data, ref, last)
-            self.assertEqual(batch["actions"].shape[0], batch["valid"].shape[0])
-            self.assertEqual(batch["image_base"].shape[0],
-                             batch["valid"].shape[0] + 1)
+            batch = load_window(data, ref, last, 10, 4)
+            # Every array now has one row per observation, same count.
+            rows = batch["valid"].shape[0]
+            for key in ("action", "action_target", "reward", "image_base"):
+                self.assertEqual(batch[key].shape[0], rows, key)
             # Padding is outside valid; burn-in is valid but unscored.
-            self.assertEqual(int(batch["valid"].sum()), last.stop - last.start)
-            self.assertEqual(int(batch["loss_mask"].sum()),
-                             last.stop - last.start - last.burn_in)
+            self.assertEqual(int(batch["valid"].sum()),
+                             last.stop - last.start + 1)
             self.assertFalse(batch["loss_mask"][: last.burn_in].any())
 
     def test_alignment_of_actions_rewards_and_observations(self):
@@ -222,18 +223,21 @@ class TestSequences(unittest.TestCase):
         with DemoDataset(self.path, graph_enabled=False) as data:
             ref = data.episodes[2]
             window = plan_windows(ref, length=8, burn_in=2)[2]
-            batch = load_window(data, ref, window)
+            batch = load_window(data, ref, window, 8, 2)
             # rewards were written as arange, so they identify their index.
-            expected = np.arange(window.start, window.stop, dtype=np.float32)
-            self.assertTrue(np.array_equal(
-                batch["rewards"][: window.stop - window.start], expected))
+            # r_(t-1) arrives at o_t, so row i holds reward[start + i - 1].
+            span = window.stop - window.start
+            expected = np.arange(window.start - 1, window.stop - 1,
+                                 dtype=np.float32)
+            self.assertTrue(np.array_equal(batch["reward"][: span], expected),
+                            f"{batch['reward'][:span]} vs {expected}")
 
     def test_episode_end_bootstraps_under_the_online_policy(self):
         with DemoDataset(self.path, graph_enabled=False) as data:
             ref = data.episodes[0]
             window = plan_windows(ref, length=ref.steps, burn_in=0)[0]
-            batch = load_window(data, ref, window)
-            self.assertTrue(batch["is_last"][ref.steps - 1])
+            batch = load_window(data, ref, window, ref.steps, 0)
+            self.assertTrue(batch["is_last"][ref.steps])
             self.assertFalse(batch["is_terminal"].any())
 
     def test_sampler_is_deterministic_given_a_seed(self):
@@ -242,6 +246,142 @@ class TestSequences(unittest.TestCase):
             b = SequenceSampler(data, length=8, burn_in=2, seed=7).batch(4)
             for key in a:
                 self.assertTrue(np.array_equal(a[key], b[key]), key)
+
+
+class TestCausalAlignment(unittest.TestCase):
+    """The posterior at o_t must not contain a_t, which the actor predicts.
+
+    RSSM.obs_step takes *prev_action*. Pairing embed[i] with actions[i] put the
+    action taken at o_t into the state the actor is trained to predict that
+    same action from -- the target inside its own input.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "demos.h5"
+        make_dataset(self.path, episodes=((20, 15),))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def window(self, length=6, burn_in=2, index=0):
+        from sim_vla.data.sequences import load_window, plan_windows
+
+        data = DemoDataset(self.path, graph_enabled=False)
+        ref = data.episodes[0]
+        windows = plan_windows(ref, length=length, burn_in=burn_in)
+        return data, ref, windows[index], load_window(
+            data, ref, windows[index], length, burn_in)
+
+    def test_action_is_the_previous_action(self):
+        """row t holds a_(t-1); the action taken at o_t is action_target."""
+        data, ref, window, out = self.window(index=1)
+        block = data.read(ref, window.start, window.stop)
+        actions = np.asarray(block["actions"])
+        before = np.asarray(
+            data.read(ref, window.start - 1, window.start)["actions"])[-1]
+        # a_(t-1): what preceded the window, then the window's own actions.
+        np.testing.assert_allclose(out["action"][0], before)
+        np.testing.assert_allclose(out["action"][1], actions[0])
+        # a_t: the action taken at this observation.
+        np.testing.assert_allclose(out["action_target"][0], actions[0])
+        np.testing.assert_allclose(out["action_target"][1], actions[1])
+        # ...which is exactly the leak: they must differ.
+        self.assertFalse(np.allclose(out["action"][1], out["action_target"][1]))
+        data.close()
+
+    def test_a_t_is_absent_from_every_input_row_up_to_t(self):
+        """Changing a_t must not change any posterior input at or before t."""
+        data, ref, window, out = self.window(index=1)
+        target = out["action_target"][3].copy()
+        # a_3 appears as an input only from row 4 onward.
+        for row in range(4):
+            self.assertFalse(np.allclose(out["action"][row], target),
+                             f"a_t leaked into the posterior input at row {row}")
+        np.testing.assert_allclose(out["action"][4], target)
+        data.close()
+
+    def test_reward_belongs_to_the_arriving_transition(self):
+        """r_(t-1) arrives at o_t, and there is none at a reset."""
+        data, ref, window, out = self.window(index=0)
+        # rewards were written as arange, so they identify their own index.
+        self.assertFalse(out["reward_valid"][0], "a reset has no incoming reward")
+        self.assertTrue(out["reward_valid"][1])
+        self.assertAlmostEqual(float(out["reward"][1]), 0.0)   # r_0 arrives at o_1
+        self.assertAlmostEqual(float(out["reward"][2]), 1.0)
+        data.close()
+
+    def test_final_observation_is_kept_and_has_no_action(self):
+        data, ref, window, out = self.window(length=ref_steps_of(self.path),
+                                             burn_in=0)
+        last = int(out["valid"].sum()) - 1
+        self.assertTrue(out["is_last"][last])
+        self.assertFalse(out["action_valid"][last],
+                         "no action was taken at the final observation")
+        data.close()
+
+
+def ref_steps_of(path):
+    with DemoDataset(path, graph_enabled=False) as data:
+        return data.episodes[0].steps
+
+
+class TestWindowLayout(unittest.TestCase):
+    """One shape for every window, from either source."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "demos.h5"
+        # start, middle and a short final window
+        make_dataset(self.path, episodes=((30, 24), (9, 6), (70, 60)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_every_demonstration_window_has_the_same_rows(self):
+        from sim_vla.data import layout
+        from sim_vla.data.sequences import SequenceSampler
+
+        with DemoDataset(self.path, graph_enabled=False) as data:
+            sampler = SequenceSampler(data, length=16, burn_in=4, seed=0)
+            expected = layout.rows(16, 4)
+            seen = set()
+            for window in sampler.windows:
+                out = sampler.load(window)
+                seen.add(tuple(sorted(
+                    {k: v.shape[0] for k, v in out.items()}.values())))
+                layout.check(out, 16, 4)
+            self.assertEqual(len(seen), 1, f"window shapes differ: {seen}")
+            batch = sampler.batch(8)
+            self.assertEqual(batch["proprio"].shape[:2], (8, expected))
+
+    def test_demonstration_and_replay_windows_stack(self):
+        from sim_vla.data import layout
+        from sim_vla.data.replay import (OnlineEpisode, OnlineReplay,
+                                         mixed_batch)
+        from sim_vla.data.sequences import SequenceSampler
+
+        with DemoDataset(self.path, graph_enabled=False) as data:
+            sampler = SequenceSampler(data, length=16, burn_in=4, seed=0)
+            replay = OnlineReplay(seed=0)
+            for _ in range(6):
+                episode = OnlineEpisode()
+                for _ in range(25):
+                    episode.add_observation({
+                        "image_base": np.zeros((H, W, 3), np.uint8),
+                        "proprio": np.zeros(PROPRIO, np.float32)})
+                for index in range(24):
+                    episode.add_transition(np.zeros(ACTION, np.float32),
+                                           float(index), False,
+                                           index == 23, False)
+                replay.add(episode)
+            mixed = mixed_batch(sampler, replay, batch=8, length=16, burn_in=4,
+                                demo_fraction=0.5)
+            for key, value in mixed.items():
+                self.assertEqual(value.shape[0], 8, key)
+                self.assertEqual(value.shape[1], layout.rows(16, 4), key)
+            self.assertIn("action", mixed)
+            self.assertIn("action_target", mixed)
 
 
 class TestNormalization(unittest.TestCase):
@@ -555,6 +695,68 @@ class TestEntryPoints(unittest.TestCase):
                      "sim_vla.doctor"):
             self.assertIsNotNone(importlib.util.find_spec(name),
                                  f"{name} does not exist")
+
+
+class TestPreprocessing(unittest.TestCase):
+    """Images must reach the encoder as floats, and only be scaled once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "demos.h5"
+        make_dataset(self.path, episodes=((20, 15),))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_uint8_images_become_unit_range_floats(self):
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("torch unavailable")
+        from sim_vla.data.batch import to_model_batch
+        from sim_vla.data.sequences import SequenceSampler
+
+        with DemoDataset(self.path, graph_enabled=False) as data:
+            raw = SequenceSampler(data, length=6, burn_in=2, seed=0).batch(2)
+            self.assertEqual(raw["image_base"].dtype, np.uint8)
+            self.assertGreater(raw["image_base"].max(), 1)
+            out = to_model_batch(raw)
+            self.assertTrue(out["image_base"].is_floating_point())
+            self.assertLessEqual(float(out["image_base"].max()), 1.0)
+            self.assertGreaterEqual(float(out["image_base"].min()), 0.0)
+
+    def test_preprocessing_is_not_applied_twice(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch unavailable")
+        from sim_vla.data.batch import to_model_batch
+        from sim_vla.data.sequences import SequenceSampler
+
+        with DemoDataset(self.path, graph_enabled=False) as data:
+            raw = SequenceSampler(data, length=6, burn_in=2, seed=0).batch(2)
+            once = to_model_batch(raw)
+            twice = to_model_batch(once)
+            self.assertTrue(torch.allclose(once["image_base"],
+                                           twice["image_base"]),
+                            "a second pass rescaled the images again")
+
+    def test_normalizer_is_applied_when_given(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch unavailable")
+        from sim_vla.data.batch import to_model_batch
+        from sim_vla.data.sequences import SequenceSampler
+
+        with DemoDataset(self.path, graph_enabled=False) as data:
+            norm = fit_normalizer(data)
+            raw = SequenceSampler(data, length=6, burn_in=2, seed=0).batch(2)
+            plain = to_model_batch(raw)
+            scaled = to_model_batch(raw, normalizer=norm)
+            self.assertFalse(torch.allclose(plain["proprio"],
+                                            scaled["proprio"]),
+                             "the normalizer was not applied")
 
 
 class TestAudit(unittest.TestCase):

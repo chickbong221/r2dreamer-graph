@@ -19,7 +19,8 @@ from typing import Any, Deque, Dict, Iterable, List, Optional
 
 import numpy as np
 
-from .batch import STEP_KEYS
+from . import layout
+from .batch import STEP_KEYS, WINDOW_REQUIRED
 
 
 @dataclass
@@ -106,7 +107,9 @@ class OnlineReplay:
         for _ in range(int(batch)):
             episode = self.episodes[int(self._rng.integers(len(self.episodes)))]
             steps = int(episode["actions"].shape[0])
-            span = min(int(length), steps)
+            # The scored span, plus whatever burn-in precedes it, capped by
+            # what the episode has. The window's row count is fixed either way.
+            span = min(int(length) + int(burn_in), steps)
             start = int(self._rng.integers(0, max(steps - span, 0) + 1))
             picks.append(self._window(episode, start, start + span, int(length),
                                       int(burn_in)))
@@ -115,23 +118,34 @@ class OnlineReplay:
     @staticmethod
     def _window(episode, start: int, stop: int, length: int, burn_in: int
                 ) -> Dict[str, np.ndarray]:
-        steps = stop - start
-        pad = max(0, length - steps)
-        out: Dict[str, np.ndarray] = {}
-        for key, value in episode.items():
-            is_obs = key not in STEP_KEYS
-            block = value[start:stop + 1] if is_obs else value[start:stop]
-            if pad:
-                block = np.concatenate(
-                    [block, np.repeat(block[-1:], pad, axis=0)], axis=0)
-            out[key] = block
-        valid = np.zeros(length, dtype=bool)
-        valid[:steps] = True
-        scored = valid.copy()
-        scored[:min(burn_in, steps)] = False
-        is_first = np.zeros(length, dtype=bool)
-        is_first[0] = start == 0
-        out |= {"valid": valid, "loss_mask": scored, "is_first": is_first}
+        """The same layout the demonstration sampler builds.
+
+        Assembled through ``layout.assemble`` rather than by a second
+        hand-written slicing: the two used to disagree about both the row count
+        and which action the posterior consumes, and a mixed batch is exactly
+        where that shows up.
+        """
+        real = stop - start
+        steps = int(episode["actions"].shape[0])
+        observations = {key: value[start:stop + 1]
+                        for key, value in episode.items()
+                        if key not in STEP_KEYS}
+        prev_action = prev_reward = None
+        if start > 0:
+            prev_action = episode["actions"][start - 1]
+            prev_reward = float(episode["rewards"][start - 1])
+        piece = layout.Slice(start=start, real=real,
+                             burn=min(burn_in, start),
+                             episode_end=stop >= steps)
+        out = layout.assemble(
+            observations=observations,
+            actions=episode["actions"][start:stop],
+            rewards=episode["rewards"][start:stop],
+            prev_action=prev_action, prev_reward=prev_reward,
+            piece=piece, length=length, burn_in=burn_in)
+        # The online env runs under ignore_terminations, like the loader.
+        out["is_terminal"] = np.zeros_like(out["valid"])
+        layout.check(out, length, burn_in)
         return out
 
 
@@ -153,10 +167,10 @@ def mixed_batch(demo_sampler, replay: OnlineReplay, batch: int, length: int,
     if demo is None:
         return online
     shared = [k for k in demo if k in online]
-    # Both sources use the storage names, so the actions and rewards are in
-    # here. If they are not, something renamed early and the batch would train
-    # on observations alone.
-    for required in ("actions", "rewards"):
+    # Both sources assemble through layout.assemble, so both carry the model
+    # contract. If a key is missing the batch would train on observations
+    # alone, which is what happened when the two disagreed about naming.
+    for required in WINDOW_REQUIRED:
         if required not in shared:
             raise KeyError(
                 f"{required!r} is not in both sources: demo has "

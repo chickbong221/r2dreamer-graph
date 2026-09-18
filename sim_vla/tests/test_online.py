@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
+
 from .common import (DummyExpert, fake_batch, obs_shapes, require_torch,
                      small_model_config)
 
@@ -157,6 +159,89 @@ class TestActorUpdate(unittest.TestCase):
         for old, new in zip(before, actor.adapter.parameters()):
             self.assertTrue(torch.equal(old, new.detach()),
                             "the actor moved during critic warm-up")
+
+
+class TestPostWarmupUpdates(unittest.TestCase):
+    """Several full updates with no warm-up left, which is where the
+    in-place/version error appeared: the critic optimizer used to step before
+    the actor's outstanding backward pass had run."""
+
+    def test_repeated_updates_after_warmup(self):
+        torch = require_torch()
+        from sim_vla.training.actor_critic import (ActorCriticConfig,
+                                                   ActorCriticTrainer)
+        from sim_vla.training.imagination import flatten_start
+
+        model, critic, batch = build(False)
+        actor = TestActorUpdate().make_actor(model)
+        trainer = ActorCriticTrainer(
+            model, actor, critic,
+            ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0))
+        start = flatten_start(model.observe(batch)["post"], False)
+        before = [p.detach().clone() for p in model.parameters()]
+
+        for step in range(3):
+            metrics = trainer.update(start)
+            self.assertFalse(np.isnan(metrics["actor_loss"]),
+                             f"actor did not update at step {step}")
+            self.assertTrue(np.isfinite(metrics["actor_grad_norm"]))
+            self.assertGreater(metrics["actor_grad_norm"], 0.0,
+                               "actor gradient was zero")
+            self.assertTrue(np.isfinite(metrics["critic_loss"]))
+
+        # The world model is frozen throughout the actor optimisation.
+        for old, new in zip(before, model.parameters()):
+            self.assertTrue(torch.equal(old, new.detach()),
+                            "an actor/critic update changed the world model")
+
+    def test_bootstrap_uses_the_slow_target(self):
+        require_torch()
+        import inspect
+
+        from sim_vla.training import actor_critic
+
+        source = inspect.getsource(actor_critic.actor_loss)
+        code = chr(10).join(line.split("#", 1)[0]
+                            for line in source.splitlines())
+        self.assertIn("target_value(", code,
+                      "the bootstrap must come from the slow target critic")
+
+
+class TestImaginationStarts(unittest.TestCase):
+    """Starts are re-encoded after the world-model step, not reused."""
+
+    def test_starts_follow_the_current_parameters(self):
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        first = start_states(model, batch, limit=0)
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.add_(torch.randn_like(parameter) * 0.1)
+        second = start_states(model, batch, limit=0)
+        self.assertFalse(torch.allclose(first[0], second[0]),
+                         "starts did not change after the model did")
+
+    def test_starts_are_detached_and_limited(self):
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        full = start_states(model, batch, limit=0)
+        self.assertFalse(full[0].requires_grad, "starts must be detached")
+        limited = start_states(model, batch, limit=3)
+        self.assertEqual(limited[0].shape[0], 3)
+
+    def test_padding_and_burn_in_are_excluded(self):
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        batch["loss_mask"] = torch.zeros_like(batch["loss_mask"])
+        batch["loss_mask"][:, 1] = True
+        starts = start_states(model, batch, limit=0)
+        self.assertEqual(starts[0].shape[0], batch["loss_mask"].shape[0])
 
 
 if __name__ == "__main__":

@@ -31,6 +31,41 @@ from typing import Any, Callable, Dict, List, Optional
 import torch
 
 
+def start_states(world_model, batch, *, limit: int = 0, generator=None
+                 ) -> tuple:
+    """Fresh, detached, filtered imagination starts.
+
+    Three things, and the first is the one that was wrong. The posterior must
+    be re-encoded with the *current* world model: reusing the one computed
+    before the update conditions the policy on states the model no longer
+    produces, and wrapping a reshape in ``no_grad`` does not recompute
+    anything.
+
+    Then padding and burn-in positions are dropped -- a repeated final row is
+    not a state the agent was ever in -- and the remainder is subsampled to
+    ``limit``, because imagining from every position of every sequence is a
+    batch the flow sampler cannot afford.
+    """
+    import torch
+
+    with torch.no_grad():
+        post = world_model.observe(batch)["post"]
+        flat = flatten_start(post, world_model.graph_enabled)
+        mask = batch.get("loss_mask")
+        if mask is None:
+            keep = torch.arange(flat[0].shape[0], device=flat[0].device)
+        else:
+            keep = torch.nonzero(mask.reshape(-1), as_tuple=False).squeeze(-1)
+        if limit and keep.numel() > int(limit):
+            pick = torch.randperm(keep.numel(), device=keep.device,
+                                  generator=generator)[: int(limit)]
+            keep = keep[pick]
+        # Detached explicitly: these seed a rollout the actor differentiates
+        # through, and a gradient reaching back into the posterior would train
+        # the world model from the actor's objective.
+        return tuple(tensor[keep].detach() for tensor in flat)
+
+
 def flatten_start(post, graph_enabled: bool) -> tuple:
     """Fold (batch, time) into one batch of imagination start states.
 

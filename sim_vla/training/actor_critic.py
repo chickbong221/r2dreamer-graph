@@ -82,7 +82,11 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
             # reports environment return, and a shaping term folded in here
             # would not be visible in it.
             reward = reward + config.progress_beta * progress_reward
+        # The live head for the values the actor differentiates through, and
+        # the slow target for the bootstrap at the horizon -- which is what the
+        # slow copy exists for.
         value = critic.value(feat)
+        value = torch.cat([value[:-1], critic.target_value(feat[-1:])], dim=0)
         returns = lambda_return(reward, value, heads["cont"][:-1],
                                 config.discount, config.lam)
         objective = -returns.mean()
@@ -111,35 +115,49 @@ class ActorCriticTrainer:
         self.step = 0
 
     def update(self, start, *, instruction=None) -> Dict[str, float]:
-        """One critic step, and one actor step once the critic has warmed up."""
+        """One actor step, then one critic step. In that order, and it matters.
+
+        The actor objective is built *through* the critic, so stepping the
+        critic optimizer first modifies parameters that the actor's outstanding
+        backward pass still needs. Autograd catches it -- "one of the variables
+        needed for gradient computation has been modified by an inplace
+        operation" -- but only once the actor actually backpropagates, which
+        with ``critic_warmup > 0`` is not until the warm-up ends. So the
+        failure appears hundreds of updates into a run.
+
+        The actor's graph is therefore consumed before the critic is touched,
+        and the critic then regresses on detached returns, which need no graph
+        at all.
+        """
+        self.step += 1
         out = actor_loss(self.world_model, self.actor, self.critic, start,
                          self.config, instruction=instruction)
+        metrics = {"return": float(out["returns"].mean()),
+                   "reward": float(out["reward"].mean())}
 
-        closs = critic_loss(self.critic, out["feat"], out["returns"])
+        warming = self.step <= self.config.critic_warmup
+        if warming:
+            # A random critic gives the actor a gradient toward noise, so the
+            # policy is left alone until the value head means something.
+            metrics["actor_loss"] = float("nan")
+        else:
+            self.actor_opt.zero_grad(set_to_none=True)
+            out["loss"].backward()
+            clipped = torch.nn.utils.clip_grad_norm_(
+                [p for p in self.actor.parameters() if p.requires_grad],
+                self.config.grad_clip)
+            self.actor_opt.step()
+            metrics |= {"actor_loss": float(out["loss"].detach()),
+                        "actor_grad_norm": float(clipped)}
+
+        # Detached inputs and detached targets: this builds its own small graph
+        # and cannot disturb the one just consumed.
+        closs = critic_loss(self.critic, out["feat"].detach(), out["returns"])
         self.critic_opt.zero_grad(set_to_none=True)
-        closs.backward(retain_graph=True)
+        closs.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.net.parameters(),
                                        self.config.grad_clip)
         self.critic_opt.step()
         self.critic.update_target()
-
-        metrics = {"critic_loss": float(closs.detach()),
-                   "return": float(out["returns"].mean()),
-                   "reward": float(out["reward"].mean())}
-
-        self.step += 1
-        if self.step <= self.config.critic_warmup:
-            # A random critic gives the actor a gradient toward noise, so the
-            # policy is left alone until the value head means something.
-            metrics["actor_loss"] = float("nan")
-            return metrics
-
-        self.actor_opt.zero_grad(set_to_none=True)
-        out["loss"].backward()
-        clipped = torch.nn.utils.clip_grad_norm_(
-            [p for p in self.actor.parameters() if p.requires_grad],
-            self.config.grad_clip)
-        self.actor_opt.step()
-        metrics |= {"actor_loss": float(out["loss"].detach()),
-                    "actor_grad_norm": float(clipped)}
+        metrics["critic_loss"] = float(closs.detach())
         return metrics

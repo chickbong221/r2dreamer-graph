@@ -31,7 +31,7 @@ from ..data.batch import to_model_batch
 from ..data.replay import OnlineEpisode, OnlineReplay, mixed_batch
 from ..runtime.checkpoint import CheckpointMeta, save
 from .actor_critic import ActorCriticConfig, ActorCriticTrainer
-from .imagination import flatten_start
+from .imagination import start_states
 
 
 @dataclass
@@ -106,17 +106,18 @@ class OnlineTrainer:
             self.config.sequence_length, self.config.burn_in,
             self.config.demo_fraction))
 
-        total, _losses, aux = self.world_model.loss(batch)
+        total, _losses, _aux = self.world_model.loss(batch)
         self.world_opt.zero_grad(set_to_none=True)
         total.backward()
         torch.nn.utils.clip_grad_norm_(self.world_model.parameters(), 100.0)
         self.world_opt.step()
         metrics = {"world_loss": float(total.detach())}
 
-        # Recomputed, never cached: the model that produced these states was
-        # updated one line ago.
-        with torch.no_grad():
-            start = flatten_start(aux["post"], self.world_model.graph_enabled)
+        # Re-encoded after the step, not reused from before it. The posterior
+        # in ``_aux`` came from the parameters that have just been replaced.
+        start = start_states(self.world_model, batch,
+                             limit=int(self.config.imagination_batch))
+        metrics["imagination_starts"] = float(start[0].shape[0])
         self.updates += 1
         if self.updates % max(int(self.config.actor_every), 1) == 0:
             metrics |= self.ac.update(start)

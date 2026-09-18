@@ -76,6 +76,56 @@ class TestWorldModelArms(unittest.TestCase):
                               graph_enabled=True)
 
 
+class TestSemanticBoundary(unittest.TestCase):
+    """Image reconstruction may read g; its gradient must not train g.
+
+    Checked numerically, by differentiating the image term alone with respect
+    to the semantic state. Checking the constructor flag or a class name would
+    pass whatever the flag actually did.
+    """
+
+    def test_image_reconstruction_does_not_train_the_semantic_branch(self):
+        torch = require_torch()
+        from sim_vla.models.world_model import build_world_model
+
+        _cfg, model_cfg = small_model_config(True)
+        batch = fake_batch(graph_enabled=True)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=True)
+        post = model.observe(batch)["post"]
+        stoch, deter, _logit, sem = model.unpack(post, True)
+        sem = sem.detach().requires_grad_(True)
+
+        recon = model.decoder(stoch.detach(), deter.detach(), sem)
+        image_keys = [k for k in recon if k.startswith("image_")]
+        self.assertTrue(image_keys, "no image head to test")
+        loss = sum(-recon[k].log_prob(batch[k]).mean() for k in image_keys)
+        grad = torch.autograd.grad(loss, sem, allow_unused=True)[0]
+        self.assertTrue(grad is None or float(grad.abs().sum()) == 0.0,
+                        "the image term back-propagated into g")
+
+    def test_the_vector_head_may_still_read_g(self):
+        """Only the CNN path is detached, so the model is not simply ignoring g."""
+        torch = require_torch()
+        from sim_vla.models.world_model import build_world_model
+
+        _cfg, model_cfg = small_model_config(True)
+        batch = fake_batch(graph_enabled=True)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=True)
+        post = model.observe(batch)["post"]
+        stoch, deter, _logit, sem = model.unpack(post, True)
+        sem = sem.detach().requires_grad_(True)
+        recon = model.decoder(stoch.detach(), deter.detach(), sem)
+        other = [k for k in recon if not k.startswith("image_") and k in batch]
+        if not other:
+            self.skipTest("no non-image decoder head in this config")
+        loss = sum(-recon[k].log_prob(batch[k]).mean() for k in other)
+        grad = torch.autograd.grad(loss, sem, allow_unused=True)[0]
+        self.assertIsNotNone(grad)
+        self.assertGreater(float(grad.abs().sum()), 0.0)
+
+
 class TestLossEquivalence(unittest.TestCase):
     """The loss terms are the simulator's, not a second implementation."""
 

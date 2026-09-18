@@ -129,8 +129,9 @@ class TestOnlineEnv(unittest.TestCase):
                 env, lambda obs: np.zeros(env.action_dim, np.float32),
                 max_steps=4, seed=0)
             arrays = episode.arrays()
+            # Storage naming: the replay stores "actions" like the dataset.
             self.assertEqual(arrays["proprio"].shape[0],
-                             arrays["action"].shape[0] + 1)
+                             arrays["actions"].shape[0] + 1)
         finally:
             env.close()
 

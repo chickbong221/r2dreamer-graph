@@ -35,6 +35,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
+from . import layout
 from .dataset import DemoDataset, EpisodeRef
 
 
@@ -59,11 +60,13 @@ class Window:
 
 def plan_windows(ref: EpisodeRef, length: int, burn_in: int,
                  stride: Optional[int] = None) -> List[Window]:
-    """Cover one episode with windows of ``length`` scored transitions.
+    """Cover one episode with windows of a single fixed shape.
 
     ``burn_in`` is requested, not guaranteed: near the start of an episode
-    there is less history than asked for, and the honest response is to use
-    what exists and mark the window as starting at the episode's own beginning.
+    there is less history than asked for. What used to vary with that was the
+    window's *length* -- 64 transitions at the start and 72 afterwards, which
+    do not stack. Now only the mask varies; every window has
+    ``layout.rows(length, burn_in)`` rows.
     """
     length, burn_in = int(length), max(int(burn_in), 0)
     stride = int(stride or length)
@@ -76,10 +79,10 @@ def plan_windows(ref: EpisodeRef, length: int, burn_in: int,
         scored_stop = min(scored_start + length, ref.steps)
         available = min(burn_in, scored_start)
         start = scored_start - available
-        real = scored_stop - start
         windows.append(Window(
             episode_id=ref.episode_id, start=start, stop=scored_stop,
-            burn_in=available, pad=max(0, (length + available) - real),
+            burn_in=available,
+            pad=max(0, layout.rows(length, burn_in) - (scored_stop - start) - 1),
         ))
         scored_start += stride
     return windows
@@ -94,6 +97,7 @@ def _pad(array: np.ndarray, rows: int) -> np.ndarray:
 
 
 def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
+                length: Optional[int] = None, burn_in: Optional[int] = None,
                 ) -> Dict[str, np.ndarray]:
     """One window's arrays, with its masks and episode flags.
 
@@ -101,55 +105,41 @@ def load_window(data: DemoDataset, ref: EpisodeRef, window: Window,
     have ``length + 1``: the observation each action led to is the next action's
     input, and the final one has no action of its own.
     """
+    length = int(length if length is not None
+                 else window.stop - window.start - window.burn_in)
+    burn_in = int(burn_in if burn_in is not None else window.burn_in)
+
     raw = data.read(ref, window.start, window.stop)
-    steps = window.stop - window.start
-    total = steps + window.pad
+    real = window.stop - window.start
 
-    out: Dict[str, np.ndarray] = {}
-    for key, array in raw.items():
-        kind_is_obs = key not in data.fields.supervision
-        out[key] = _pad(array, window.pad)
-        if kind_is_obs and out[key].shape[0] != total + 1:
-            raise ValueError(
-                f"{key} has {out[key].shape[0]} rows, expected {total + 1}")
+    # What preceded the window. A window starting mid-episode has a real
+    # previous action and a real incoming reward; one at a reset has neither,
+    # and the masks say so rather than a zero being learned as an action.
+    prev_action = prev_reward = None
+    if window.start > 0:
+        before = data.read(ref, window.start - 1, window.start)
+        prev_action = np.asarray(before["actions"])[-1]
+        prev_reward = float(np.asarray(before["rewards"])[-1])
 
-    valid = np.zeros(total, dtype=bool)
-    valid[: steps] = True
-    scored = valid.copy()
-    scored[: window.burn_in] = False
+    observations = {key: value for key, value in raw.items()
+                    if key not in data.fields.supervision}
+    piece = layout.Slice(start=window.start, real=real, burn=window.burn_in,
+                         episode_end=window.stop >= ref.steps)
+    out = layout.assemble(
+        observations=observations,
+        actions=np.asarray(raw["actions"]),
+        rewards=np.asarray(raw["rewards"]),
+        prev_action=prev_action, prev_reward=prev_reward,
+        piece=piece, length=length, burn_in=burn_in)
 
-    is_first = np.zeros(total, dtype=bool)
-    is_first[0] = window.start == 0
-
-    terminated = np.asarray(out["terminated"], dtype=bool)
-    truncated = np.asarray(out["truncated"], dtype=bool)
-    # The episode's own end, not the window's: a window that stops early
-    # because it ran out of length has not reached a last step.
-    reached_end = window.stop >= ref.steps
-    is_last = np.zeros(total, dtype=bool)
-    if reached_end and steps > 0:
-        is_last[steps - 1] = True
-    # Under the online policy nothing terminates: the env is built with
-    # ignore_terminations=True, so the recorded terminal flags describe a
-    # signal that never reaches the trainer, and every episode end -- horizon
-    # or collector cut -- is a bootstrap. Honouring the recording instead would
-    # make the demonstrations the only place a terminal state exists.
-    if data.ignore_terminations:
-        is_terminal = np.zeros(total, dtype=bool)
-    else:
-        is_terminal = terminated & valid
-        # A cut that the collector made is still not a termination.
-        if reached_end and not ref.terminal and steps > 0:
-            is_terminal[steps - 1] = False
-
-    out |= {
-        "valid": valid,
-        "loss_mask": scored,
-        "is_first": is_first,
-        "is_last": is_last,
-        "is_terminal": is_terminal,
-        "is_truncated": truncated & valid,
-    }
+    # Terminations follow the online env; the recorded flags stay diagnostics.
+    out["is_terminal"] = np.zeros_like(out["valid"])
+    if not data.ignore_terminations:
+        terminated = np.asarray(raw["terminated"], dtype=bool)
+        incoming = np.concatenate([[False], terminated])[: real + 1]
+        out["is_terminal"] = layout._pad_to(
+            incoming, out["valid"].shape[0]) & out["valid"]
+    layout.check(out, length, burn_in)
     return out
 
 
@@ -170,13 +160,15 @@ class SequenceSampler:
             window for ref in data.episodes
             for window in plan_windows(ref, self.length, self.burn_in, stride)
         ]
+        self.rows = layout.rows(self.length, self.burn_in)
         self._rng = np.random.default_rng(int(seed))
 
     def __len__(self) -> int:
         return len(self.windows)
 
     def load(self, window: Window) -> Dict[str, np.ndarray]:
-        return load_window(self.data, self.refs[window.episode_id], window)
+        return load_window(self.data, self.refs[window.episode_id], window,
+                           self.length, self.burn_in)
 
     def iter_epoch(self, shuffle: bool = True) -> Iterator[Dict[str, np.ndarray]]:
         order = np.arange(len(self.windows))
