@@ -119,25 +119,45 @@ class ActorCriticTrainer:
         self.step = 0
 
     def update(self, start, *, instruction=None) -> Dict[str, float]:
-        """One actor step, then one critic step. In that order, and it matters.
+        """Train the critic, then recompute and train the actor.
 
-        The actor objective is built *through* the critic, so stepping the
-        critic optimizer first modifies parameters that the actor's outstanding
-        backward pass still needs. Autograd catches it -- "one of the variables
-        needed for gradient computation has been modified by an inplace
-        operation" -- but only once the actor actually backpropagates, which
-        with ``critic_warmup > 0`` is not until the warm-up ends. So the
-        failure appears hundreds of updates into a run.
+        The critic cannot be stepped while an actor graph that used its
+        parameters is still waiting for backward; doing so triggers PyTorch's
+        in-place version check. Conversely, training the actor before the very
+        first critic update can produce an exactly zero gradient because the
+        distribution heads start flat. The safe order is therefore:
 
-        The actor's graph is therefore consumed before the critic is touched,
-        and the critic then regresses on detached returns, which need no graph
-        at all.
+        1. imagine once and update the critic from detached features/returns;
+        2. update the slow target;
+        3. if warm-up is over, imagine again through the updated, frozen critic
+           and immediately consume that fresh actor graph.
+
+        Recomputing is intentional. Retaining the first graph across the
+        critic optimizer step would be invalid even if it happened not to
+        raise on a particular PyTorch version.
         """
         self.step += 1
-        out = actor_loss(self.world_model, self.actor, self.critic, start,
-                         self.config, instruction=instruction)
-        metrics = {"return": float(out["returns"].mean()),
-                   "reward": float(out["reward"].mean())}
+        # This rollout supplies detached critic targets only. Avoid retaining
+        # a full SmolVLA/world-model graph that can never be used.
+        with torch.no_grad():
+            critic_out = actor_loss(
+                self.world_model, self.actor, self.critic, start, self.config,
+                instruction=instruction)
+
+        # Detached inputs and detached targets: this graph belongs only to the
+        # critic and can be consumed before a new actor graph is constructed.
+        closs = critic_loss(
+            self.critic, critic_out["feat"].detach(), critic_out["returns"])
+        self.critic_opt.zero_grad(set_to_none=True)
+        closs.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.net.parameters(),
+                                       self.config.grad_clip)
+        self.critic_opt.step()
+        self.critic.update_target()
+
+        metrics = {"return": float(critic_out["returns"].mean()),
+                   "reward": float(critic_out["reward"].mean()),
+                   "critic_loss": float(closs.detach())}
 
         warming = self.step <= self.config.critic_warmup
         if warming:
@@ -145,6 +165,12 @@ class ActorCriticTrainer:
             # policy is left alone until the value head means something.
             metrics["actor_loss"] = float("nan")
         else:
+            # The critic and its slow target changed above, so build a fresh
+            # objective. This graph is consumed before either is modified
+            # again.
+            out = actor_loss(
+                self.world_model, self.actor, self.critic, start, self.config,
+                instruction=instruction)
             trainable = [p for p in self.actor.parameters() if p.requires_grad]
             if not trainable:
                 raise RuntimeError(
@@ -168,15 +194,4 @@ class ActorCriticTrainer:
                         "actor_grad_norm": raw_norm,
                         "actor_params_with_grad": float(len(populated)),
                         "actor_params_trainable": float(len(trainable))}
-
-        # Detached inputs and detached targets: this builds its own small graph
-        # and cannot disturb the one just consumed.
-        closs = critic_loss(self.critic, out["feat"].detach(), out["returns"])
-        self.critic_opt.zero_grad(set_to_none=True)
-        closs.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.net.parameters(),
-                                       self.config.grad_clip)
-        self.critic_opt.step()
-        self.critic.update_target()
-        metrics["critic_loss"] = float(closs.detach())
         return metrics

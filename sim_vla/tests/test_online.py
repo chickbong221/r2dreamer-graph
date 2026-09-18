@@ -211,13 +211,17 @@ class TestPostWarmupUpdates(unittest.TestCase):
                                              allow_unused=True)
                 direct_norm = float(torch.sqrt(sum(
                     (g ** 2).sum() for g in direct if g is not None)))
+                # Inspect the live graph before backward consumes it. This is
+                # only a failure diagnostic, but it must not replace the real
+                # zero-gradient assertion with "backward through graph a
+                # second time".
+                chain = gradient_chain(out["loss"], out, actor)
                 for parameter in params:
                     parameter.grad = None
                 out["loss"].backward()
                 backward_norm = float(torch.sqrt(sum(
                     (p.grad ** 2).sum() for p in params
                     if p.grad is not None)))
-                chain = gradient_chain(out["loss"], out, actor)
                 self.fail(
                     f"actor gradient was zero at step {step}. "
                     f"autograd.grad norm={direct_norm:.3e}, "
