@@ -198,13 +198,32 @@ class TestPostWarmupUpdates(unittest.TestCase):
                              f"{metrics['actor_params_trainable']} actor "
                              "parameters received a gradient")
             if metrics["actor_grad_norm"] == 0.0:
+                # Every parameter has a .grad (asserted above) and their norm
+                # is zero, while autograd.grad on the same objective is not.
+                # Compute both on one objective to locate the discrepancy.
                 from sim_vla.training.actor_critic import actor_loss
                 from sim_vla.training.imagination import gradient_chain
 
                 out = actor_loss(model, actor, critic, start, trainer.config)
+                params = [p for p in actor.parameters() if p.requires_grad]
+                direct = torch.autograd.grad(out["loss"], params,
+                                             retain_graph=True,
+                                             allow_unused=True)
+                direct_norm = float(torch.sqrt(sum(
+                    (g ** 2).sum() for g in direct if g is not None)))
+                for parameter in params:
+                    parameter.grad = None
+                out["loss"].backward()
+                backward_norm = float(torch.sqrt(sum(
+                    (p.grad ** 2).sum() for p in params
+                    if p.grad is not None)))
                 chain = gradient_chain(out["loss"], out, actor)
-                self.fail(f"actor gradient was zero at step {step}; "
-                          f"gradient chain: {chain}")
+                self.fail(
+                    f"actor gradient was zero at step {step}. "
+                    f"autograd.grad norm={direct_norm:.3e}, "
+                    f".grad norm after backward={backward_norm:.3e}, "
+                    f"unused={sum(1 for g in direct if g is None)}/"
+                    f"{len(params)}; chain={chain}")
             self.assertTrue(np.isfinite(metrics["critic_loss"]))
 
         # The world model is frozen throughout the actor optimisation.

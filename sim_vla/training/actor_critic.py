@@ -95,6 +95,10 @@ def actor_loss(world_model, actor, critic, start, config: ActorCriticConfig,
         "returns": returns.detach(),
         "feat": feat,
         "action": rollout["action"],
+        # Forwarded so a diagnostic can probe the real graph nodes. The stacked
+        # "action" is built after the rollout and is not on the path to the
+        # objective, so autograd.grad against it always returns None.
+        "action_steps": rollout.get("action_steps", []),
         "reward": reward.detach(),
     }
 
