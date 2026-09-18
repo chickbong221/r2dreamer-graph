@@ -183,8 +183,23 @@ def resolved_thresholds_path(path: str = "") -> str:
         return str(packaged)
 
 
+# Keys the graph builder writes back into the config once it has seen a scene.
+# They are not settings: they are the union whitelist's contents, resolved
+# against whatever the episode contained. ``whitelist_digest`` already
+# identifies the asset they come from, so dropping them loses nothing and keeps
+# the recorded configuration comparable between processes -- which matters
+# because ``structural_surfaces`` is a Python set, and a set's iteration order
+# depends on per-process string hash randomisation. Serialised, it comes out in
+# a different order in every worker, and eight shards of one run then disagree
+# about a configuration they share.
+RUNTIME_CFG_KEYS: Tuple[str, ...] = (
+    "structural_surfaces", "families", "site_declarations", "bin_edges",
+    "site_specs",
+)
+
+
 def json_safe(value: Any) -> Any:
-    """A config tree as JSON, keeping its shape.
+    """A config tree as JSON, keeping its shape and its order.
 
     The earlier version of this kept only scalars, which quietly dropped every
     nested block -- contact, grasp, support, selection -- so two datasets could
@@ -196,6 +211,10 @@ def json_safe(value: Any) -> Any:
                 # Caches and handles the builder hangs off the config: runtime
                 # state, not settings, and not serialisable either.
                 if not str(k).startswith("_")}
+    # Sorted, not stringified. An unordered container has to be given an order
+    # here or it acquires a different one in every process.
+    if isinstance(value, (set, frozenset)):
+        return sorted(json_safe(v) for v in value)
     if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
     if isinstance(value, np.generic):
@@ -218,10 +237,32 @@ MERGE_KEYS: Tuple[str, ...] = (
 )
 
 
+def graph_config_snapshot(cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """The graph's settings, without the state the builder writes into them."""
+    return {key: value for key, value in json_safe(cfg).items()
+            if key not in RUNTIME_CFG_KEYS}
+
+
+def sanitize_metadata(meta: Mapping[str, Any]) -> Dict[str, Any]:
+    """A metadata block with the builder's runtime state removed.
+
+    Applied to what is *read back* as well as to what is written, so a dataset
+    recorded before this distinction existed still compares correctly against
+    one recorded after.
+    """
+    out = dict(meta)
+    graph = out.get("graph")
+    if isinstance(graph, Mapping) and isinstance(graph.get("config"), Mapping):
+        out["graph"] = dict(graph) | {
+            "config": graph_config_snapshot(graph["config"])}
+    return out
+
+
 def merge_conflicts(reference: Mapping[str, Any],
                     other: Mapping[str, Any]) -> List[str]:
     """Which of :data:`MERGE_KEYS` two metadata blocks disagree on."""
-    return [key for key in MERGE_KEYS if reference.get(key) != other.get(key)]
+    left, right = sanitize_metadata(reference), sanitize_metadata(other)
+    return [key for key in MERGE_KEYS if left.get(key) != right.get(key)]
 
 
 def controller_metadata(env) -> Dict[str, Any]:
@@ -315,8 +356,10 @@ def build_metadata(
         "controller": controller_metadata(env),
         "graph": {
             # The whole resolved tree, nested blocks included: the contact,
-            # grasp and support settings are what an edge label means.
-            "config": json_safe(graph_cfg),
+            # grasp and support settings are what an edge label means. What the
+            # builder later writes back into this dict from the scene is not a
+            # setting and is left out -- see RUNTIME_CFG_KEYS.
+            "config": graph_config_snapshot(graph_cfg),
             "temporal_k": int(temporal_k),
             "n_max": int(n_max),
             "e_max": int(e_max),

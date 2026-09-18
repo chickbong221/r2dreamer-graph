@@ -484,7 +484,7 @@ def merge_shards(out: Path, shards: Sequence[Path], *,
     """
     import h5py
 
-    from .schema import merge_conflicts
+    from .schema import merge_conflicts, sanitize_metadata
 
     if out.exists() and not overwrite:
         raise SystemExit(
@@ -496,7 +496,10 @@ def merge_shards(out: Path, shards: Sequence[Path], *,
     # metadata described data that was no longer in it.
     sidecars = [json.loads(shard.with_suffix(".json").read_text(encoding="utf-8"))
                 for shard in shards]
-    metadata = sidecars[0]["metadata"]
+    # Sanitised before it is compared or stored: one worker's resolved scene
+    # state is not a property of the merged dataset, and keeping it would make
+    # the merged file disagree with the seven shards it did not come from.
+    metadata = sanitize_metadata(sidecars[0]["metadata"])
     conflicts = {
         shard.name: bad
         for shard, side in zip(shards[1:], sidecars[1:])

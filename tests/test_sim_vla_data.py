@@ -86,6 +86,45 @@ class TestSchema(unittest.TestCase):
         self.assertNotIn(digest, ("default", "missing"))
         self.assertEqual(len(digest), 40)
 
+    def test_unordered_config_values_serialise_deterministically(self):
+        """A set has a different iteration order in every process.
+
+        ``structural_surfaces`` is a set the graph builder writes back into the
+        config, and stringifying it made eight workers of one run disagree
+        about a configuration they shared.
+        """
+        surfaces = {"actor:table", "actor:ground", "actor:peg"}
+        self.assertEqual(json_safe({"s": surfaces})["s"],
+                         ["actor:ground", "actor:peg", "actor:table"])
+
+    def test_builder_runtime_state_is_not_part_of_the_config(self):
+        from sim_vla.data.schema import graph_config_snapshot, sanitize_metadata
+
+        cfg = {"contact": {"eps_force": 0.05},
+               "structural_surfaces": {"actor:table"},
+               "bin_edges": {"contact": [1, 2]}, "site_specs": ["x"]}
+        snapshot = graph_config_snapshot(cfg)
+        self.assertEqual(snapshot, {"contact": {"eps_force": 0.05}})
+        # Applied on read as well, so shards recorded before this distinction
+        # existed still compare correctly.
+        stored = {"graph": {"config": cfg, "n_max": 8}}
+        self.assertEqual(
+            sanitize_metadata(stored)["graph"]["config"],
+            {"contact": {"eps_force": 0.05}})
+        self.assertEqual(sanitize_metadata(stored)["graph"]["n_max"], 8)
+
+    def test_shards_differing_only_in_runtime_state_still_merge(self):
+        a = {"graph": {"config": {"contact": {"eps_force": 0.05},
+                                  "structural_surfaces": {"a", "b"},
+                                  "bin_edges": {"x": 1}}}}
+        b = {"graph": {"config": {"contact": {"eps_force": 0.05},
+                                  "structural_surfaces": {"b", "a", "c"},
+                                  "bin_edges": {"x": 2}}}}
+        self.assertEqual(merge_conflicts(a, b), [])
+        # A real disagreement is still caught.
+        c = {"graph": {"config": {"contact": {"eps_force": 0.9}}}}
+        self.assertEqual(merge_conflicts(a, c), ["graph"])
+
     def test_merge_conflicts_cover_more_than_vocabulary(self):
         base = {"env_id": "PickCube-v1", "image_size": [112, 112],
                 "graph": {"n_max": 8}}
