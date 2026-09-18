@@ -96,8 +96,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # only valid at equal steps. beta itself is not overridden here: it comes
 # from sim_vla/configs/base.yaml (0.05) via configs/experiments/
 # graph_progress.yaml turning progress.enabled on.
-WORLD_STEPS=100000
-IMITATION_STEPS=50000
+WORLD_STEPS=500000
+IMITATION_STEPS=200000
 ONLINE_STEPS=500000
 
 python -m sim_vla.training.pipeline \

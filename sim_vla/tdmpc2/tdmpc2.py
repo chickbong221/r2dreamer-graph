@@ -14,9 +14,19 @@ class TDMPC2:
 	and supports both state and pixel observations.
 	"""
 
+	# The five places this agent asks its learned policy for an action. Named
+	# so that an external policy can say which of them it serves and so that a
+	# run can report exactly which ones it took over. See
+	# sim_vla/integrations/tdmpc2/policy.py.
+	POLICY_SITES = ('act', 'plan_proposals', 'estimate_value', 'td_target',
+					'update_pi')
+
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self.device = torch.device('cuda')
+		# Defaults to 'cuda', which is what it always was. Read from the config
+		# so the agent can be constructed on CPU for tests that do not need a
+		# GPU; a run that sets nothing behaves exactly as before.
+		self.device = torch.device(cfg.get('device', 'cuda') if hasattr(cfg, 'get') else 'cuda')
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
@@ -30,10 +40,52 @@ class TDMPC2:
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device=self.device
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
-		
+
 		self.cfg.discount = self.discount
+
+		# Latent-conditioned policy hook. None is the upstream agent: the
+		# Gaussian prior proposes, bootstraps and is optimised exactly as
+		# before, and every line below behaves as it did. An attached policy
+		# only has to answer `serves(site)`, `sample(z, task, ...)` and
+		# `update(agent, zs, task)`; nothing here knows what is behind it.
+		self.latent_policy = None
+
+	# ----------------------------------------------------------- policy hooks
+	def attach_policy(self, policy):
+		"""Route the learned-policy call sites at an external policy.
+
+		The five sites are listed in `POLICY_SITES`. A policy may serve any
+		subset; the ones it does not serve keep using `self.model._pi`, which
+		is why the Gaussian prior is still trained in that case.
+		"""
+		if policy is not None:
+			unknown = [s for s in getattr(policy, 'sites', ()) if s not in self.POLICY_SITES]
+			if unknown:
+				raise ValueError(f'unknown policy site(s) {unknown}; this agent has {self.POLICY_SITES}')
+		self.latent_policy = policy
+		return self
+
+	def _latent_policy_for(self, site):
+		policy = self.latent_policy
+		if policy is None or not policy.serves(site):
+			return None
+		return policy
+
+	def pi_action(self, z, task, *, site, deterministic=False):
+		"""An action proposal at latent `z`, from whichever policy serves `site`.
+
+		Deliberately not the Gaussian's full return signature. `model.pi`
+		returns `(mu, pi, log_pi, log_std)` and a flow policy has none of the
+		last two, so the hook returns an action and the objectives that wanted
+		a log-probability are adjusted rather than handed a stand-in.
+		"""
+		policy = self._latent_policy_for(site)
+		if policy is None:
+			return self.model.pi(z, task)[0 if deterministic else 1]
+		return policy.sample(z, task, deterministic=deterministic, grad=False,
+							 site=site)
 
 	def _get_discount(self, episode_length):
 		"""
@@ -57,17 +109,34 @@ class TDMPC2:
 		Args:
 			fp (str): Filepath to save state dict to.
 		"""
-		torch.save({"model": self.model.state_dict()}, fp)
+		payload = {"model": self.model.state_dict()}
+		# Additive: a native run writes exactly what it always wrote, and a run
+		# with a latent policy attached writes its weights and the decisions
+		# they depend on beside them rather than dropping them. `Logger` calls
+		# this, so an online run's periodic checkpoints keep the policy too.
+		if self.latent_policy is not None:
+			payload["latent_policy"] = self.latent_policy.state_dict()
+			payload["latent_policy_meta"] = self.latent_policy.descriptor()
+		torch.save(payload, fp)
 
 	def load(self, fp):
 		"""
 		Load a saved state dict from filepath (or dictionary) into current agent.
-		
+
 		Args:
 			fp (str or dict): Filepath or state dict to load.
 		"""
 		state_dict = fp if isinstance(fp, dict) else torch.load(fp)
 		self.model.load_state_dict(state_dict["model"])
+		if self.latent_policy is not None:
+			if "latent_policy" not in state_dict:
+				raise SystemExit(
+					"this checkpoint holds only the world model, and a latent "
+					"policy is attached. Load it with attach_policy(None) to "
+					"take the world model alone, or point at a checkpoint "
+					"written with the policy attached.")
+			self.latent_policy.load_state_dict(state_dict["latent_policy"],
+											   state_dict.get("latent_policy_meta"))
 
 	@torch.no_grad()
 	def act(self, obs, t0=False, eval_mode=False, task=None):
@@ -96,7 +165,9 @@ class TDMPC2:
 		if self.cfg.mpc:
 			a = self.plan(z, t0=t0, eval_mode=eval_mode, task=task)
 		else:
-			a = self.model.pi(z, task)[int(not eval_mode)] # [int(not eval_mode)] selects mu or pi
+			# [int(not eval_mode)] selected mu or pi; the hook takes the same
+			# choice as `deterministic` and returns only the action.
+			a = self.pi_action(z, task, site='act', deterministic=eval_mode)
 		return a.cpu()
 
 	@torch.no_grad()
@@ -109,7 +180,8 @@ class TDMPC2:
 			z = self.model.next(z, actions[:, t], task)
 			G += discount * reward
 			discount *= self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
-		return G + discount * self.model.Q(z, self.model.pi(z, task)[1], task, return_type='avg')
+		return G + discount * self.model.Q(
+			z, self.pi_action(z, task, site='estimate_value'), task, return_type='avg')
 
 	@torch.no_grad()
 	def plan(self, z, t0=False, eval_mode=False, task=None):
@@ -132,10 +204,16 @@ class TDMPC2:
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(num_envs, self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
 			_z = z.unsqueeze(1).repeat(1, self.cfg.num_pi_trajs, 1) # (num_envs, num_pi_trajs, latent_dim)
+			# One proposal per latent, then the latent is advanced by that
+			# proposal and the next one is asked of the *resulting* latent.
+			# This is the planner's own structure and it is what keeps a
+			# chunked policy's chunk length from being mistaken for the
+			# planning horizon: the chunk is sampled at each latent and its
+			# first action is the proposal there.
 			for t in range(self.cfg.horizon-1):
-				pi_actions[:, t] = self.model.pi(_z, task)[1]
+				pi_actions[:, t] = self.pi_action(_z, task, site='plan_proposals')
 				_z = self.model.next(_z, pi_actions[:, t], task)
-			pi_actions[:, -1] = self.model.pi(_z, task)[1]
+			pi_actions[:, -1] = self.pi_action(_z, task, site='plan_proposals')
 
 		# Initialize state and parameters
 		z = z.unsqueeze(1).repeat(1, self.cfg.num_samples, 1) # (num_envs, num_samples, latent_dim)
@@ -198,8 +276,11 @@ class TDMPC2:
 		
 	def update_pi(self, zs, task):
 		"""
-		Update policy using a sequence of latent states.
-		
+		Update the policy using a sequence of latent states.
+
+		With no latent policy attached, or with one that does not serve
+		`update_pi`, this is the upstream Gaussian update, unchanged.
+
 		Args:
 			zs (torch.Tensor): Sequence of latent states.
 			task (torch.Tensor): Task index (only used for multi-task experiments).
@@ -207,6 +288,50 @@ class TDMPC2:
 		Returns:
 			float: Loss of the policy update.
 		"""
+		policy = self._latent_policy_for('update_pi')
+		if policy is None:
+			return self.update_pi_gaussian(zs, task)
+		loss = self.update_pi_latent(policy, zs, task)
+		if policy.needs_gaussian:
+			# Some other site still falls back to `model._pi`, so the prior has
+			# to keep learning: a site bootstrapping off a policy frozen at the
+			# end of pretraining is a stale target, not a fixed one.
+			self.update_pi_gaussian(zs, task)
+		return loss
+
+	def update_pi_latent(self, policy, zs, task):
+		"""The Q-based policy-return objective, with a flow policy's actions.
+
+		Two differences from the Gaussian branch, and only these:
+
+		* **No entropy term.** `entropy_coef * log_pi` is dropped. A flow
+		  policy has no tractable log-probability and no analytic entropy, and
+		  the flow-matching loss is a regression onto a velocity rather than a
+		  density -- putting it here would produce a number, not the
+		  objective. Nothing replaces it; no substitute regularizer is added.
+		* **The optimizer steps the adapter and the action expert** rather
+		  than `model._pi`.
+
+		The Q-value scaling (`RunningScale`), the `rho` weighting over the
+		latent rollout, and disabling Q gradients during the policy step are
+		all unchanged.
+		"""
+		policy.zero_grad()
+		self.model.track_q_grad(False)
+		pis = policy.sample(zs, task, grad=True, site='update_pi')
+		qs = self.model.Q(zs, pis, task, return_type='avg')
+		self.scale.update(qs[0])
+		qs = self.scale(qs)
+
+		rho = torch.pow(self.cfg.rho, torch.arange(len(qs), device=self.device))
+		pi_loss = ((-qs).mean(dim=(1,2)) * rho).mean()
+		pi_loss.backward()
+		policy.step(self.cfg.grad_clip_norm)
+		self.model.track_q_grad(True)
+		return pi_loss.item()
+
+	def update_pi_gaussian(self, zs, task):
+		"""The upstream Gaussian policy update, verbatim."""
 		self.pi_optim.zero_grad(set_to_none=True)
 		self.model.track_q_grad(False)
 		_, pis, log_pis, _ = self.model.pi(zs, task)
@@ -237,7 +362,7 @@ class TDMPC2:
 		Returns:
 			torch.Tensor: TD-target.
 		"""
-		pi = self.model.pi(next_z, task)[1]
+		pi = self.pi_action(next_z, task, site='td_target')
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * self.model.Q(next_z, pi, task, return_type='min', target=True)
 

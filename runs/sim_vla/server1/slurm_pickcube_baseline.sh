@@ -96,8 +96,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # fractions to whatever --online-steps is given here, so the baseline and the
 # graph_progress run only need to agree on this number, not on an absolute
 # warm-up window.
-WORLD_STEPS=100000
-IMITATION_STEPS=50000
+WORLD_STEPS=500000
+IMITATION_STEPS=200000
 ONLINE_STEPS=500000
 
 python -m sim_vla.training.pipeline \

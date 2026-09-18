@@ -1,0 +1,86 @@
+# TD-MPC2 with a latent-conditioned SmolVLA policy.
+#
+# Everything under `world_model` is an override on sim_vla/tdmpc2/config.yaml,
+# which stays the source for every setting not named here. `model_size` picks
+# one of upstream's own presets; the individual widths below it are the sizing
+# decisions taken after measuring, and each one is recorded in the checkpoint.
+#
+# With `smolvla.enabled: false` the agent built from this file is the upstream
+# one: the Gaussian policy proposes, bootstraps and is optimised exactly as it
+# does in sim_vla/tdmpc2/tdmpc2.py.
+
+device: cuda
+seed: 1
+
+world_model:
+  # Upstream preset 5. Measured rather than assumed: see
+  # `python -m sim_vla.integrations.tdmpc2.run params`.
+  model_size: 5
+  obs: rgb
+  include_state: true
+  # layers.conv accepts 64 or 128. The demonstrations are recorded at 112 and
+  # resampled once, by integrations/observations.py, on both the stored and
+  # the live path.
+  render_size: 64
+  # Planning and the Q ensemble. Left at upstream's values: they are TD-MPC2's
+  # algorithm, not this integration's.
+  mpc: true
+  horizon: 3
+  iterations: 6
+  num_samples: 512
+  num_elites: 64
+  num_pi_trajs: 24
+  num_q: 5
+  batch_size: 256
+  num_envs: 32
+  num_eval_envs: 4
+  env_type: gpu
+  control_mode: default
+  steps_per_update: 16
+  buffer_size: 1_000_000
+  exp_name: tdmpc2_smolvla
+  save_agent: true
+  save_csv: true
+  wandb: false
+
+smolvla:
+  enabled: true
+  pretrained: lerobot/smolvla_base
+  # Pin this. `python -m sim_vla.download_pretrained --out data/pretrained`
+  # resolves a branch to an immutable commit and prints what to paste here.
+  revision: ''
+  chunk_size: 0            # 0 takes the checkpoint's own value
+  flow_steps: 0            # 0 takes the checkpoint's num_steps
+  state_token_mode: embedding
+  adapter:
+    hidden: 1024
+    layers: 2
+  action_normalization: identity
+  execute: 1
+  # 0 keeps the planner's own num_pi_trajs. Lowering it is a cost decision for
+  # the flow sampler and is reported as a deviation from native settings.
+  pi_trajs: 0
+  proposal_flow_steps: 0
+
+data:
+  # The shared sim_vla demonstrations, so all three backends train on the same
+  # episodes. Set by the task block; override only to point elsewhere.
+  dataset: ''
+  # Window length for the imitation stage. Separate from the planner horizon
+  # and from the action chunk.
+  sequence_length: 32
+  burn_in: 0
+  seed: 0
+
+stages:
+  world_model:
+    steps: 50_000
+    log_every: 500
+  imitation:
+    steps: 20_000
+    batch_size: 16
+    lr: 1.0e-4
+    grad_clip: 1.0
+    log_every: 100
+  online:
+    steps: 1_000_000
