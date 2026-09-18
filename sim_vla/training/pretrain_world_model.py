@@ -30,7 +30,7 @@ from ..data.batch import to_model_batch
 from ..data.dataset import DemoDataset
 from ..data.normalization import fit_normalizer
 from ..data.sequences import SequenceSampler
-from ..models.model_config import load_model_config
+from ..models.model_config import DEFAULT_MODEL, load_model_config
 from ..models.world_model import build_world_model
 from ..runtime.checkpoint import CheckpointMeta, save
 
@@ -41,7 +41,8 @@ def observation_shapes(batch: Dict[str, torch.Tensor]) -> Dict[str, tuple]:
             if hasattr(value, "dim") and value.dim() >= 2}
 
 
-def build(cfg: Dict[str, Any], *, device: str):
+def build(cfg: Dict[str, Any], *, device: str,
+          model_yaml: Path | None = None):
     """The dataset, the sampler and the arm's world model, wired together."""
     graph_enabled = bool(cfg["model"]["graph"]["enabled"])
     data = DemoDataset(
@@ -59,7 +60,9 @@ def build(cfg: Dict[str, Any], *, device: str):
     sampler = SequenceSampler(
         data, length=int(cfg["data"]["sequence_length"]),
         burn_in=int(cfg["data"]["burn_in"]), seed=int(cfg["data"]["seed"]))
-    model_cfg = load_model_config(cfg)
+    model_cfg = load_model_config(
+        cfg, model_yaml=Path(model_yaml) if model_yaml is not None
+        else DEFAULT_MODEL)
 
     probe = to_model_batch(sampler.batch(2), device)
     model = build_world_model(
@@ -69,8 +72,10 @@ def build(cfg: Dict[str, Any], *, device: str):
 
 
 def run(cfg: Dict[str, Any], *, steps: int, device: str, out: Path,
-        overwrite: bool = False) -> Dict[str, float]:
-    data, sampler, model, model_cfg = build(cfg, device=device)
+        overwrite: bool = False,
+        model_yaml: Path | None = None) -> Dict[str, float]:
+    data, sampler, model, model_cfg = build(
+        cfg, device=device, model_yaml=model_yaml)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(model_cfg.lr))
 
     # Fitted once from the demonstrations both arms share, and written beside
@@ -115,6 +120,18 @@ def parse_args(argv=None):
                         choices=("dreamer", "graph", "graph_progress"))
     parser.add_argument("--steps", type=int, default=50_000)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--model-config", default=str(DEFAULT_MODEL),
+        help="Dreamer model preset, for example configs/model/size12M.yaml")
+    parser.add_argument(
+        "--batch-size", type=int, default=None,
+        help="override data.batch_size (useful for a memory-light smoke run)")
+    parser.add_argument(
+        "--sequence-length", type=int, default=None,
+        help="override data.sequence_length")
+    parser.add_argument(
+        "--burn-in", type=int, default=None,
+        help="override data.burn_in; must be smaller than sequence-length")
     parser.add_argument("--out", default="")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args(argv)
@@ -122,7 +139,28 @@ def parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    cfg = load_config(args.task, args.experiment)
+    data_overrides = {}
+    for key, value in (("batch_size", args.batch_size),
+                       ("sequence_length", args.sequence_length),
+                       ("burn_in", args.burn_in)):
+        if value is not None:
+            data_overrides[key] = value
+    cfg = load_config(
+        args.task, args.experiment,
+        overrides={"data": data_overrides} if data_overrides else None)
+    if int(cfg["data"]["batch_size"]) < 1:
+        raise SystemExit("--batch-size must be at least 1")
+    if int(cfg["data"]["sequence_length"]) < 2:
+        raise SystemExit("--sequence-length must be at least 2")
+    if not 0 <= int(cfg["data"]["burn_in"]) < int(
+            cfg["data"]["sequence_length"]):
+        raise SystemExit(
+            "--burn-in must be non-negative and smaller than "
+            "--sequence-length")
+    model_yaml = Path(args.model_config)
+    if not model_yaml.is_file():
+        raise SystemExit(f"model config does not exist: {model_yaml}")
+    cfg.setdefault("runtime", {})["model_config"] = str(model_yaml)
     out = Path(args.out or
                f"runs/sim_vla/{args.task}/{args.experiment}/world_model.pt")
     if out.exists() and not args.overwrite:
@@ -130,9 +168,13 @@ def main(argv=None) -> int:
             f"{out} already exists; pass --overwrite to replace it. An arm's "
             "world model is trained once and its checkpoint is what every "
             "later stage loads.")
-    print(f"[world_model] {args.task} / {args.experiment} -> {out}", flush=True)
+    print(f"[world_model] {args.task} / {args.experiment} -> {out}\n"
+          f"[world_model] model={model_yaml} "
+          f"batch={cfg['data']['batch_size']} "
+          f"sequence={cfg['data']['sequence_length']} "
+          f"burn_in={cfg['data']['burn_in']}", flush=True)
     last = run(cfg, steps=args.steps, device=args.device, out=out,
-               overwrite=args.overwrite)
+               overwrite=args.overwrite, model_yaml=model_yaml)
     print(f"[world_model] wrote {out}")
     print(f"[world_model] final losses: {json.dumps(last, indent=2)}")
     return 0
