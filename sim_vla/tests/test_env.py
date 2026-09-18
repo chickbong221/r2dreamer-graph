@@ -43,16 +43,63 @@ class TestReplay(unittest.TestCase):
         with self.assertRaises(ValueError):
             replay.add(self.episode(steps=5, obs_rows=5))
 
-    def test_windows_stay_inside_one_episode(self):
+    def test_windows_use_the_canonical_layout(self):
+        """Every array has one row per observation, the same count for all.
+
+        The replay used to emit its own shape -- transitions for actions,
+        transitions+1 for observations -- which is why a mixed batch failed on
+        73 rows against 65. Both sources now go through layout.assemble.
+        """
+        from sim_vla.data import layout
         from sim_vla.data.replay import OnlineReplay
 
         replay = OnlineReplay(seed=0)
         for _ in range(4):
             replay.add(self.episode(steps=7))
         batch = replay.sample(batch=3, length=4, burn_in=1)
-        self.assertEqual(batch["action"].shape[:2], (3, 4))
-        self.assertEqual(batch["proprio"].shape[:2], (3, 5))
-        self.assertFalse(batch["loss_mask"][:, 0].any())     # burn-in excluded
+        expected = layout.rows(4, 1)
+        for key, value in batch.items():
+            self.assertEqual(value.shape[0], 3, key)
+            self.assertEqual(value.shape[1], expected, key)
+        # The posterior input and the actor target are separate arrays.
+        for key in ("action", "action_target", "reward", "loss_mask",
+                    "valid", "action_valid", "reward_valid"):
+            self.assertIn(key, batch)
+
+    def test_windows_stay_inside_one_episode(self):
+        """A window never reaches past the episode it was drawn from.
+
+        Rewards were written as the step index, so a row that crossed a
+        boundary would carry a reward from the wrong episode.
+        """
+        from sim_vla.data.replay import OnlineReplay
+
+        replay = OnlineReplay(seed=0)
+        for _ in range(4):
+            replay.add(self.episode(steps=7))
+        batch = replay.sample(batch=3, length=4, burn_in=1)
+        rewards, valid = batch["reward"], batch["valid"]
+        for row in range(rewards.shape[0]):
+            real = rewards[row][valid[row]]
+            # Contiguous and non-decreasing: one episode, in order.
+            self.assertTrue(np.all(np.diff(real) >= 0), real)
+            self.assertLessEqual(float(real.max()), 6.0)
+
+    def test_burn_in_is_excluded_only_where_it_exists(self):
+        """A window at a reset has no history to burn in, so row 0 is scored."""
+        from sim_vla.data.replay import OnlineReplay
+
+        replay = OnlineReplay(seed=0)
+        for _ in range(4):
+            replay.add(self.episode(steps=7))
+        batch = replay.sample(batch=6, length=4, burn_in=1)
+        for row in range(batch["loss_mask"].shape[0]):
+            if batch["is_first"][row, 0]:
+                self.assertTrue(batch["loss_mask"][row, 0],
+                                "a reset window has no burn-in to exclude")
+            else:
+                self.assertFalse(batch["loss_mask"][row, 0],
+                                 "a mid-episode window burns in its first row")
 
     def test_mixture_waits_for_a_meaningful_replay(self):
         from sim_vla.data.replay import OnlineReplay, mixed_batch
