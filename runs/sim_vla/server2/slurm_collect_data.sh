@@ -40,14 +40,15 @@ echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
 echo "Collecting: PickCube-v1, PlaceSphere-v1, PegInsertionSide-v1"
 echo "================================="
 
-# This cluster's real home directory has too small a quota for this project;
-# everything -- conda, the repo clone, data -- lives under this workspace
-# instead, so HOME is overridden before anything below (including conda's own
-# profile script) resolves ~ or $HOME.
+# The real home (/home/ttran) is not where this project lives: the repo clone,
+# the demos, the checkpoint cache and the logs all sit under this workspace, so
+# HOME is overridden and every $HOME path below resolves here. conda is the one
+# exception -- miniforge3 sits outside this workspace, so it is sourced by
+# absolute path below rather than through ~.
 export HOME=/netscratch/ttran/tmp_iclr2026
 
 # Activate conda
-source ~/miniconda3/etc/profile.d/conda.sh
+source /netscratch/ttran/lib/miniforge3/etc/profile.d/conda.sh
 conda activate dreamer
 
 # This partition's nodes ship a working Vulkan ICD already -- the manual
@@ -78,13 +79,13 @@ conda activate dreamer
 
 # Proves the ICD is actually visible before the renderer needs it, instead of
 # failing deep inside SAPIEN with a much less legible error.
-vulkaninfo --summary
+# vulkaninfo --summary
 
 # Move to project directory. Run from here, not from sim_vla/: collect.py's
 # default --env-config/--model-config paths (configs/env/maniskill.yaml,
 # configs/model/size50M_graph_simple.yaml) and its `from envs.maniskill import
 # ...` are both resolved against the repo root, matching train.py's own cwd.
-cd $HOME/projects/r2dreamer-graph
+cd $HOME/r2dreamer-graph
 
 # server 1's asset mount does not exist here. Left unset: mani_skill falls
 # back to its own default cache under $HOME (now /netscratch/ttran/tmp_iclr2026

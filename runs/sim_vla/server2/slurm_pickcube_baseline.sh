@@ -32,14 +32,15 @@ echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
 echo "sim_vla: PickCube-v1, arm=dreamer (baseline, no graph, no progress)"
 echo "================================="
 
-# This cluster's real home directory has too small a quota for this project;
-# everything -- conda, the repo clone, data -- lives under this workspace
-# instead, so HOME is overridden before anything below (including conda's own
-# profile script) resolves ~ or $HOME.
+# The real home (/home/ttran) is not where this project lives: the repo clone,
+# the demos, the checkpoint cache and the logs all sit under this workspace, so
+# HOME is overridden and every $HOME path below resolves here. conda is the one
+# exception -- miniforge3 sits outside this workspace, so it is sourced by
+# absolute path below rather than through ~.
 export HOME=/netscratch/ttran/tmp_iclr2026
 
 # Activate conda
-source ~/miniconda3/etc/profile.d/conda.sh
+source /netscratch/ttran/lib/miniforge3/etc/profile.d/conda.sh
 conda activate dreamer
 
 # This partition's nodes ship a working Vulkan ICD already -- the manual
@@ -73,7 +74,7 @@ conda activate dreamer
 vulkaninfo --summary
 
 # Move to project directory
-cd $HOME/projects/r2dreamer-graph
+cd $HOME/r2dreamer-graph
 
 # Demos were collected by slurm_collect_data.sh into server 2's own storage
 # ($HOME/data), not the repo-relative default (sim_vla/configs/base.yaml:
