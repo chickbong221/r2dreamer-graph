@@ -13,7 +13,8 @@ config, because those are the two the dataset also records and must agree with.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from collections.abc import Mapping
+from typing import Any, Dict
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = REPO / "configs/model/size50M_graph_simple.yaml"
@@ -30,11 +31,36 @@ OBSERVATION_KEYS = {
 }
 
 
-class Node:
-    """Recursive attribute access over a config dict."""
+class Node(Mapping):
+    """Attribute access *and* the mapping protocol, like Hydra's DictConfig.
+
+    The simulator's networks use config nodes both ways in the same line::
+
+        partial(getattr(dists, str(config.cnn_dist.name)), **config.cnn_dist)
+
+    and ``dreamer.py`` does ``dict(config.loss_scales)``. An object that only
+    supported attribute access satisfied the first half of that line and raised
+    ``TypeError: argument after ** must be a mapping`` on the second, from
+    inside a constructor that never mentions config.
+
+    So ``__getitem__`` / ``__iter__`` / ``__len__`` are implemented and the
+    class registers as a Mapping. Item access returns the raw value, because
+    what reads it is a keyword-argument unpack feeding a distribution
+    constructor; attribute access still wraps nested dicts, because what reads
+    *that* is ``config.rssm.deter``.
+    """
 
     def __init__(self, data: Mapping[str, Any]):
         object.__setattr__(self, "_data", dict(data))
+
+    def __getitem__(self, key: str) -> Any:
+        return object.__getattribute__(self, "_data")[key]
+
+    def __iter__(self):
+        return iter(object.__getattribute__(self, "_data"))
+
+    def __len__(self) -> int:
+        return len(object.__getattribute__(self, "_data"))
 
     def __getattr__(self, name: str) -> Any:
         data = object.__getattribute__(self, "_data")

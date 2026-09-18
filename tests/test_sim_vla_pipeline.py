@@ -371,6 +371,25 @@ class TestModelConfig(unittest.TestCase):
             self.assertIsNone(_re.match(cfg.encoder.cnn_keys, key), key)
             self.assertIsNone(_re.match(cfg.encoder.mlp_keys, key), key)
 
+    def test_every_loss_key_has_a_scale(self):
+        """Wrong scale names do not fail; they silently reweight the objective.
+
+        The simulator keys reward as "rew" and continuation as "con", expands
+        one "recon" scale across the decoder's output keys, and lets the graph
+        decoder's own names through. sim_vla must use those same names.
+        """
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph"))
+        scales = dict(cfg.loss_scales)
+        for key in ("rew", "con", "recon", "dyn", "rep",
+                    "graphdyn", "graphrep", "graphamp",
+                    "node", "nodetgt", "relabs", "reltemp"):
+            self.assertIn(key, scales, f"loss scale {key!r} is missing")
+        # These are the names an earlier version used, and none of them exist.
+        for wrong in ("reward", "cont", "image", "vector"):
+            self.assertNotIn(wrong, scales)
+
     def test_unknown_interpolation_is_refused(self):
         from sim_vla.models.model_config import _resolve
 

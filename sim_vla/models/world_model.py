@@ -32,7 +32,7 @@ import torch.nn as nn
 
 import networks
 import rssm as rssm_module
-from graph import GraphEncoder, SimpleGraphDecoder, compact_graph
+from graph import GraphEncoder, SimpleGraphDecoder
 from scenegraph.adapters.graph_pack import graph_keys
 
 GRAPH_KEYS = tuple(graph_keys())
@@ -107,6 +107,31 @@ class WorldModel(nn.Module):
         return self.rssm.initial(int(batch_size))
 
     # ---------------------------------------------------------------- encode
+    def loss_scales(self) -> Dict[str, float]:
+        """The scale per loss key, expanded exactly as ``dreamer.py`` does.
+
+        ``recon`` is one number in the config and becomes one entry per decoder
+        output key (``dreamer.py:449``). The reward key is ``rew`` and the
+        continuation key is ``con``; graph-decoder losses keep the names the
+        decoder gave them. Getting any of these wrong does not fail -- the term
+        just silently takes a different weight than the simulator gives it.
+        """
+        scales = dict(self.config.loss_scales)
+        recon = scales.pop("recon", 1.0)
+        scales |= {key: recon for key in self.decoder.all_keys}
+        return scales
+
+    def graph_encoding(self, batch: Mapping[str, torch.Tensor]):
+        """The encoder's own output: the token and the compact graph.
+
+        The decoder is handed this ``compact`` rather than a second
+        ``compact_graph`` call, so the two halves cannot disagree about which
+        nodes and edges were real.
+        """
+        if not self.graph_enabled:
+            return None
+        return self.graph_encoder({key: batch[key] for key in GRAPH_KEYS})
+
     def graph_token(self, batch: Mapping[str, torch.Tensor]) -> Optional[torch.Tensor]:
         """Per-step graph embedding, or None for the baseline.
 
@@ -126,9 +151,11 @@ class WorldModel(nn.Module):
         action = batch["action"]
         reset = batch["is_first"]
         state = self.initial(action.shape[0]) if initial is None else initial
+        encoding = self.graph_encoding(batch)
         post = self.rssm.observe(
-            embed, action, state, reset, graph_token=self.graph_token(batch))
-        return {"embed": embed, "post": post}
+            embed, action, state, reset,
+            graph_token=None if encoding is None else encoding.token)
+        return {"embed": embed, "post": post, "graph_encoding": encoding}
 
     @staticmethod
     def unpack(post, graph_enabled: bool):
@@ -153,7 +180,7 @@ class WorldModel(nn.Module):
     def loss(self, batch: Mapping[str, torch.Tensor], initial=None
              ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, Any]]:
         """Total loss, its terms, and the state the caller may want to keep."""
-        scales = self.config.loss_scales
+        scales = self.loss_scales()
         out = self.observe(batch, initial)
         post = out["post"]
         stoch, deter, post_logit, sem = self.unpack(post, self.graph_enabled)
@@ -166,17 +193,21 @@ class WorldModel(nn.Module):
         # MultiDecoder takes stoch first, then deter. Passing them the other
         # way round type-checks and trains on nonsense.
         recon = self.decoder(stoch, deter, sem)
+        # Keyed by the observation name, because that is what the expanded
+        # "recon" scale is keyed by.
         for key, dist in recon.items():
             if key in batch:
-                losses[f"recon_{key}"] = masked_mean(-dist.log_prob(batch[key]), mask)
+                losses[key] = masked_mean(-dist.log_prob(batch[key]), mask)
 
-        losses["reward"] = masked_mean(
+        # "rew" and "con", not "reward" and "cont": those are the names the
+        # loss scales use.
+        losses["rew"] = masked_mean(
             -self.reward_head(feat).log_prob(batch["reward"]), mask)
-        # cont is 1 wherever the episode continues. Under the online policy
-        # that is everywhere inside a window, and the bootstrap at the end is
-        # the value function's job rather than a zero taught here.
-        cont_target = (1.0 - batch["is_terminal"].float())
-        losses["cont"] = masked_mean(
+        # 1 wherever the episode continues. Under ignore_terminations that is
+        # everywhere inside a window, and the bootstrap at the end is the value
+        # function's job rather than a zero taught here.
+        cont_target = (1.0 - batch["is_terminal"].float()).unsqueeze(-1)
+        losses["con"] = masked_mean(
             -self.cont_head(feat).log_prob(cont_target), mask)
 
         # The prior is not returned by observe: it is computed from the
@@ -208,32 +239,27 @@ class WorldModel(nn.Module):
                 metrics["graph_align_cos"] = masked_mean(
                     (self.rssm.rms(sem) * self.rssm.rms(prior_sem)).mean(-1),
                     mask)
-            graph = {key: batch[key] for key in GRAPH_KEYS}
-            compact = compact_graph(graph)
-            flat_sem = sem.reshape(-1, sem.shape[-1])
+            # Handed the posterior sem and the encoder's compact graph
+            # exactly as dreamer.py:1178 does -- unflattened, and with the
+            # step mask rather than a reshaped copy of it. Its loss keys are
+            # its own (node, nodetgt, relabs, reltemp) and match the scales,
+            # so they are merged rather than renamed.
+            encoding = out["graph_encoding"]
             graph_losses, graph_metrics = self.graph_decoder(
-                flat_sem, compact, mask.reshape(-1))
-            losses |= {f"graph_{k}": v for k, v in graph_losses.items()}
-            metrics |= {f"graph_{k}": v for k, v in graph_metrics.items()}
+                sem, encoding.compact, mask)
+            losses |= dict(graph_losses)
+            metrics |= dict(graph_metrics)
 
-        total = sum(
-            float(getattr(scales, _scale_name(name), 1.0)) * value
-            for name, value in losses.items())
+        missing = sorted(set(losses) - set(scales))
+        if missing:
+            # Silent default weighting is how two arms end up optimising
+            # different objectives while reporting the same loss names.
+            raise KeyError(
+                f"no loss scale for {missing}; the config defines "
+                f"{sorted(scales)}")
+        total = sum(float(scales[name]) * value for name, value in losses.items())
         metrics |= {name: value.detach() for name, value in losses.items()}
         return total, losses, {"post": post, "feat": feat, "metrics": metrics}
-
-
-def _scale_name(loss_name: str) -> str:
-    """Map a loss term to its ``loss_scales`` entry.
-
-    Reconstruction terms are per observation key and share one scale, which is
-    how ``dreamer.py`` weights them.
-    """
-    if loss_name.startswith("recon_"):
-        return "image" if loss_name.startswith("recon_image") else "vector"
-    if loss_name.startswith("graph_"):
-        return loss_name[len("graph_"):]
-    return loss_name
 
 
 def build_world_model(config, obs_shapes, act_dim, *, graph_enabled: bool
