@@ -83,6 +83,18 @@ def load_config(task: str, experiment: str,
 
 
 def validate(cfg: Mapping[str, Any]) -> None:
+    actor = cfg.get("actor") or {}
+    revision = actor.get("revision", "")
+    # A commit hash of only decimal digits is a valid hash and an integer in
+    # YAML, and PyYAML resolves it to one. It then reaches the hub as a number
+    # whose leading zeros are gone, and the error is about a revision that does
+    # not exist rather than about quoting.
+    if revision not in ("", None) and not isinstance(revision, str):
+        raise SystemExit(
+            f"actor.revision parsed as {type(revision).__name__} "
+            f"({revision}), not a string. Quote it in the config: "
+            f'actor.revision: "{revision}"')
+
     graph = ((cfg.get("model") or {}).get("graph") or {})
     progress = ((cfg.get("model") or {}).get("progress") or {})
     if progress.get("enabled") and not graph.get("enabled"):

@@ -34,6 +34,35 @@ REQUIREMENTS = {
 }
 
 
+REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+# torchrl and tensordict are built against a specific torch release, so an
+# upgrade that satisfies lerobot can quietly break the existing Dreamer
+# pipeline. They are checked by import, not by version arithmetic.
+COUPLED_TO_TORCH = ("torchrl", "tensordict")
+
+
+def repo_torch_pin() -> Optional[str]:
+    """The torch this project pins, read from its own pyproject."""
+    try:
+        text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    except Exception:                                      # noqa: BLE001
+        return None
+    for line in text.splitlines():
+        stripped = line.strip().strip('",')
+        if stripped.startswith("torch=="):
+            return stripped.split("==", 1)[1]
+    return None
+
+
+def import_check(name: str) -> Optional[str]:
+    """None if it imports, else the error -- which is the thing worth seeing."""
+    try:
+        __import__(name)
+        return None
+    except Exception as exc:                               # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
+
+
 def installed(name: str) -> Optional[str]:
     try:
         from importlib.metadata import version
@@ -73,6 +102,22 @@ def report() -> Dict[str, object]:
     elif sys.version_info[:2] < (3, 10):
         problems.append("python < 3.10; no verified lerobot version supports it")
 
+    # Installing lerobot can move torch. That satisfies lerobot and may break
+    # the simulator pipeline this repo already runs, which is a different
+    # question from whether sim_vla can load a checkpoint.
+    pinned = repo_torch_pin()
+    torch_version = (found.get("torch") or "").split("+")[0]
+    if pinned and torch_version and torch_version != pinned:
+        problems.append(
+            f"torch {torch_version} is installed but this project pins "
+            f"torch=={pinned} (pyproject.toml). The existing Dreamer/ManiSkill "
+            "training runs against that pin; sim_vla does not need it moved.")
+        for name in COUPLED_TO_TORCH:
+            error = import_check(name)
+            if error:
+                problems.append(
+                    f"{name} no longer imports after the torch change: {error}")
+
     version = found.get("lerobot")
     if version and version not in VERIFIED_LEROBOT:
         problems.append(
@@ -98,6 +143,12 @@ def main(argv=None) -> int:
         print("  pip install 'lerobot[smolvla]==0.4.4' "
               "'transformers>=4.57.1,<5.0.0' "
               "'huggingface-hub[hf-transfer,cli]>=0.34.2,<0.36.0'")
+        pin = repo_torch_pin()
+        if pin:
+            print("\n[doctor] if torch moved off this project's pin:")
+            print(f"  pip install 'torch=={pin}' 'torchrl==0.9.2' "
+                  "'tensordict==0.9.1'")
+            print("  (lerobot 0.4.4 accepts torch <2.11, so the pin suits both)")
         return 1
     print("\n[doctor] no problems found")
     return 0
