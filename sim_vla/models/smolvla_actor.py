@@ -1,76 +1,55 @@
-"""The pretrained SmolVLA action expert, conditioned on world-model latents.
+"""The pretrained SmolVLA expert, conditioned on world-model latents.
 
-What this does *not* do is re-implement SmolVLA. It loads the real checkpoint,
-keeps its language transformer and action expert, and replaces the input that
-normally comes from images and a raw state vector with one token from
-:class:`~sim_vla.models.latent_adapter.LatentAdapter`. The observation has
-already been through the world model; running it through the policy's own
-vision encoder as well would be encoding it twice.
+Written against lerobot 0.6.1, whose ``VLAFlowMatching`` exposes
+``embed_prefix`` / ``embed_suffix`` / ``denoise_step`` on ``policy.model``. The
+flow methods are not on the policy: an earlier version of this file called
+``policy.denoise_step`` and there is no such method.
 
-**The attribute names of a third-party checkpoint are not guessable**, and this
-file does not guess them silently. :func:`resolve` searches a list of candidate
-paths and, on failure, raises naming every path it tried and printing the
-module tree it searched. ``sim_vla/download_pretrained.py`` prints the same
-tree on demand, so the first run on a machine that has the weights tells us the
-real interface instead of a stack trace three layers deep.
+What the real path is, and why it is not a one-line call:
 
-Trainable, initially: the adapter, the action expert, and the action/time
-projections. Frozen: the world model, the language transformer, and the vision
-encoder the latent path bypasses. Frozen means ``requires_grad=False``, not
-``detach()`` -- gradients still flow *through* the frozen transformer back into
-the adapter, which is the whole point of conditioning it.
+``denoise_step(prefix_pad_masks, past_key_values, x_t, timestep)`` needs a
+prefix that has already been run through the VLM to produce a key/value cache.
+So conditioning is two passes. The prefix is built once per observation --
+tokenized instruction plus one state token -- and run through the VLM to get
+the cache; every integration step of the sampler then reuses it. Building the
+prefix inside the integration loop would be correct and ten times slower.
+
+**The state token replaces the raw-state path, not the vision path twice
+over.** SmolVLA's prefix is images, language, then one state token projected by
+``state_proj``. Here the observation has already been through the world model,
+so no images are supplied and the adapter produces the state slot directly.
+``state_token_mode`` decides at what width:
+
+``embedding`` (default) the adapter emits ``vlm_hidden_size`` and ``state_proj``
+    is bypassed. The world-model feature is thousands of dimensions wide and
+    ``state_proj`` takes 32, so routing through it would put a 32-dimensional
+    bottleneck between the world model and the policy.
+``state_proj`` the adapter emits ``max_state_dim`` and the frozen projection is
+    used. Keeps the pretrained mapping, at that bottleneck.
+
+Actions are padded to ``max_action_dim`` (32 in the released checkpoint) before
+``action_in_proj`` and sliced back to the task's width after
+``action_out_proj``. The loss and the sampler both mask the padding, so the
+policy is never scored on dimensions the robot does not have.
+
+Frozen means ``requires_grad=False``, never ``detach()``: gradients flow
+*through* the frozen transformer back into the adapter, which is the only
+reason conditioning it works.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 
-# Where the action expert has lived across lerobot versions. Ordered most
-# recent first; the loader reports which one matched.
-EXPERT_PATHS: Sequence[str] = (
-    "model.vlm_with_expert.lm_expert",
-    "model.vlm_with_expert.action_expert",
-    "model.action_expert",
-    "vlm_with_expert.lm_expert",
-)
-LANGUAGE_PATHS: Sequence[str] = (
-    "model.vlm_with_expert.vlm.model.text_model",
-    "model.vlm_with_expert.vlm",
-    "model.vlm",
-)
-VISION_PATHS: Sequence[str] = (
-    "model.vlm_with_expert.vlm.model.vision_model",
-    "model.vlm_with_expert.vision_model",
-)
+from .pretrained import PretrainedError
 
-
-def module_tree(root: nn.Module, depth: int = 3) -> List[str]:
-    """Dotted names of ``root``'s submodules, to ``depth`` levels."""
-    out: List[str] = []
-    for name, _ in root.named_modules():
-        if name and name.count(".") < depth:
-            out.append(name)
-    return sorted(out)
-
-
-def resolve(root: nn.Module, paths: Sequence[str], what: str) -> tuple:
-    """First attribute path that exists, or an error naming all of them."""
-    for path in paths:
-        node: Any = root
-        for part in path.split("."):
-            node = getattr(node, part, None)
-            if node is None:
-                break
-        if isinstance(node, nn.Module):
-            return node, path
-    raise AttributeError(
-        f"could not find the {what} on this SmolVLA checkpoint. Tried: "
-        f"{list(paths)}. Submodules present: {module_tree(root)[:40]}. "
-        f"Update the candidate paths in sim_vla/models/smolvla_actor.py for "
-        f"the pinned lerobot version.")
+# What the integration needs from VLAFlowMatching. Checked at construction so
+# a version mismatch is reported here rather than inside a transformer.
+REQUIRED_MODEL_METHODS = ("embed_prefix", "embed_suffix", "denoise_step")
+REQUIRED_MODEL_MODULES = ("state_proj", "action_in_proj", "action_out_proj")
 
 
 def freeze(module: nn.Module) -> int:
@@ -83,80 +62,235 @@ def freeze(module: nn.Module) -> int:
     return count
 
 
+def module_tree(root: nn.Module, depth: int = 3) -> List[str]:
+    return sorted(name for name, _ in root.named_modules()
+                  if name and name.count(".") < depth)
+
+
 class SmolVLAActor(nn.Module):
     """Pretrained SmolVLA driven by one world-model conditioning token."""
 
-    def __init__(self, policy: nn.Module, adapter: nn.Module, *,
-                 chunk_size: int = 8, action_dim: int = 8,
-                 flow_steps: int = 10, freeze_language: bool = True,
-                 freeze_vision: bool = True):
+    def __init__(self, loaded, adapter: nn.Module, *, action_dim: int,
+                 chunk_size: Optional[int] = None,
+                 flow_steps: Optional[int] = None,
+                 instruction: str = "",
+                 state_token_mode: str = "embedding",
+                 freeze_vlm: bool = True, train_expert: bool = True):
         super().__init__()
-        self.policy = policy
+        self.loaded = loaded
+        self.policy = loaded.policy
+        self.model = loaded.model
         self.adapter = adapter
-        self.chunk_size = int(chunk_size)
         self.action_dim = int(action_dim)
-        self.flow_steps = int(flow_steps)
+        self.state_token_mode = str(state_token_mode)
 
-        self.expert, self.expert_path = resolve(policy, EXPERT_PATHS,
-                                                "action expert")
-        self.language, self.language_path = resolve(policy, LANGUAGE_PATHS,
-                                                    "language transformer")
-        try:
-            self.vision, self.vision_path = resolve(policy, VISION_PATHS,
-                                                    "vision encoder")
-        except AttributeError:
-            # A checkpoint without a separable vision tower is not an error
-            # here: the latent path does not use one.
-            self.vision, self.vision_path = None, ""
+        missing = [name for name in REQUIRED_MODEL_METHODS
+                   if not callable(getattr(self.model, name, None))]
+        missing += [name for name in REQUIRED_MODEL_MODULES
+                    if getattr(self.model, name, None) is None]
+        if missing:
+            raise PretrainedError(
+                f"this VLAFlowMatching lacks {missing}; the integration targets "
+                f"lerobot {loaded.lerobot_version}. Present: "
+                f"{module_tree(self.model)[:30]}")
 
+        from .pretrained import model_facts
+
+        self.facts = model_facts(loaded)
+        self.chunk_size = int(chunk_size or self.facts["chunk_size"])
+        self.flow_steps = int(flow_steps or self.facts["num_steps"])
+        self.max_action_dim = int(self.facts["max_action_dim"])
+        self.vlm_hidden = int(self.facts["vlm_hidden_size"])
+        if self.action_dim > self.max_action_dim:
+            raise PretrainedError(
+                f"the task has {self.action_dim} action dimensions and the "
+                f"checkpoint pads to {self.max_action_dim}")
+
+        expected = (self.vlm_hidden if self.state_token_mode == "embedding"
+                    else int(self.facts["max_state_dim"]))
+        if int(getattr(adapter, "token_dim", -1)) != expected:
+            raise PretrainedError(
+                f"the adapter emits {getattr(adapter, 'token_dim', None)}-wide "
+                f"tokens; state_token_mode={self.state_token_mode!r} on this "
+                f"checkpoint needs {expected}")
+
+        self.instruction = str(instruction)
+        self._lang_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.frozen: Dict[str, int] = {}
-        if freeze_language:
-            self.frozen[self.language_path] = freeze(self.language)
-        if freeze_vision and self.vision is not None:
-            self.frozen[self.vision_path] = freeze(self.vision)
+        if freeze_vlm:
+            # The whole pretrained stack is frozen, then the expert is thawed
+            # if it is meant to train. Freezing by name would depend on a
+            # module layout that moves between versions.
+            self.frozen["model"] = freeze(self.model)
+            if train_expert:
+                self.frozen["thawed_expert"] = -self._thaw_expert()
 
-    # ----------------------------------------------------------- conditioning
+    # ------------------------------------------------------------- expert set
+    def _expert_parameters(self) -> List[nn.Parameter]:
+        """The action expert and the projections that read or write actions.
+
+        Taken from the modules the flow path actually uses rather than from a
+        name match, so a renamed submodule changes nothing here.
+        """
+        parameters: List[nn.Parameter] = []
+        for name in ("action_in_proj", "action_out_proj", "action_time_mlp_in",
+                     "action_time_mlp_out"):
+            module = getattr(self.model, name, None)
+            if module is not None:
+                parameters += list(module.parameters())
+        expert = getattr(getattr(self.model, "vlm_with_expert", None),
+                         "lm_expert", None)
+        if expert is not None:
+            parameters += list(expert.parameters())
+        return parameters
+
+    def _thaw_expert(self) -> int:
+        count = 0
+        for parameter in self._expert_parameters():
+            if not parameter.requires_grad:
+                parameter.requires_grad_(True)
+                count += 1
+        if count == 0:
+            raise PretrainedError(
+                "no action-expert parameters were made trainable; the expert "
+                "modules were not found on this checkpoint")
+        return count
+
+    # ------------------------------------------------------------- language
+    def language(self, text: str, batch: int, device) -> Tuple[Any, Any]:
+        """Tokenize the fixed instruction once and reuse it.
+
+        The instruction does not change within a task, so tokenizing it per
+        forward pass is pure overhead; the cache is keyed by the text so a
+        second task in the same process cannot inherit the first one's tokens.
+        """
+        key = f"{text}|{device}"
+        if key not in self._lang_cache:
+            tokenizer = getattr(self.policy, "language_tokenizer", None)
+            if tokenizer is None:
+                raise PretrainedError(
+                    "this SmolVLAPolicy exposes no language_tokenizer; the "
+                    "instruction cannot be embedded")
+            max_length = int(self.facts.get("tokenizer_max_length") or 48)
+            encoded = tokenizer(text, padding="max_length", truncation=True,
+                                max_length=max_length, return_tensors="pt")
+            self._lang_cache[key] = (
+                encoded["input_ids"].to(device),
+                encoded["attention_mask"].to(device).bool())
+        tokens, mask = self._lang_cache[key]
+        return tokens.expand(batch, -1), mask.expand(batch, -1)
+
+    # ---------------------------------------------------------- conditioning
     def condition(self, features: torch.Tensor,
-                  instruction: Optional[torch.Tensor] = None) -> Dict[str, Any]:
-        """One state token from the latent, beside the task instruction."""
-        token = self.adapter(features)
-        return {"state_token": token, "instruction": instruction}
+                  instruction: Optional[str] = None) -> Dict[str, Any]:
+        """Build the prefix once and cache its keys and values.
 
+        Returned rather than stored on the module: an imagined rollout holds
+        several conditionings at once, and a cache on ``self`` would have them
+        overwrite each other.
+        """
+        token = self.adapter(features)                     # (B, 1, token_dim)
+        batch = token.shape[0]
+        device = token.device
+        lang_tokens, lang_masks = self.language(
+            self.instruction if instruction is None else str(instruction),
+            batch, device)
+
+        state = token.squeeze(-2)
+        if self.state_token_mode == "state_proj":
+            state = self.model.state_proj(state)
+        embs, pad_masks, att_masks = self._embed_prefix(
+            lang_tokens, lang_masks, state)
+        past_key_values = self._prefix_cache(embs, pad_masks, att_masks)
+        return {"prefix_pad_masks": pad_masks, "past_key_values": past_key_values,
+                "state_token": token, "batch": batch}
+
+    def _embed_prefix(self, lang_tokens, lang_masks, state
+                      ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Language embeddings plus the state token, with SmolVLA's masks.
+
+        ``embed_prefix`` is called with no images: the observation reached here
+        through the world model, and re-encoding pixels with the frozen vision
+        tower would be encoding the same frame twice.
+        """
+        try:
+            return self.model.embed_prefix(
+                images=[], img_masks=[], lang_tokens=lang_tokens,
+                lang_masks=lang_masks, state=state)
+        except TypeError as exc:
+            raise PretrainedError(
+                "embed_prefix rejected the imageless call "
+                f"({exc}); lerobot {self.loaded.lerobot_version} may order or "
+                "name its arguments differently") from exc
+
+    def _prefix_cache(self, embs, pad_masks, att_masks):
+        """Run the prefix through the VLM and keep its key/value cache."""
+        from lerobot.policies.smolvla.modeling_smolvla import make_att_2d_masks
+
+        att_2d = make_att_2d_masks(pad_masks, att_masks)
+        position_ids = torch.cumsum(pad_masks, dim=1) - 1
+        _prefix_out, past_key_values = self.model.vlm_with_expert.forward(
+            attention_mask=att_2d, position_ids=position_ids,
+            past_key_values=None, inputs_embeds=[embs, None],
+            use_cache=True, fill_kv_cache=True)
+        return past_key_values
+
+    # ------------------------------------------------------------- velocity
     def velocity_fn(self) -> Callable:
-        """The expert's velocity field, in the signature the sampler wants."""
-        def velocity(x_t: torch.Tensor, t: torch.Tensor, cond: Any
+        def velocity(x_t: torch.Tensor, t: torch.Tensor, cond: Dict[str, Any]
                      ) -> torch.Tensor:
             return self.expert_velocity(x_t, t, cond)
         return velocity
 
+    def pad_actions(self, actions: torch.Tensor) -> torch.Tensor:
+        """Widen a task action chunk to the checkpoint's padded width."""
+        if actions.shape[-1] == self.max_action_dim:
+            return actions
+        pad = self.max_action_dim - actions.shape[-1]
+        return torch.cat([actions, actions.new_zeros(*actions.shape[:-1], pad)],
+                         dim=-1)
+
+    def action_dim_mask(self, device=None) -> torch.Tensor:
+        """One per padded dimension: true where the robot actually acts."""
+        mask = torch.zeros(self.max_action_dim, dtype=torch.bool, device=device)
+        mask[: self.action_dim] = True
+        return mask
+
     def expert_velocity(self, x_t: torch.Tensor, t: torch.Tensor,
                         cond: Dict[str, Any]) -> torch.Tensor:
-        """Call the pretrained expert. Separated so a test can replace it.
+        """One denoising step through the real expert.
 
-        The call signature of the expert differs between lerobot versions more
-        than its module path does, so this is the single place a version bump
-        has to be reconciled, and it fails with the signature it tried rather
-        than with a shape error inside the transformer.
+        ``x_t`` arrives at the task's action width and comes back at it; the
+        padding to ``max_action_dim`` exists only between these two lines.
         """
-        call = getattr(self.policy, "denoise_step", None)
-        if call is None:
-            raise AttributeError(
-                "this SmolVLA policy exposes no denoise_step; sim_vla drives "
-                "the expert through it. Check the pinned lerobot version and "
-                f"the methods present: {sorted(m for m in dir(self.policy) if not m.startswith('_'))[:40]}")
-        return call(cond["state_token"], cond["instruction"], x_t, t)
+        padded = self.pad_actions(x_t)
+        try:
+            velocity = self.model.denoise_step(
+                cond["prefix_pad_masks"], cond["past_key_values"], padded, t)
+        except TypeError as exc:
+            raise PretrainedError(
+                f"denoise_step rejected its arguments ({exc}); this "
+                "integration targets lerobot "
+                f"{self.loaded.lerobot_version} where the signature is "
+                "(prefix_pad_masks, past_key_values, x_t, timestep)") from exc
+        return velocity[..., : x_t.shape[-1]]
 
     # ----------------------------------------------------------------- report
     def trainable_report(self) -> Dict[str, Any]:
         trainable = [n for n, p in self.named_parameters() if p.requires_grad]
-        total = sum(p.numel() for p in self.parameters())
-        live = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return {
-            "expert_path": self.expert_path,
-            "language_path": self.language_path,
-            "vision_path": self.vision_path,
-            "frozen_modules": self.frozen,
-            "parameters_total": total,
-            "parameters_trainable": live,
+            "repo_id": self.loaded.repo_id,
+            "revision": self.loaded.revision,
+            "lerobot_version": self.loaded.lerobot_version,
+            "state_token_mode": self.state_token_mode,
+            "chunk_size": self.chunk_size,
+            "flow_steps": self.flow_steps,
+            "action_dim": self.action_dim,
+            "max_action_dim": self.max_action_dim,
+            "vlm_hidden_size": self.vlm_hidden,
+            "frozen": self.frozen,
+            "parameters_total": sum(p.numel() for p in self.parameters()),
+            "parameters_trainable": sum(p.numel() for p in self.parameters()
+                                        if p.requires_grad),
             "trainable_prefixes": sorted({n.split(".")[0] for n in trainable}),
         }

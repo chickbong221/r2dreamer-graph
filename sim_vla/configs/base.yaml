@@ -42,15 +42,28 @@ data:
   seed: 0
 
 actor:
-  # Pinned, because "the pretrained checkpoint" is not a reproducible object
-  # without a revision.
+  # "The pretrained checkpoint" is not a reproducible object without a
+  # revision, and a branch name is not a revision. download_pretrained.py
+  # resolves this to an immutable commit hash and prints what to paste here;
+  # an empty value means the run is not pinned and resolves at load time.
   pretrained: lerobot/smolvla_base
-  revision: ''             # filled by download_pretrained.py
-  chunk_size: 8            # actions predicted
+  revision: ''
+  # The version this integration was read against. A different one is
+  # reported, not assumed compatible.
+  lerobot_version: '0.6.1'
+  # 0 means "take the checkpoint's own value", which is what the released
+  # model was trained with. These are not defaults to be assumed: the loaded
+  # config is what decides, and the tests assert against it.
+  chunk_size: 0            # actions predicted per call
   execute: 1               # actions executed before replanning
-  flow_steps: 10
-  context_tokens: 8
+  flow_steps: 0            # euler steps; 0 takes the checkpoint's num_steps
+  # One MLP-generated state token beside the tokenized instruction. There is
+  # no context-token block.
   state_tokens: 1
+  # embedding: the adapter emits vlm_hidden_size and state_proj is bypassed.
+  # state_proj: the adapter emits max_state_dim and the frozen projection runs,
+  # which puts a 32-wide bottleneck between the world model and the policy.
+  state_token_mode: embedding
 
 diagnostics:
   # Recording graphs is not learning from them. This may be true in a baseline

@@ -4,11 +4,17 @@ Both halves take a velocity function rather than a policy, so neither depends
 on how the pretrained checkpoint spells its internals, and both can be tested
 against a velocity field whose answer is known.
 
-The loss is the standard conditional flow-matching objective on straight paths::
+The convention is LeRobot's, not the textbook's, because the pretrained
+expert was trained under LeRobot's and the two run in opposite directions::
 
-    x_t = t * a + (1 - t) * eps,        eps ~ N(0, I),  t ~ U(0, 1)
-    target = a - eps
-    loss = || v(x_t, t, cond) - target ||^2
+    x_t    = t * noise + (1 - t) * actions,   noise ~ N(0, I),  t ~ U(0, 1)
+    target = noise - actions
+    loss   = || v(x_t, t, cond) - target ||^2
+
+So ``t = 0`` is the clean action and ``t = 1`` is noise, and integration to
+sample runs from 1 down to 0. Writing it the other way round gives a loss that
+descends, a sampler that runs, and a policy that produces noise -- which is why
+this is stated here rather than left to the reader of two files.
 
 It is a regression onto a velocity. It is **not** a log-probability, and it
 must not be substituted into an objective that expects one: a Dreamer actor
@@ -56,8 +62,8 @@ def flow_matching_loss(velocity_fn: VelocityFn, actions: torch.Tensor,
                         generator=generator)
     # One time per chunk, not per step: a chunk is one sample of the path.
     t = torch.rand((batch, 1, 1), device=device, dtype=dtype, generator=generator)
-    x_t = t * actions + (1.0 - t) * noise
-    target = actions - noise
+    x_t = t * noise + (1.0 - t) * actions
+    target = noise - actions
 
     predicted = velocity_fn(x_t, t.reshape(batch), cond)
     if predicted.shape != actions.shape:
@@ -81,21 +87,26 @@ def sample_actions(velocity_fn: VelocityFn, cond: object, *, batch: int,
                    device=None, dtype=torch.float32,
                    differentiable: bool = True,
                    generator: Optional[torch.Generator] = None) -> torch.Tensor:
-    """Integrate the velocity field from noise to an action chunk.
+    """Integrate the velocity field from noise at t=1 to an action at t=0.
 
-    Euler, uniformly spaced over ``[0, 1]``. ``differentiable=True`` keeps the
-    graph so an actor update can push the return's gradient back through every
-    integration step into the conditioning; only the starting noise is
-    detached, because it is a sample and not a parameter.
+    Euler, uniformly spaced, and *backwards*: under LeRobot's convention noise
+    lives at ``t = 1`` and the action at ``t = 0``, so the step is ``-dt`` and
+    the loop counts down. Integrating forwards instead converges on noise.
+
+    ``differentiable=True`` keeps the graph so an actor update can push the
+    return's gradient back through every integration step into the
+    conditioning; only the starting noise is detached, being a sample rather
+    than a parameter.
     """
     x = torch.randn((batch, chunk, dim), device=device, dtype=dtype,
                     generator=generator)
-    dt = 1.0 / float(max(int(steps), 1))
+    steps = max(int(steps), 1)
+    dt = 1.0 / float(steps)
     context = torch.enable_grad() if differentiable else torch.no_grad()
     with context:
-        for index in range(int(steps)):
-            t = torch.full((batch,), index * dt, device=device, dtype=dtype)
-            x = x + dt * velocity_fn(x, t, cond)
+        for index in range(steps):
+            t = torch.full((batch,), 1.0 - index * dt, device=device, dtype=dtype)
+            x = x - dt * velocity_fn(x, t, cond)
     return x
 
 

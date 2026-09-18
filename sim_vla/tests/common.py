@@ -42,6 +42,13 @@ def require_cuda():
     return torch
 
 
+def require_pretrained():
+    """The loaded checkpoint, or a narrow skip. A moved interface fails."""
+    from sim_vla.tests.test_pretrained import load
+
+    return load()
+
+
 def small_model_config(graph_enabled: bool, *, n_max: int = 4, e_max: int = 16):
     """A model config small enough to build in a second on CPU."""
     from sim_vla.config import load_config

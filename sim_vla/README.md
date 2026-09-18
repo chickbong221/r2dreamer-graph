@@ -42,14 +42,57 @@ value function bootstraps there.
 The demonstrations were recorded without that wrapper and do carry terminal
 flags — ManiSkill sets `terminated` from the task's success. Those flags are
 kept in the dataset as diagnostics and are **not** what the loader reports:
-`is_terminal` is false everywhere, so the continuation head is not trained on a
-signal the rollout never produces. `ignore_terminations=False` restores the
+`is_terminal` is false everywhere. `ignore_terminations=False` restores the
 recording's own semantics, for a trainer configured the same way.
 
 First success and settled success are tracked separately. The flag flickers —
 PickCube's success wants a static robot as well as a placed cube — so the step
 an episode *reaches* success and the step it *keeps* success are different
 numbers, and neither is inferred from the other.
+
+## The actor
+
+Read against **lerobot 0.6.1**. The flow methods live on `policy.model`
+(`VLAFlowMatching`), not on the policy: `embed_prefix`, `embed_suffix`, and
+`denoise_step(prefix_pad_masks, past_key_values, x_t, timestep)`.
+
+Conditioning is two passes. The prefix — tokenized instruction plus one state
+token — is embedded and run through the VLM once per observation to produce a
+key/value cache; every Euler step of the sampler reuses it. Building the prefix
+inside the integration loop would be correct and ten times slower.
+
+The state token replaces SmolVLA's raw-state slot. No images are supplied: the
+observation already went through the world model, and re-encoding the frame
+with the frozen vision tower would encode it twice. `state_token_mode` decides
+the width — `embedding` (default) emits `vlm_hidden_size` and bypasses
+`state_proj`; `state_proj` emits `max_state_dim` and uses the frozen
+projection, which puts a 32-wide bottleneck between the world model and the
+policy.
+
+LeRobot's flow convention is `x_t = t*noise + (1-t)*actions` with target
+`noise - actions`, so `t=0` is the clean action and sampling integrates
+**downward** from 1. `flow_sampler.py` follows that, not the textbook
+orientation.
+
+Actions pad to the checkpoint's `max_action_dim` (32) before `action_in_proj`
+and are sliced back after `action_out_proj`. The loss and the sampler mask the
+padding, so the policy is never scored on axes the Panda does not have.
+
+Frozen means `requires_grad=False`, never `detach()`: gradients flow *through*
+the frozen transformer into the adapter, which is the only reason conditioning
+it works.
+
+The online actor update differentiates the imagined return with respect to the
+sampled action. It is **not** `log pi(a) * advantage` — a flow policy has no
+tractable log-probability, and the flow-matching loss is a regression, not one.
+Both arms use the same objective.
+
+## The adapter
+
+World-model features → LayerNorm → MLP → **one** conditioning token, beside the
+fixed task instruction. No context-token block. Only the input width differs
+between arms, and `LatentAdapter.parameter_report()` states the resulting
+capacity difference.
 
 ## Stages
 
@@ -59,18 +102,22 @@ demonstrations ──► 1A world-model pretraining (per arm, separate checkpoin
                        └─► 2 online model-based RL
 ```
 
-The adapter is a single state token: world-model features → LayerNorm → MLP →
-one conditioning token, beside the fixed task instruction. No context-token
-block. Only the input width differs between arms, and
-`LatentAdapter.parameter_report()` states the resulting capacity difference.
-
-The actor is the real pretrained SmolVLA expert, trained with flow matching.
-The online actor update differentiates the imagined return with respect to the
-sampled action — it is **not** `log pi(a) * advantage`, because a flow policy
-has no tractable log-probability and the flow-matching loss is a regression,
-not a log-probability. Both arms use the same objective.
-
 ## Running it
+
+Pin the checkpoint first. The requested revision is resolved to an immutable
+commit **before** loading, and that hash is what gets loaded; a branch name is
+not a pin. Every caller — training, evaluation, tests — goes through
+`sim_vla/models/pretrained.py:load_policy`, so a run cannot train against one
+revision and evaluate against another.
+
+```bash
+python -m sim_vla.download_pretrained --out data/pretrained
+```
+
+By default the **weights go to the Hugging Face cache** and `--out` receives
+only the report. Pass `--snapshot` to download the files into `--out` and load
+from there instead. Then paste the printed hash into `configs/base.yaml` as
+`actor.revision`.
 
 Tests, staged, stopping at the first failure:
 
@@ -78,17 +125,18 @@ Tests, staged, stopping at the first failure:
 bash sim_vla/run_tests.sh
 ```
 
-A stage that skipped everything reports **INCOMPLETE** and exits 2. A missing
-dependency never reads as a pass.
+Three outcomes per stage, and only the first is success:
 
-Pin the pretrained checkpoint first; it writes the revision to put in
-`configs/base.yaml` and prints the module tree the actor resolves against:
+- **passed** — every required module ran and nothing failed
+- **INCOMPLETE** (exit 2) — a required module skipped, or nothing ran
+- **FAILED** (exit 1) — something failed
 
-```bash
-python -m sim_vla.download_pretrained --out data/pretrained
-```
+Every `sim_vla.tests` module is required, so a stage cannot read green on the
+strength of a lightweight test while its integration skipped. A checkpoint that
+loads but whose interface has moved **fails**; only an unreachable checkpoint
+skips.
 
-Training is separate from the test suite and is never invoked by it:
+Training is separate and the suite never invokes it:
 
 ```bash
 python -m sim_vla.training.pretrain_world_model --task pickcube --experiment graph --steps 50000
@@ -99,10 +147,11 @@ python -m sim_vla.training.pretrain_world_model --task pickcube --experiment gra
 ```
 configs/      base + task + experiment yaml; the switch lives here
 data/         collection, audit, loader, sequences, normalization, replay
-models/       world_model, latent_adapter, smolvla_actor, flow_sampler, critics
+models/       world_model, latent_adapter, smolvla_actor, pretrained,
+              flow_sampler, critics, model_config
 envs/         the online env, matched to the dataset's recorded contract
 training/     pretrain, imitation, imagination, actor_critic, progress, online
 evaluation/   world-model diagnostics, policy rollouts, arm comparison
 runtime/      checkpoints that carry the decisions their weights depend on
-tests/        stages 3–9; stages 1–2 are in the repo's top-level tests/
+tests/        stages 3-9; stages 1-2 are in the repo's top-level tests/
 ```
