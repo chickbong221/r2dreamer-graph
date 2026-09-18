@@ -496,8 +496,8 @@ class TestActionCoordinates(unittest.TestCase):
 
         from sim_vla.models.action_space import ActionCoordinates
 
-        coords = ActionCoordinates(FakeNormalizer(mean=[5.0, -2.0],
-                                                  std=[0.5, 4.0]))
+        coords = ActionCoordinates(real_normalizer(mean=[5.0, -2.0],
+                                                   std=[0.5, 4.0]))
         raw = torch.tensor([[5.0, -2.0], [6.0, 2.0], [4.0, -10.0]])
         normalized = coords.normalize(raw)
         self.assertTrue(torch.allclose(normalized[0],
@@ -514,7 +514,7 @@ class TestActionCoordinates(unittest.TestCase):
                                                  ActionCoordinates)
 
         coords = ActionCoordinates(
-            FakeNormalizer(mean=[0.0], std=[0.5]),
+            real_normalizer(mean=[0.0], std=[0.5]),
             ActionBounds(low=np.array([-1.0], np.float32),
                          high=np.array([1.0], np.float32)))
         # Raw bounds +-1 with std 0.5 are +-2 in normalized coordinates.
@@ -742,21 +742,6 @@ class TestEnvValidation(unittest.TestCase):
         self.assertIn("reward_mode", str(caught.exception))
 
 
-class FakeNormalizer:
-    """The two methods ActionCoordinates reads, with known statistics."""
-
-    class Field:
-        def __init__(self, mean, std):
-            self.mean, self.std = np.asarray(mean), np.asarray(std)
-
-        def as_arrays(self):
-            return (self.mean, self.std,
-                    self.mean - 10 * self.std, self.mean + 10 * self.std)
-
-    def __init__(self, mean, std):
-        self.fields = {"actions": self.Field(mean, std)}
-
-
 class TestBatchPreprocessingContract(unittest.TestCase):
     """Idempotence that actually holds, and tensors that stay put."""
 
@@ -780,7 +765,7 @@ class TestBatchPreprocessingContract(unittest.TestCase):
 
         from sim_vla.data.batch import to_model_batch
 
-        coords_source = FakeNormalizer(mean=[1.0, 1.0], std=[2.0, 2.0])
+        coords_source = real_normalizer(mean=[1.0, 1.0], std=[2.0, 2.0])
         once = to_model_batch(self.raw(), normalizer=coords_source)
         twice = to_model_batch(once, normalizer=coords_source)
         thrice = to_model_batch(twice, normalizer=coords_source)
@@ -814,8 +799,8 @@ class TestBatchPreprocessingContract(unittest.TestCase):
         from sim_vla.data.batch import to_model_batch
         from sim_vla.models.action_space import ActionCoordinates
 
-        coords = ActionCoordinates(FakeNormalizer(mean=[0.0, 0.0],
-                                                  std=[1.0, 1.0]))
+        coords = ActionCoordinates(real_normalizer(mean=[0.0, 0.0],
+                                                   std=[1.0, 1.0]))
         out = to_model_batch(self.raw(), coords=coords)
         # action is the RSSM's input and must be inside the unit ball;
         # action_target is the actor's supervision and must not be squashed.

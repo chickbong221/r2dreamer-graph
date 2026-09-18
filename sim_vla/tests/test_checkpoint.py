@@ -349,21 +349,27 @@ class TestNoWriteControlPaths(unittest.TestCase):
             def close(self):
                 Data.closed = True
 
-        class Normalizer:
-            fields = {}
-            identity = {"digest": "toy"}
+        # A real Normalizer, not a stand-in. A hand-written stub of it drifted
+        # the moment `descriptor()` was added and this fixture started raising
+        # AttributeError inside the code under test -- which is a bug in the
+        # fixture reported as a bug in the stage. What this test injects is the
+        # dataset and the model; the normalizer is cheap and real.
+        from sim_vla.data.normalization import FieldStats, Normalizer
 
-            def save(self, path):
-                Path(path).write_text("{}", encoding="utf-8")
-                return Path(path)
+        stats = FieldStats(mean=[0.0] * 4, std=[1.0] * 4, low=[-1.0] * 4,
+                           high=[1.0] * 4, minimum=[-1.0] * 4,
+                           maximum=[1.0] * 4, count=12)
+        normalizer = Normalizer(fields={"actions": stats},
+                                identity={"dataset": "toy", "episodes": 3})
 
         self.model = Model()
         self.data = Data()
+        self.normalizer = normalizer
         originals = (stage.build, stage.fit_normalizer)
         stage.build = lambda cfg, *, device, model_yaml=None: (
             self.data, Sampler(), self.model,
             types.SimpleNamespace(lr=1e-3))
-        stage.fit_normalizer = lambda data: Normalizer()
+        stage.fit_normalizer = lambda data: normalizer
         self.addCleanup(lambda: setattr(stage, "build", originals[0]))
         self.addCleanup(lambda: setattr(stage, "fit_normalizer", originals[1]))
         return stage
@@ -396,6 +402,13 @@ class TestNoWriteControlPaths(unittest.TestCase):
         written = sorted(p.name for p in self.root.iterdir())
         self.assertEqual(written, ["normalization.json", "world_model.json",
                                    "world_model.pt"])
+        # The metadata has to identify the statistics, not just the dataset:
+        # weights fitted under one normalization cannot be read under another.
+        recorded = result.meta.normalization_identity
+        self.assertEqual(recorded["mode"], "mean_std")
+        self.assertTrue(recorded["statistics"])
+        self.assertEqual(recorded["statistics"],
+                         self.normalizer.statistics_fingerprint())
         # And it round-trips into a fresh model.
         fresh = type(self.model)()
         restored = load(out, result.meta, {"world_model": fresh})
