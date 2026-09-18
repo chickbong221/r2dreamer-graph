@@ -51,7 +51,21 @@ class Node(Mapping):
     """
 
     def __init__(self, data: Mapping[str, Any]):
-        object.__setattr__(self, "_data", dict(data))
+        # Held by reference, not copied. ``MultiDecoder`` writes back into the
+        # config before building its head::
+        #
+        #     config.mlp.shape = shape
+        #     self._mlp = MLPHead(config.mlp, ...)
+        #
+        # With a copy, ``config.mlp`` is a fresh object each time, that write
+        # lands on a temporary, and the head is built from the original
+        # ``shape: None`` -- which surfaces as ``'NoneType' object is not
+        # subscriptable`` inside MLPHead, naming neither the config nor the
+        # assignment. Sharing the dict makes the write stick, as DictConfig's
+        # does.
+        object.__setattr__(
+            self, "_data", data if isinstance(data, dict) else dict(data))
+        object.__setattr__(self, "_children", {})
 
     def __getitem__(self, key: str) -> Any:
         return object.__getattribute__(self, "_data")[key]
@@ -68,7 +82,14 @@ class Node(Mapping):
             raise AttributeError(
                 f"config has no {name!r}; present: {sorted(data)[:20]}")
         value = data[name]
-        return Node(value) if isinstance(value, dict) else value
+        if not isinstance(value, dict):
+            return value
+        # Cached as well as shared, so two reads of the same block are the same
+        # object and not merely two views of one dict.
+        children = object.__getattribute__(self, "_children")
+        if name not in children:
+            children[name] = Node(value)
+        return children[name]
 
     def __setattr__(self, name: str, value: Any) -> None:
         object.__getattribute__(self, "_data")[name] = value

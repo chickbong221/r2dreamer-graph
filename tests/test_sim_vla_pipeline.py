@@ -371,6 +371,48 @@ class TestModelConfig(unittest.TestCase):
             self.assertIsNone(_re.match(cfg.encoder.cnn_keys, key), key)
             self.assertIsNone(_re.match(cfg.encoder.mlp_keys, key), key)
 
+    def test_config_writes_back_like_dictconfig(self):
+        """MultiDecoder sets config.mlp.shape before building its head.
+
+        networks.py:175 assigns into the config and then reads it one line
+        later. A node that returned a fresh copy per access let that write land
+        on a temporary, and MLPHead was built from shape=None -- reported as
+        "'NoneType' object is not subscriptable", naming neither the config nor
+        the assignment.
+        """
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph"))
+        self.assertIsNone(cfg.decoder.mlp.shape)
+        cfg.decoder.mlp.shape = (25,)
+        self.assertEqual(cfg.decoder.mlp.shape, (25,))
+        self.assertEqual(cfg.decoder.mlp.shape[0], 25)
+        # Repeated access is the same object, not two views.
+        self.assertIs(cfg.decoder.mlp, cfg.decoder.mlp)
+        # ... and the mutation is confined to this config, not the yaml.
+        fresh = load_model_config(load_config("pickcube", "graph"))
+        self.assertIsNone(fresh.decoder.mlp.shape)
+
+    def test_config_is_both_mapping_and_attributes(self):
+        """networks.py:172 uses one node both ways in a single expression."""
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph"))
+        self.assertEqual(cfg.decoder.cnn_dist.name,
+                         dict(**cfg.decoder.cnn_dist)["name"])
+        self.assertIsInstance(dict(cfg.loss_scales), dict)
+        self.assertGreater(len(dict(cfg.loss_scales)), 0)
+
+    def test_heads_that_need_a_shape_have_one(self):
+        """reward and cont are built straight from config.shape[0]."""
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph"))
+        for head in ("reward", "cont"):
+            shape = getattr(cfg, head).shape
+            self.assertIsNotNone(shape, f"{head}.shape is None")
+            self.assertGreaterEqual(int(shape[0]), 1)
+
     def test_every_loss_key_has_a_scale(self):
         """Wrong scale names do not fail; they silently reweight the objective.
 
