@@ -91,6 +91,10 @@ ln -sfn $HOME/data data/sim_vla_demos
 # read-only asset cache instead if this cluster has one.
 # export MS_ASSET_DIR=/mnt/data/tuannl
 
+# Matches slurm_collect_data.sh's HF_HOME: same cache, so this job loads the
+# already-downloaded SmolVLA weights instead of reaching the network again.
+export HF_HOME=/netscratch/ttran/tmp_iclr2026/checkpoint
+
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 

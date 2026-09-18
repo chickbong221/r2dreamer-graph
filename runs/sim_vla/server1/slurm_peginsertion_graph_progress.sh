@@ -75,6 +75,10 @@ ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
 
 export MS_ASSET_DIR=/mnt/data/tuannl
 
+# Matches slurm_collect_data.sh's HF_HOME: same cache, so this job loads the
+# already-downloaded SmolVLA weights instead of reaching the network again.
+export HF_HOME=/home/tuannl/mnt_data/mshab_transfer_checkpoint
+
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 

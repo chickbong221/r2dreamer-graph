@@ -104,6 +104,27 @@ nvidia-smi
 nvidia-smi -l 100 > $HOME/output/gpu_${SLURM_JOB_ID}.log &
 GPU_MONITOR_PID=$!
 
+# --- SmolVLA pretrained checkpoint ------------------------------------------
+# sim_vla.training.pipeline's Stage 1B loads lerobot/smolvla_base from the
+# Hugging Face Hub at run time (sim_vla/training/train_imitation.py ->
+# sim_vla/models/pretrained.py:load_policy). If this partition's nodes don't
+# have outbound internet, that fetch fails deep inside a training job instead
+# of here, where it's cheap to retry. HF_HOME is redirected to a dedicated
+# directory rather than the default ~/.cache/huggingface (which would now be
+# under the overridden $HOME anyway), so every training script in this folder
+# can point HF_HOME at the exact same place and never touch the network.
+export HF_HOME=/netscratch/ttran/tmp_iclr2026/checkpoint
+mkdir -p "$HF_HOME"
+python -m sim_vla.download_pretrained --out "$HF_HOME"
+# Prints, among other things:
+#   Put this in sim_vla/configs/base.yaml:
+#     actor.revision: <40-char commit hash>
+# Paste that hash in as a *quoted* string. resolve_revision() only skips its
+# own network call when actor.revision is already a literal commit hash --
+# left at "" (the checked-in default) or "main", it still calls the Hub API on
+# every run even once the weights themselves are cached, which defeats the
+# point of pre-downloading for an offline training node.
+
 # Demos to accept per task, and worker processes per collection run. Tune
 # these before submitting: NUM_TRAJ=500 matches sim_vla/data/collect.py's own
 # documented example; NUM_PROCS is CPU-side (collect.py forces sim_backend=cpu
