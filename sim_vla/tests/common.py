@@ -49,12 +49,20 @@ def require_pretrained():
     return load()
 
 
-def small_model_config(graph_enabled: bool, *, n_max: int = 4, e_max: int = 16):
-    """A model config small enough to build in a second on CPU."""
+def small_model_config(graph_enabled: bool, *, n_max: int = 4, e_max: int = 16,
+                       n_cams: int = 1, device: str = "cpu"):
+    """A model config small enough to build in a second on CPU.
+
+    ``device`` and ``n_cams`` go in through the sim_vla config rather than
+    being patched afterwards: every block carries its own device key, and the
+    graph encoder's input width is ``5 * n_cams + 3``.
+    """
     from sim_vla.config import load_config
     from sim_vla.models.model_config import load_model_config
 
-    cfg = load_config("pickcube", "graph" if graph_enabled else "dreamer")
+    cfg = load_config("pickcube", "graph" if graph_enabled else "dreamer",
+                      {"device": device,
+                       "model": {"graph": {"n_cams": n_cams}}})
     model = load_model_config(cfg)
     model.rssm.deter = 64
     model.rssm.hidden = 64
@@ -66,13 +74,13 @@ def small_model_config(graph_enabled: bool, *, n_max: int = 4, e_max: int = 16):
     model.graph.semantic_dim = 16
     model.graph.simple_units = 32
     model.graph.decoder_units = 32
-    model.device = "cpu"
     return cfg, model
 
 
 def fake_batch(*, graph_enabled: bool, batch: int = 2, steps: int = 6,
                image: int = 16, proprio: int = 9, action: int = 8,
-               n_max: int = 4, e_max: int = 16) -> Dict[str, Any]:
+               n_max: int = 4, e_max: int = 16, n_cams: int = 1
+               ) -> Dict[str, Any]:
     """A window in the loader's layout, as tensors."""
     torch = require_torch()
     rng = np.random.default_rng(0)
@@ -102,8 +110,10 @@ def fake_batch(*, graph_enabled: bool, batch: int = 2, steps: int = 6,
         ):
             out[key] = torch.as_tensor(
                 rng.integers(0, high, shape).astype(np.int64))
+        # (n_max, n_cams, 4) per frame, as graph_pack allocates it. A 4-D
+        # array here makes compact_graph read the node axis as a camera axis.
         out["graph_node_bbox"] = torch.as_tensor(
-            rng.random((batch, steps, n_max, 4), dtype=np.float32))
+            rng.random((batch, steps, n_max, n_cams, 4), dtype=np.float32))
         out["graph_node_centroid"] = torch.as_tensor(
             rng.random((batch, steps, n_max, 3), dtype=np.float32))
     return out

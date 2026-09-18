@@ -303,6 +303,46 @@ class TestConfig(unittest.TestCase):
         merged = deep_merge({"a": {"x": 1, "y": 2}}, {"a": {"y": 3}})
         self.assertEqual(merged, {"a": {"x": 1, "y": 3}})
 
+    def test_camera_count_must_match_the_dataset(self):
+        """The packed bbox is (n_max, n_cams, 4); the encoder is 5*n_cams+3.
+
+        The model preset defaults to 2 cameras and PickCube records 1, so
+        inheriting the preset would build an encoder of the wrong width against
+        arrays of the wrong shape.
+        """
+        from sim_vla.config import check_dataset_compatibility
+
+        recorded = {"graph": {"relation_tokens": {"pad": 0}, "n_max": 8,
+                              "e_max": 168, "n_cams": 1}}
+        # 0 means "take the dataset's", so it must not trip the check.
+        cfg = load_config("pickcube", "graph")
+        self.assertEqual(cfg["model"]["graph"]["n_cams"], 0)
+        check_dataset_compatibility(cfg, recorded)
+        # An explicit disagreement is refused.
+        wrong = load_config("pickcube", "graph",
+                            {"model": {"graph": {"n_cams": 2}}})
+        with self.assertRaises(SystemExit):
+            check_dataset_compatibility(wrong, recorded)
+        # An explicit agreement passes.
+        right = load_config("pickcube", "graph",
+                            {"model": {"graph": {"n_cams": 1}}})
+        check_dataset_compatibility(right, recorded)
+
+    def test_device_reaches_every_block(self):
+        """Each block carries its own device key, resolved from ${device}.
+
+        Setting only the top level left RSSM building its initial state on the
+        default while the batch sat elsewhere -- reported as "expected all
+        tensors to be on the same device" from inside obs_step.
+        """
+        from sim_vla.models.model_config import load_model_config
+
+        cfg = load_model_config(load_config("pickcube", "graph",
+                                            {"device": "cpu"}))
+        for block in ("rssm", "reward", "cont", "critic", "actor"):
+            self.assertEqual(getattr(cfg, block).device, "cpu", block)
+        self.assertEqual(cfg.device, "cpu")
+
     def test_capacity_mismatch_is_refused(self):
         cfg = load_config("pickcube", "graph")
         check_dataset_compatibility(cfg, {"graph": {

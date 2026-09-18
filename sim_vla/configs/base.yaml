@@ -17,6 +17,10 @@ model:
     # against these; a mismatch is refused rather than reshaped.
     n_max: 8
     e_max: 168
+    # 0 takes the dataset's own camera count. The packed bbox is
+    # (n_max, n_cams, 4) and the graph encoder is 5*n_cams+3 wide, so this is
+    # a property of the recording, not of the model preset.
+    n_cams: 0
 
   progress:
     enabled: false          # requires graph.enabled; rejected otherwise

@@ -214,10 +214,38 @@ def load_model_config(sim_cfg: Mapping[str, Any],
 
     graph_cfg = dict((sim_cfg.get("model") or {}).get("graph") or {})
     merged.setdefault("graph", {})
-    merged["graph"] = dict(merged["graph"]) | {
+    overrides = {
         "enabled": bool(graph_cfg.get("enabled", False)),
         "n_max": int(graph_cfg.get("n_max", merged["graph"].get("n_max", 8))),
         "e_max": int(graph_cfg.get("e_max", merged["graph"].get("e_max", 168))),
     }
-    merged["device"] = str(sim_cfg.get("device", merged.get("device", "cuda")))
+    # The camera count is a property of the dataset, not of the model preset.
+    # The packed bbox is (n_max, n_cams, 4) and the graph encoder's input width
+    # is 5 * n_cams + 3, so a model built at the preset's 2 against a
+    # single-camera dataset is a silent width mismatch.
+    n_cams = int(graph_cfg.get("n_cams", 0) or 0)
+    if n_cams > 0:
+        overrides["n_cams"] = n_cams
+    merged["graph"] = dict(merged["graph"]) | overrides
+
+    # Every block carries its own device key, resolved from ${device} at load.
+    # Setting only the top level leaves RSSM building its initial state on the
+    # default while the batch sits somewhere else, which surfaces as "expected
+    # all tensors to be on the same device" from inside obs_step.
+    device = str(sim_cfg.get("device", merged.get("device", "cuda")))
+    _set_device(merged, device)
+    merged["device"] = device
     return Node(merged)
+
+
+def _set_device(node: Any, device: str) -> None:
+    """Point every ``device`` key in the tree at the same place."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "device" and isinstance(value, str):
+                node[key] = device
+            else:
+                _set_device(value, device)
+    elif isinstance(node, list):
+        for value in node:
+            _set_device(value, device)

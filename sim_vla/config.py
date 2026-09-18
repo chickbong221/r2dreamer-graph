@@ -117,9 +117,12 @@ def check_dataset_compatibility(cfg: Mapping[str, Any],
         raise SystemExit(
             "model.graph.enabled=true but this dataset records no graph "
             "vocabulary; it cannot train the graph arm.")
-    for key in ("n_max", "e_max"):
+    for key in ("n_max", "e_max", "n_cams"):
         wanted, got = graph.get(key), recorded.get(key)
-        if wanted is not None and got is not None and int(wanted) != int(got):
+        # 0 is the "take it from the dataset" sentinel, not a capacity of zero.
+        if wanted in (None, 0) or got is None:
+            continue
+        if int(wanted) != int(got):
             raise SystemExit(
                 f"graph.{key} is {wanted} but the dataset was packed at {got}. "
                 "The arrays would load and describe a different capacity.")
