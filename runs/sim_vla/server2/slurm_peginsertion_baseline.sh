@@ -90,6 +90,8 @@ ln -sfn $HOME/data data/sim_vla_demos
 # read-only asset cache instead if this cluster has one.
 # export MS_ASSET_DIR=/mnt/data/tuannl
 
+export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
+
 # Matches slurm_collect_data.sh's HF_HOME: same cache, so this job loads the
 # already-downloaded SmolVLA weights instead of reaching the network again.
 export HF_HOME=/netscratch/ttran/tmp_iclr2026/checkpoint

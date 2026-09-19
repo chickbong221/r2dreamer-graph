@@ -73,6 +73,8 @@ ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
 
 export MS_ASSET_DIR=/mnt/data/tuannl
 
+export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
+
 # Matches slurm_collect_data.sh's HF_HOME: same cache, so this job loads the
 # already-downloaded SmolVLA weights instead of reaching the network again.
 export HF_HOME=/home/tuannl/mnt_data/mshab_transfer_checkpoint
