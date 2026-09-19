@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 import torch
@@ -221,12 +221,17 @@ class ImitationTrainer:
         return {"loss": float(loss.detach()), "grad_norm": float(clipped),
                 **{k: float(v) for k, v in metrics.items()}}
 
-    def fit(self, sampler, steps: Optional[int] = None) -> Dict[str, float]:
+    def fit(self, sampler, steps: Optional[int] = None,
+            on_metrics: Optional[Callable[[Dict[str, float]], None]] = None,
+            ) -> Dict[str, float]:
         total = int(steps or self.config.steps)
         last: Dict[str, float] = {}
         for _ in range(total):
             last = self.update(sampler.batch(self.config.batch_size))
+            # One cadence for both sinks -- see pretrain_world_model.run.
             if self.step % self.config.log_every == 0:
+                if on_metrics is not None:
+                    on_metrics({"step": float(self.step), **last})
                 print(f"[imitation] step {self.step} loss {last['loss']:.4f}",
                       flush=True)
         return last
@@ -331,7 +336,9 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
         device="cuda", actor=None, normalizer=None, coords=None,
         out: Optional[Path] = None, save_checkpoint: bool = False,
         meta: Optional[CheckpointMeta] = None,
-        config: Optional[ImitationConfig] = None) -> Stage1B:
+        config: Optional[ImitationConfig] = None,
+        on_metrics: Optional[Callable[[Dict[str, float]], None]] = None,
+        ) -> Stage1B:
     """Train the adapter and action expert against a live world model.
 
     ``world_model`` is Stage 1A's object. ``save_checkpoint`` is off by
@@ -363,7 +370,7 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
     trainer = ImitationTrainer(world_model, actor, sampler, imitation,
                                device=device, normalizer=normalizer,
                                coords=coords)
-    last = trainer.fit(sampler, steps=int(steps))
+    last = trainer.fit(sampler, steps=int(steps), on_metrics=on_metrics)
 
     path: Optional[Path] = None
     if save_checkpoint:

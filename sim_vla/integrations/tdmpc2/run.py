@@ -128,8 +128,8 @@ def command_stage1(args) -> int:
     return 0
 
 
-def _restore_world(cfg: Mapping[str, Any], path: Path, *, device: str):
-    """Rebuild Stage 1's agent and load its weights back into it."""
+def _build_world(cfg: Mapping[str, Any], *, device: str):
+    """Rebuild Stage 1's objects without loading any weights into them."""
     world = dict(cfg["world_model"])
     data_cfg = dict(cfg.get("data") or {})
     source = demo_data.open_demos(
@@ -150,12 +150,19 @@ def _restore_world(cfg: Mapping[str, Any], path: Path, *, device: str):
                                       smolvla=cfg["smolvla"],
                                       normalizer=normalizer, device=device)
     agent = build.build_agent(node)
-    wanted = stages.stage_meta(cfg, stage="world_model", node=node,
-                               source=source, smolvla=False, converter=converter)
-    load_checkpoint(path, wanted, {"model": agent.model})
     return stages.WorldModelResult(agent=agent, node=node, source=source,
                                    converter=converter, normalizer=normalizer,
                                    parameters=build.parameters(agent))
+
+
+def _restore_world(cfg: Mapping[str, Any], path: Path, *, device: str):
+    """Rebuild Stage 1's agent and load a world-model checkpoint into it."""
+    world = _build_world(cfg, device=device)
+    wanted = stages.stage_meta(cfg, stage="world_model", node=world.node,
+                               source=world.source, smolvla=False,
+                               converter=world.converter)
+    load_checkpoint(path, wanted, {"model": world.agent.model})
+    return world
 
 
 def command_stage2(args) -> int:
@@ -187,7 +194,10 @@ def command_stage3(args) -> int:
             raise SystemExit(
                 "stage 3 continues from an imitation-trained policy; pass "
                 "--imitation-checkpoint, or run `pipeline`.")
-        world = _restore_world(cfg, Path(args.imitation_checkpoint), device=device)
+        # One load, with the imitation stage's own metadata: reading an
+        # imitation checkpoint under a world_model descriptor would be refused
+        # for the smolvla flag, which is the check doing its job.
+        world = _build_world(cfg, device=device)
         actor = build.build_actor(cfg["smolvla"],
                                   feature_dim=build.latent_dim(world.agent),
                                   action_dim=world.source.action_dim,

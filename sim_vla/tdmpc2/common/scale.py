@@ -6,8 +6,12 @@ class RunningScale:
 
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self._value = torch.ones(1, dtype=torch.float32, device=torch.device('cuda'))
-		self._percentiles = torch.tensor([5, 95], dtype=torch.float32, device=torch.device('cuda'))
+		# Defaults to 'cuda', which is what it always was. Read from the config
+		# so the agent can also be built on CPU; a run that sets nothing is
+		# unchanged.
+		device = torch.device(cfg.get('device', 'cuda') if hasattr(cfg, 'get') else 'cuda')
+		self._value = torch.ones(1, dtype=torch.float32, device=device)
+		self._percentiles = torch.tensor([5, 95], dtype=torch.float32, device=device)
 
 	def state_dict(self):
 		return dict(value=self._value, percentiles=self._percentiles)

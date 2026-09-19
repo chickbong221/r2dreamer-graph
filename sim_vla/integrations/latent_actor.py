@@ -64,6 +64,13 @@ class LatentActor(nn.Module):
                 raise TypeError(
                     f"a latent actor needs {required}(); got "
                     f"{type(actor).__name__}")
+        if not isinstance(actor, nn.Module):
+            # Assigning a non-Module here would leave `parameters()` empty and
+            # every optimizer built from it would step nothing, silently.
+            raise TypeError(
+                f"{type(actor).__name__} is not an nn.Module, so its weights "
+                "would not be registered here and an optimizer built from this "
+                "wrapper would train nothing")
         self.actor = actor
         self.instruction = instruction
         self.chunk_size = int(getattr(actor, "chunk_size", 1))

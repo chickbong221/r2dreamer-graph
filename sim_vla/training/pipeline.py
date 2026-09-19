@@ -38,6 +38,7 @@ from . import train_imitation
 from .actor_critic import ActorCriticConfig
 from .online import OnlineConfig, run_online
 from .progress import ProgressConfig, build_progress
+from .wandb_logger import RunLogger, start_run
 
 
 def stage_paths(root: Path) -> Dict[str, Path]:
@@ -50,10 +51,17 @@ def stage_paths(root: Path) -> Dict[str, Path]:
 def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         online_steps: int, device: str, root: Path,
         save_checkpoints: bool = False,
-        model_yaml: Optional[Path] = None) -> Dict[str, Any]:
-    """Stage 1A -> 1B -> 2, handing the live objects forward."""
+        model_yaml: Optional[Path] = None,
+        logger: Optional[RunLogger] = None) -> Dict[str, Any]:
+    """Stage 1A -> 1B -> 2, handing the live objects forward.
+
+    ``logger`` is the one wandb run all three stages log into. The default is
+    an inert one, so calling this directly costs nothing; ``main`` opens the
+    real one and owns closing it.
+    """
     paths = stage_paths(root)
     report: Dict[str, Any] = {}
+    logger = logger if logger is not None else RunLogger()
 
     # Refused before anything expensive: the progress arm has no supervision
     # contract in this package, and discovering that after Stage 1A costs a
@@ -85,10 +93,13 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
     stage_a = pretrain_world_model.run(
         cfg, steps=int(world_steps), device=device,
         out=paths["world_model"], save_checkpoint=save_checkpoints,
-        model_yaml=model_yaml)
+        model_yaml=model_yaml,
+        on_metrics=lambda m: logger.log(m, stage="world"))
     report["world_model"] = {"losses": stage_a.losses,
                              "feature_dim": int(stage_a.model.feature_dim),
                              "path": str(stage_a.path or "")}
+    logger.summary({"feature_dim": int(stage_a.model.feature_dim),
+                    "world_steps": int(world_steps)})
 
     try:
         # ---------------------------------------------------------- stage 1B
@@ -100,7 +111,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
                 device=device, normalizer=stage_a.normalizer,
                 coords=stage_a.coords,
                 out=paths["imitation"], save_checkpoint=save_checkpoints,
-                meta=stage_a.meta)
+                meta=stage_a.meta,
+                on_metrics=lambda m: logger.log(m, stage="imitation"))
             report["imitation"] = {"losses": stage_b.losses,
                                    "path": str(stage_b.path or "")}
             # After any save, before online training. Stage 2 builds its own
@@ -157,6 +169,11 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             report["progress"] = potential.describe() | {
                 "beta": progress_cfg.beta,
                 "warmup": [warmup_start, warmup_end]}
+            # In the summary rather than only the log: which schedule the arm
+            # was shaped against, and how strongly, is what distinguishes this
+            # run from the plain graph arm.
+            logger.summary({f"progress_{key}": value
+                            for key, value in report["progress"].items()})
 
         env = SimVlaEnv(
             stage_a.data.metadata,
@@ -192,9 +209,12 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
                 normalizer=stage_a.normalizer, coords=stage_a.coords,
                 progress_head=progress_head, potential=potential,
                 progress_config=progress_cfg,
-                checkpoint_dir=paths["online"], meta=stage_a.meta)
+                checkpoint_dir=paths["online"], meta=stage_a.meta,
+                on_metrics=lambda m: logger.log(m, stage="online"))
             report["online"] = {"env_steps": trainer.env_steps,
                                 "updates": trainer.updates}
+            logger.summary({"online_env_steps": int(trainer.env_steps),
+                            "online_updates": int(trainer.updates)})
         finally:
             env.close()
         return report
@@ -249,11 +269,25 @@ def main(argv=None) -> int:
           + (f"on -> {root}" if args.save_checkpoints
              else "off (stages pass their models in memory)"), flush=True)
 
-    report = run(cfg, world_steps=args.world_steps,
-                 imitation_steps=args.imitation_steps,
-                 online_steps=args.online_steps, device=args.device,
-                 root=root, save_checkpoints=args.save_checkpoints,
-                 model_yaml=model_yaml)
+    logger = start_run(cfg, extra_config={
+        "world_steps": int(args.world_steps),
+        "imitation_steps": int(args.imitation_steps),
+        "online_steps": int(args.online_steps),
+        "device": str(args.device),
+        "model_config": str(model_yaml),
+        "save_checkpoints": bool(args.save_checkpoints)})
+    try:
+        report = run(cfg, world_steps=args.world_steps,
+                     imitation_steps=args.imitation_steps,
+                     online_steps=args.online_steps, device=args.device,
+                     root=root, save_checkpoints=args.save_checkpoints,
+                     model_yaml=model_yaml, logger=logger)
+    except BaseException:
+        # Marked failed rather than left running: a crashed 48-hour job that
+        # shows as still-running in the dashboard is worse than no run at all.
+        logger.finish(exit_code=1)
+        raise
+    logger.finish()
     print(json.dumps(report, indent=2, default=str))
     return 0
 

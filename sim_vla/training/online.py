@@ -448,6 +448,15 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
                 seed_start=int(cfg["eval"]["seeds_start"]),
                 max_steps=int(config.max_episode_steps))
             print(f"[online] eval {report}", flush=True)
+            if on_metrics is not None:
+                # Success rate and environment return are what the arms are
+                # compared on, so they go through the same sink as the losses --
+                # against env_steps, and never mixed with the shaping reward.
+                # per_episode is a list, which the sink drops on its own.
+                on_metrics({"env_steps": float(trainer.env_steps),
+                            **{f"eval_{key}": value
+                               for key, value in report.items()
+                               if isinstance(value, (int, float, bool))}})
             next_eval += int(config.eval_every)
 
         if config.save_checkpoints and trainer.env_steps >= next_checkpoint:

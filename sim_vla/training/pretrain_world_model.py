@@ -27,7 +27,7 @@ import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import torch
@@ -130,7 +130,9 @@ def build(cfg: Dict[str, Any], *, device: str,
 
 def run(cfg: Dict[str, Any], *, steps: int, device: str,
         out: Optional[Path] = None, save_checkpoint: bool = False,
-        model_yaml: Path | None = None, log_every: int = 100) -> Stage1A:
+        model_yaml: Path | None = None, log_every: int = 100,
+        on_metrics: Optional[Callable[[Dict[str, float]], None]] = None,
+        ) -> Stage1A:
     """Train one arm's world model and hand it back live.
 
     ``save_checkpoint`` is off by default. The stages run in one process and
@@ -185,7 +187,13 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
             optimizer.step()
             last = {name: float(value.detach())
                     for name, value in losses.items()}
+            # One cadence for both sinks. A 500k-step run logging every step
+            # spends real time inside the metrics client and produces a chart
+            # too dense to read; log_every is already the knob for that.
             if log_every and step % int(log_every) == 0:
+                if on_metrics is not None:
+                    on_metrics({"step": float(step), "total": float(total),
+                                **last})
                 print(f"[world_model] step {step} total {float(total):.4f} "
                       + " ".join(f"{k}={v:.3f}"
                                  for k, v in sorted(last.items())[:5]),
@@ -302,8 +310,21 @@ def main(argv=None) -> int:
               "model and go straight into imitation in one process, or pass "
               "--save-checkpoints to keep this one.", flush=True)
 
-    stage = run(cfg, steps=args.steps, device=args.device, out=out,
-                save_checkpoint=args.save_checkpoints, model_yaml=model_yaml)
+    from .wandb_logger import start_run
+
+    logger = start_run(cfg, extra_config={"world_steps": int(args.steps),
+                                          "device": str(args.device),
+                                          "model_config": str(model_yaml),
+                                          "stage": "world_model_only"})
+    try:
+        stage = run(cfg, steps=args.steps, device=args.device, out=out,
+                    save_checkpoint=args.save_checkpoints,
+                    model_yaml=model_yaml,
+                    on_metrics=lambda m: logger.log(m, stage="world"))
+    except BaseException:
+        logger.finish(exit_code=1)
+        raise
+    logger.finish()
     stage.data.close()
     if stage.path is not None:
         print(f"[world_model] wrote {stage.path}")

@@ -81,6 +81,22 @@ actor:
   # which puts a 32-wide bottleneck between the world model and the policy.
   state_token_mode: embedding
 
+wandb:
+  # All three stages log into one run, because they are one experiment: the
+  # stage is a key prefix, not a separate run. Off here means nothing is
+  # logged and nothing is required; training never depends on it.
+  enabled: true
+  project: sim_vla
+  entity: ''
+  # Empty takes the arm being run: group is the task, so a task's arms land
+  # side by side, and name is <task>-<arm>. See training/wandb_logger.py.
+  group: ''
+  name: ''
+  # online | offline | disabled. A compute node without outbound network wants
+  # offline, then `wandb sync` on the run directory afterwards.
+  mode: online
+  tags: []
+
 diagnostics:
   # Recording graphs is not learning from them. This may be true in a baseline
   # run; the objects stay outside learning batches either way.

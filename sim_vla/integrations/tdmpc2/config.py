@@ -47,10 +47,40 @@ ARCHITECTURE_KEYS = (
 )
 
 
+def _loader():
+    """PyYAML with OmegaConf's float rule, not YAML 1.1's.
+
+    ``lr: 3e-4`` is a *string* under ``yaml.safe_load``: YAML 1.1's float
+    pattern wants a dot or a signed exponent, so ``3e-4`` fails it and falls
+    through to str. Upstream never notices because Hydra loads the file through
+    OmegaConf, whose resolver accepts it. Loading the same file with plain
+    PyYAML gives ``cfg.lr * cfg.enc_lr_scale`` -> "can't multiply sequence by
+    non-int of type 'float'", from a line that mentions neither YAML nor the
+    learning rate.
+    """
+    import re
+
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:float",
+        re.compile(r"""^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+                       |\.[0-9][0-9_]*(?:[eE][-+]?[0-9]+)?
+                       |[-+]?[0-9][0-9_]*(?:[eE][-+]?[0-9]+)
+                       |[-+]?\.(?:inf|Inf|INF)
+                       |\.(?:nan|NaN|NAN))$""", re.X),
+        list("-+0123456789."))
+    return Loader
+
+
 def _read_yaml(path: Path) -> Dict[str, Any]:
     import yaml
 
-    return dict(yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {})
+    return dict(yaml.load(Path(path).read_text(encoding="utf-8"),
+                          Loader=_loader()) or {})
 
 
 def model_size_table() -> Dict[int, Dict[str, Any]]:

@@ -1,0 +1,97 @@
+# SOLD with a latent-conditioned SmolVLA actor.
+#
+# Everything under `world_model` is an override on sold/configs/train_sold.yaml
+# and sold/configs/autoencoder/savi.yaml, which stay the source for every
+# setting not named here: the slot count and width, the OCVP dynamics widths,
+# the predictor heads, the imagination horizon, the discount, the lambda, the
+# critic EMA and the autoencoder fine-tuning switch.
+#
+# With `smolvla.enabled: false` the module built from this file is upstream's:
+# the Gaussian actor is sampled with rsample(), its entropy bonus is applied,
+# and `actor_gradients` may be either of upstream's two values.
+
+device: cuda
+seed: 42
+
+world_model:
+  # Overrides only. The env block is replaced wholesale because SOLD's own
+  # suites do not include ManiSkill; see integrations/sold/env.py.
+  env:
+    suite: maniskill
+    image_size: [64, 64]
+    max_episode_steps: 150
+    action_repeat: 1
+  # Upstream's, restated here only so a run reads them in one place. Changing
+  # one of these changes SOLD's algorithm and is recorded in the checkpoint.
+  num_context: 3
+  imagination_horizon: 15
+  return_lambda: 0.95
+  discount_factor: 0.96
+  critic_ema_decay: 0.98
+  actor_gradients: dynamics      # 'reinforce' is refused with SmolVLA
+  finetune_autoencoder: false    # upstream's default; honoured, not overridden
+  batch_size: 8
+  num_seed: 250
+  update_freq: 25
+  num_updates: 2
+  eval_freq: 1500
+  num_eval_episodes: 5
+  max_steps: 1_000_000
+  buffer_capacity: 1_250_000
+  save_replay_buffer: true
+
+smolvla:
+  enabled: true
+  pretrained: lerobot/smolvla_base
+  # Pin this. `python -m sim_vla.download_pretrained --out data/pretrained`
+  # resolves a branch to an immutable commit and prints what to paste here.
+  revision: ''
+  chunk_size: 0          # 0 takes the checkpoint's own value
+  flow_steps: 0          # 0 takes the checkpoint's num_steps
+  state_token_mode: embedding
+  adapter:
+    # The same architecture family as SOLD's own actor head: a slot
+    # aggregation transformer with an ALiBi causal mask, reading the cls token.
+    token_dim: 256
+    hidden_dim: 512
+    num_heads: 8
+    num_layers: 3
+    num_mlp_layers: 1
+    # Frames of slot history the adapter attends over. 0 takes num_context,
+    # which is the largest value that is the same at every imagined step --
+    # imagination starts from num_context frames, so anything longer would
+    # give the first imagined step a shorter window than the rest.
+    context: 0
+  action_normalization: identity
+  execute: 1
+  online_lr: 1.0e-5
+  max_batch: 256
+
+data:
+  dataset: ''            # set by the task block
+  camera: ''             # '' takes the first recorded camera, and says so
+  seed: 0
+
+stages:
+  autoencoder:
+    steps: 20_000
+    batch_size: 8
+    sequence_length: 8
+    lr: 1.0e-4
+    grad_clip: 0.05
+    log_every: 200
+  world_model:
+    steps: 50_000
+    batch_size: 8
+    log_every: 200
+  imitation:
+    steps: 20_000
+    batch_size: 8
+    lr: 1.0e-4
+    grad_clip: 1.0
+    log_every: 100
+    # Conditioning windows. Separate from the imagination horizon and from the
+    # action chunk.
+    sequence_length: 16
+  online:
+    steps: 1_000_000
