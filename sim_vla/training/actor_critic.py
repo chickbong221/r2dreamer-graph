@@ -87,7 +87,7 @@ class ActorCriticConfig:
     critic_lr: float = 3e-4
     flow_steps: int = 10
     grad_clip: float = 1.0
-    critic_warmup: int = 500
+    critic_warmup: int = 150
     # Optional flow-matching anchor on demonstrations, mixed into the actor
     # update. Zero disables it; a nonzero value requires a demonstration
     # sampler to be supplied, and ActorCriticTrainer refuses the combination
