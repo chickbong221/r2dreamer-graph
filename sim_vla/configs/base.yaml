@@ -46,7 +46,7 @@ data:
   # state and are excluded from the loss.
   sequence_length: 64
   burn_in: 8
-  batch_size: 8
+  batch_size: 16
   # Matches envs/maniskill.py, which builds the online env with
   # ignore_terminations=True. The demonstrations were recorded without that
   # wrapper and do carry terminal flags; honouring them would train a

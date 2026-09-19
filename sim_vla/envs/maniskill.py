@@ -304,12 +304,25 @@ class SimVlaEnv:
     def reset(self, seed: Optional[int] = None) -> Dict[str, np.ndarray]:
         if self._env is None:
             self.build()
+        raw, _info = self._env.reset(seed=self.seed if seed is None else int(seed))
         if self._graphs is not None:
             # Per environment, and independent of the recurrent state reset:
             # temporal edges difference over the last K frames and a builder
             # carried across a reset describes the previous episode.
+            #
+            # After env.reset, never before -- which is what
+            # FigureGraphSource.on_reset documents. It sets merged-view
+            # aliasing on the *scene*, and a reset that reconfigures (
+            # PegInsertionSide rebuilds its hole every episode) constructs a
+            # new one: called first, the flag lands on the scene about to be
+            # discarded, the new scene never receives it, and the segmentation
+            # ids the builder reads stop aliasing to the actors the whitelist
+            # names -- so a scheduled subject resolves to no node and
+            # goal_edges refuses the frame. It also drops caches keyed on the
+            # old actors, which is only correct once those actors are gone.
+            # sim_vla/data/collect.py wraps the env so the recording gets this
+            # order; the two have to agree or the graphs do not.
             self._graphs.on_reset()
-        raw, _info = self._env.reset(seed=self.seed if seed is None else int(seed))
         self._steps = 0
         obs = self._observation(raw)
         obs["is_first"] = np.array(True)
