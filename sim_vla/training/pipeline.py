@@ -52,7 +52,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         online_steps: int, device: str, root: Path,
         save_checkpoints: bool = False,
         model_yaml: Optional[Path] = None,
-        logger: Optional[RunLogger] = None) -> Dict[str, Any]:
+        logger: Optional[RunLogger] = None,
+        resume_from: Optional[Path] = None) -> Dict[str, Any]:
     """Stage 1A -> 1B -> 2, handing the live objects forward.
 
     ``logger`` is the one wandb run all three stages log into. The default is
@@ -90,11 +91,33 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
 
     # ------------------------------------------------------------- stage 1A
     print(f"[pipeline] stage 1A: world model, {world_steps} steps", flush=True)
-    stage_a = pretrain_world_model.run(
-        cfg, steps=int(world_steps), device=device,
-        out=paths["world_model"], save_checkpoint=save_checkpoints,
-        model_yaml=model_yaml,
-        on_metrics=lambda m: logger.log(m, stage="world"))
+    resume_paths = stage_paths(Path(resume_from)) if resume_from else {}
+    reuse_world = resume_paths.get("world_model")
+    reuse_imitation = resume_paths.get("imitation")
+    if reuse_world is not None and not Path(reuse_world).is_file():
+        reuse_world = None
+    if reuse_imitation is not None and not Path(reuse_imitation).is_file():
+        reuse_imitation = None
+    if reuse_imitation is not None and reuse_world is None:
+        # The actor was trained against one particular world model. Restoring
+        # it beside a freshly initialised one pairs a trained policy with a
+        # state representation it has never seen.
+        raise SystemExit(
+            f"{reuse_imitation} exists but its world model does not. Stage 1B "
+            "was trained against a specific Stage 1A model and cannot be "
+            "restored beside a new one; resume both or neither.")
+
+    if reuse_world is not None:
+        print(f"[pipeline] stage 1A: skipped, restoring {reuse_world}",
+              flush=True)
+        stage_a = pretrain_world_model.resume(
+            cfg, device=device, path=Path(reuse_world), model_yaml=model_yaml)
+    else:
+        stage_a = pretrain_world_model.run(
+            cfg, steps=int(world_steps), device=device,
+            out=paths["world_model"], save_checkpoint=save_checkpoints,
+            model_yaml=model_yaml,
+            on_metrics=lambda m: logger.log(m, stage="world"))
     report["world_model"] = {"losses": stage_a.losses,
                              "feature_dim": int(stage_a.model.feature_dim),
                              "path": str(stage_a.path or "")}
@@ -103,7 +126,15 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
 
     try:
         # ---------------------------------------------------------- stage 1B
-        if int(imitation_steps) > 0:
+        if reuse_imitation is not None:
+            print(f"[pipeline] stage 1B: skipped, restoring {reuse_imitation}",
+                  flush=True)
+            stage_b = train_imitation.resume(
+                cfg, stage_a.model, stage_a.sampler,
+                path=Path(reuse_imitation), device=device, meta=stage_a.meta)
+            report["imitation"] = {"losses": stage_b.losses,
+                                   "path": str(stage_b.path or "")}
+        elif int(imitation_steps) > 0:
             print(f"[pipeline] stage 1B: imitation, {imitation_steps} steps "
                   "(same world model object, frozen)", flush=True)
             stage_b = train_imitation.run(
@@ -240,6 +271,15 @@ def parse_args(argv=None):
     parser.add_argument("--burn-in", type=int, default=None)
     parser.add_argument("--out", default="")
     parser.add_argument(
+        "--resume-from", default="",
+        help="a directory holding world_model.pt (and optionally "
+             "imitation.pt) from an earlier --save-checkpoints run. Those "
+             "stages are restored instead of trained, so a rerun goes "
+             "straight to online training. The arm, the env, the feature "
+             "width, the pretrained revision and the normalization "
+             "statistics all have to match; a mismatch is refused rather "
+             "than coerced.")
+    parser.add_argument(
         "--save-checkpoints", action="store_true",
         help="write each stage's weights under --out. Off by default: the "
              "stages hand their models to each other in memory, so this is "
@@ -269,6 +309,22 @@ def main(argv=None) -> int:
           + (f"on -> {root}" if args.save_checkpoints
              else "off (stages pass their models in memory)"), flush=True)
 
+    if args.resume_from:
+        # Checked here rather than shrugged off inside run(): a typo would
+        # otherwise retrain a stage this flag was passed precisely to skip,
+        # and the run would look like it worked.
+        resume_root = Path(args.resume_from)
+        found = {name: path for name, path in stage_paths(resume_root).items()
+                 if name != "online" and Path(path).is_file()}
+        if not found:
+            raise SystemExit(
+                f"--resume-from {resume_root} holds no world_model.pt or "
+                "imitation.pt. It wants the --out directory of an earlier "
+                "--save-checkpoints run.")
+        print("[pipeline] resuming: "
+              + ", ".join(f"{name} <- {path}"
+                          for name, path in sorted(found.items())), flush=True)
+
     logger = start_run(cfg, extra_config={
         "world_steps": int(args.world_steps),
         "imitation_steps": int(args.imitation_steps),
@@ -281,7 +337,9 @@ def main(argv=None) -> int:
                      imitation_steps=args.imitation_steps,
                      online_steps=args.online_steps, device=args.device,
                      root=root, save_checkpoints=args.save_checkpoints,
-                     model_yaml=model_yaml, logger=logger)
+                     model_yaml=model_yaml, logger=logger,
+                     resume_from=(Path(args.resume_from)
+                                  if args.resume_from else None))
     except BaseException:
         # Marked failed rather than left running: a crashed 48-hour job that
         # shows as still-running in the dashboard is worse than no run at all.

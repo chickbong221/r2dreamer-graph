@@ -55,7 +55,7 @@ import torch
 from ..data.batch import to_model_batch
 
 from ..models.flow_sampler import flow_matching_loss
-from ..runtime.checkpoint import CheckpointMeta, save
+from ..runtime.checkpoint import CheckpointMeta, load, save
 
 # The canonical key a window exposes for the action taken *at* each row.
 TARGET_KEY = "action_target"
@@ -389,3 +389,33 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
 
     return Stage1B(actor=actor, adapter=actor.adapter, loaded=actor.loaded,
                    trainer=trainer, losses=last, path=path)
+
+
+def resume(cfg: Dict[str, Any], world_model, sampler, *, path: Path,
+           device="cuda", actor=None,
+           meta: Optional[CheckpointMeta] = None) -> Stage1B:
+    """Rebuild the actor and restore Stage 1B's trained weights into it.
+
+    ``trainer`` comes back None, as it does after :meth:`ImitationTrainer.
+    release`: there is no imitation optimizer to continue, and Stage 2 builds
+    its own. ``pretrained_revision`` is one of the checked fields, so a
+    checkpoint trained against a different SmolVLA commit is refused here
+    rather than producing an actor whose frozen half and trained half disagree.
+    """
+    dim = action_width(cfg, sampler)
+    if actor is None:
+        actor = build_actor(cfg, int(world_model.feature_dim), dim,
+                            device=device)
+
+    stage_meta = CheckpointMeta(
+        **{**(meta.__dict__ if meta is not None
+              else {"graph_enabled": bool(cfg["model"]["graph"]["enabled"]),
+                    "stage": "imitation"}),
+           "stage": "imitation", "step": 0,
+           "pretrained_revision": str(actor.loaded.revision)})
+    stored = load(Path(path), stage_meta,
+                  {"adapter": actor.adapter, "actor": actor})
+    print(f"[imitation] restored {path} (trained {stored.step} steps, "
+          f"pretrained {stored.pretrained_revision[:12] or '?'})", flush=True)
+    return Stage1B(actor=actor, adapter=actor.adapter, loaded=actor.loaded,
+                   trainer=None, losses={}, path=Path(path))

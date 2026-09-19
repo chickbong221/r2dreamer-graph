@@ -99,6 +99,39 @@ def collect_episode(env, policy, *, max_steps: int = 150,
     return episode
 
 
+def episode_metrics(episodes) -> Dict[str, float]:
+    """The original pipeline's ``episode/`` panel, from the same rollouts.
+
+    ``trainer.py`` logs ``episode/score`` and ``episode/length``, plus one
+    entry per ``log_`` observation key taken as the per-episode *maximum* --
+    a 0/1 flag maxed over an episode is "it happened at least once". The
+    simulator's env supplies those keys through ManiSkill's ``final_info``;
+    ``SimVlaEnv`` has no such channel, but ``collect_episode`` already records
+    the per-step success flag, so the same numbers are derivable here and cost
+    no extra simulation.
+
+    ``success_once`` and ``success_at_end`` are kept apart deliberately: the
+    flag flickers -- PickCube wants a static robot as well as a placed cube --
+    so reaching success and still holding it at the end are different events,
+    and neither is recoverable from the other.
+    """
+    if not episodes:
+        return {}
+    score, length, once, at_end = [], [], [], []
+    for episode in episodes:
+        flags = np.asarray(episode.success, dtype=bool)
+        score.append(float(np.sum(episode.reward)))
+        length.append(float(episode.steps))
+        once.append(float(flags.any()) if flags.size else 0.0)
+        at_end.append(float(flags[-1]) if flags.size else 0.0)
+    return {
+        "episode/score": float(np.mean(score)),
+        "episode/length": float(np.mean(length)),
+        "episode/success_once": float(np.mean(once)),
+        "episode/success_at_end": float(np.mean(at_end)),
+    }
+
+
 class LatentPolicy:
     """Recurrent inference: one posterior state per episode, carried forward.
 
@@ -415,6 +448,7 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
     last: Dict[str, float] = {}
 
     while trainer.env_steps < int(config.total_steps):
+        collected = []
         for _ in range(int(config.episodes_per_collect)):
             # Reset before every rollout, not inside collect_episode: the
             # policy's recurrent state is the policy's, and an env reset does
@@ -425,6 +459,7 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
                 seed=seed)
             trainer.replay.add(episode)
             trainer.env_steps += int(episode.steps)
+            collected.append(episode)
             seed += 1
 
         for _ in range(int(config.updates_per_collect)):
@@ -432,10 +467,16 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
         last["env_steps"] = float(trainer.env_steps)
         last["updates"] = float(trainer.updates)
         last["replay_episodes"] = float(len(trainer.replay))
+        # From the rollouts just collected, not a separate evaluation: these
+        # are the training-time curves the original pipeline reports.
+        episode = episode_metrics(collected)
+        last |= episode
         if on_metrics is not None:
             on_metrics(dict(last))
         print(f"[online] env_steps {trainer.env_steps} "
               f"updates {trainer.updates} "
+              f"success_once={episode.get('episode/success_once', 0.0):.2f} "
+              f"score={episode.get('episode/score', 0.0):.3f} "
               + " ".join(f"{k}={v:.3f}" for k, v in sorted(last.items())[:5]),
               flush=True)
 

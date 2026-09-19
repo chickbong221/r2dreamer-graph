@@ -107,9 +107,16 @@ class RunLogger:
         """
         if self._run is None:
             return
-        payload = {f"{stage}/{key}": float(value)
-                   for key, value in metrics.items()
-                   if isinstance(value, (int, float, bool))}
+        payload = {}
+        for key, value in metrics.items():
+            if not isinstance(value, (int, float, bool)):
+                continue
+            # A key that already names its own namespace keeps it. The online
+            # stage emits the original pipeline's ``episode/`` panel, and that
+            # panel is called ``episode/success_once`` there -- prefixing it
+            # again would produce ``online/episode/success_once`` and put it
+            # on a different dashboard panel than the runs it is compared to.
+            payload[key if "/" in key else f"{stage}/{key}"] = float(value)
         if not payload:
             return
         try:
@@ -193,6 +200,10 @@ def start_run(cfg: Dict[str, Any], *,
         for stage, step_key in STEP_METRICS.items():
             run.define_metric(f"{stage}/{step_key}")
             run.define_metric(f"{stage}/*", step_metric=f"{stage}/{step_key}")
+        # The episode/ panel is emitted by the online stage and keeps its own
+        # namespace, so it needs the online x-axis named explicitly.
+        run.define_metric(
+            "episode/*", step_metric=f"online/{STEP_METRICS['online']}")
     except Exception as exc:                               # noqa: BLE001
         print(f"[wandb] define_metric failed ({type(exc).__name__}: {exc}); "
               "charts will use the global step instead", flush=True)

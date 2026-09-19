@@ -128,7 +128,6 @@ python -m sim_vla.training.pipeline \
   --imitation-steps $IMITATION_STEPS \
   --online-steps $ONLINE_STEPS \
   --device cuda \
-  --save-checkpoints \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/pickcube/dreamer
 
 # Stop GPU monitor

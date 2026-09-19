@@ -35,11 +35,11 @@ import torch
 from ..config import check_dataset_compatibility, load_config
 from ..data.batch import to_model_batch
 from ..data.dataset import DemoDataset
-from ..data.normalization import fit_normalizer
+from ..data.normalization import Normalizer, fit_normalizer
 from ..data.sequences import SequenceSampler
 from ..models.model_config import DEFAULT_MODEL, load_model_config
 from ..models.world_model import build_world_model
-from ..runtime.checkpoint import CheckpointMeta, save
+from ..runtime.checkpoint import CheckpointMeta, load, save
 
 
 @dataclass
@@ -231,6 +231,81 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
     return Stage1A(model=model, data=data, sampler=sampler,
                    model_cfg=model_cfg, normalizer=normalizer, meta=meta,
                    coords=coords, losses=last, path=path)
+
+
+def resume(cfg: Dict[str, Any], *, device: str, path: Path,
+           model_yaml: Path | None = None) -> Stage1A:
+    """Rebuild Stage 1A's objects and restore trained weights into them.
+
+    Skipping the stage still means *building* it: the dataset, the sampler and
+    the model have to exist before weights can be read into them, and the later
+    stages take those objects, not the file.
+
+    The normalizer is read from ``normalization.json`` beside the weights
+    rather than refitted. Refitting the same dataset would usually reproduce
+    the same numbers, but "usually" is what ``check_identity`` exists to catch:
+    these weights read standardised observations and emit standardised
+    actions, and statistics that moved would mis-scale every boundary while
+    nothing said so. If the file is absent the fit is redone and the checkpoint
+    check becomes the backstop.
+    """
+    from ..models.action_space import ActionBounds, ActionCoordinates, FieldScaler
+
+    path = Path(path)
+    data, sampler, model, model_cfg = build(
+        cfg, device=device, model_yaml=model_yaml)
+    try:
+        mode = str(cfg["data"].get("normalization") or "mean_std")
+        if mode not in FieldScaler.MODES + ("none",):
+            raise SystemExit(
+                f"data.normalization={mode!r} is not implemented; this "
+                f"pipeline supports {list(FieldScaler.MODES)} or 'none'.")
+
+        normalizer = None
+        if mode != "none":
+            beside = path.with_name("normalization.json")
+            if beside.is_file():
+                normalizer = Normalizer.load(beside)
+                normalizer.mode = mode
+                print(f"[world_model] normalization from {beside}", flush=True)
+            else:
+                print(f"[world_model] no {beside.name} beside the checkpoint; "
+                      "refitting from the dataset, and the checkpoint's "
+                      "normalization_identity has to agree", flush=True)
+                normalizer = fit_normalizer(data)
+                normalizer.mode = mode
+
+        action_dim = int(sampler.batch(1)["action_target"].shape[-1])
+        coords = ActionCoordinates(
+            normalizer,
+            ActionBounds.from_metadata(data.metadata, action_dim),
+            device=device, action_dim=action_dim)
+
+        # Built exactly as run() builds it, because this is what the stored
+        # metadata is compared against. step is the one field that may differ
+        # and is not one of the checked ones.
+        meta = CheckpointMeta(
+            graph_enabled=bool(cfg["model"]["graph"]["enabled"]),
+            stage="world_model",
+            env_id=str(cfg["task"]["env_id"]),
+            feature_dim=int(model.feature_dim),
+            dataset_identity={"dataset": str(cfg["task"]["dataset"]),
+                              "episodes": len(data)},
+            normalization_identity=(normalizer.descriptor()
+                                    if normalizer is not None
+                                    else {"mode": "none"}),
+            config=cfg, step=0,
+        )
+        stored = load(path, meta, {"world_model": model})
+        print(f"[world_model] restored {path} (trained {stored.step} steps, "
+              f"graph_enabled={stored.graph_enabled})", flush=True)
+    except BaseException:
+        data.close()
+        raise
+
+    return Stage1A(model=model, data=data, sampler=sampler,
+                   model_cfg=model_cfg, normalizer=normalizer, meta=meta,
+                   coords=coords, losses={}, path=path)
 
 
 def parse_args(argv=None):
