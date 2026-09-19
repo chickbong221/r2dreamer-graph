@@ -62,7 +62,7 @@ actor:
   # resolves this to an immutable commit hash and prints what to paste here;
   # an empty value means the run is not pinned and resolves at load time.
   pretrained: lerobot/smolvla_base
-  revision: ''
+  revision: "d9f33c94a60fb382c90dea2164c96845bd955e28"
   # Verified by reading lerobot's source at 0.4.4 and 0.6.1 (identical SmolVLA
   # interface). 0.4.4 is the pin here because 0.6.1 needs python >= 3.12 and
   # this project is 3.11; run `python -m sim_vla.doctor` to check a machine.
