@@ -262,10 +262,19 @@ def build_potential(cfg, metadata, *, device=None):
     preflight(cfg, metadata)
     progress = dict(cfg["model"]["progress"])
     graph_meta = dict((metadata or {}).get("graph") or {})
+    # Two numbers in the metadata differ by exactly one, and the scorer wants
+    # the larger. ``vocab_sizes["absolute"]`` is ``len(Vocab)``, which counts
+    # the pad slot at index 0 -- the same number configs/model/_base_.yaml
+    # pins as graph.n_abs and dreamer.py passes to this scorer.
+    # ``absolute_tokens`` is the raw token->id mapping and carries no pad
+    # entry, while graph_vocab._index numbers its tokens from 1. So its
+    # highest id equals its length, and allocating a mask of that length puts
+    # that id one past the end -- which is the ValueError _label_mask raises.
+    sizes = dict(graph_meta.get("vocab_sizes") or {})
     absolute = graph_meta.get("absolute_tokens") or {}
-    n_abs = (len(absolute) if absolute
-             else int(dict(graph_meta.get("vocab_sizes") or {}).get(
-                 "absolute", 0)))
+    n_abs = int(sizes.get("absolute") or 0)
+    if not n_abs and absolute:
+        n_abs = len(absolute) + 1
     if not n_abs:
         raise SystemExit(
             "the dataset records no absolute-token vocabulary; the scorer "
