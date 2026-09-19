@@ -121,8 +121,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # imitation steps than the other two tasks to fit the demonstrations, raise
 # these two rather than --online-steps, which is what stays comparable to the
 # other tasks' step-for-step budgets.
-WORLD_STEPS=500000
-IMITATION_STEPS=200000
+WORLD_STEPS=100000
+IMITATION_STEPS=50000
 ONLINE_STEPS=500000
 
 python -m sim_vla.training.pipeline \
