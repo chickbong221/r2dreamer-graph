@@ -79,7 +79,7 @@ conda activate dreamer
 
 # Proves the ICD is actually visible before the renderer needs it, instead of
 # failing deep inside SAPIEN with a much less legible error.
-# vulkaninfo --summary
+vulkaninfo --summary
 
 # Move to project directory. Run from here, not from sim_vla/: collect.py's
 # default --env-config/--model-config paths (configs/env/maniskill.yaml,
