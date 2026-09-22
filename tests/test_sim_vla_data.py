@@ -389,6 +389,14 @@ def stub_modules(script, size=2):
     return mods, made
 
 
+def _die_in_native_code(*_args):
+    """Stands in for a renderer segfault or an OOM kill: the worker process
+    ends with no Python exception for the pool to hand back."""
+    import os
+
+    os._exit(3)
+
+
 def collector_args(out_dir, **overrides):
     base = dict(
         env_id="PickCube-v1", num_traj=4, max_steps=150, pad=5, num_procs=1,
@@ -518,6 +526,137 @@ class TestCollector(unittest.TestCase):
             self.assertTrue(stats["exhausted"])
             self.assertEqual(stats["attempts"], 4)
             self.assertEqual(stats["kept"], 0)
+
+
+class TestCollectorVisibility(unittest.TestCase):
+    """A slow, rejecting, stuck or crashed worker must be distinguishable.
+
+    Each of these used to look the same from the terminal: nothing after the
+    collector's opening line.
+    """
+
+    def run_collection(self, script, tmp, **overrides):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _shard, stats, _made = TestCollector.run_collection(
+                self, script, tmp, **overrides)
+        return stats, out.getvalue()
+
+    def test_rejected_attempts_are_reported_not_silent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stats, text = self.run_collection(
+                [flags(200, 180)], tmp, num_traj=2, cap=3, log_every=1)
+        self.assertEqual(stats["kept"], 0)
+        for n in (1, 2, 3):
+            self.assertIn(f"attempt {n} (seed {999 + n}): rejected: "
+                          "settles at 181 > 150", text)
+        self.assertIn("WARNING: seed block exhausted", text)
+
+    def test_start_up_stages_are_reported_before_the_first_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _stats, text = self.run_collection([flags(200, 180)], tmp,
+                                               num_traj=1, cap=1)
+        stages = ["building the PickCube-v1 env", "env ready in",
+                  "] ready in", "attempt 1 (seed 1000): rejected"]
+        positions = [text.find(stage) for stage in stages]
+        self.assertNotIn(-1, positions, text)
+        self.assertEqual(positions, sorted(positions), text)
+
+    def test_the_first_attempt_is_reported_whatever_log_every_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _stats, text = self.run_collection(
+                [flags(200, 180)], tmp, num_traj=2, cap=3,
+                log_every=10_000)
+        self.assertIn("attempt 1 (seed 1000): rejected", text)
+        self.assertNotIn("attempt 2 ", text)
+
+    def test_a_solver_error_is_shown_with_the_rejection(self):
+        class Failing:
+            def __init__(self, *a, **k):
+                pass
+
+            def attempt(self, seed):
+                return Namespace(seed=seed, success=False, steps=0,
+                                 error="RuntimeError: planning failed")
+
+        mods, _made = stub_modules([flags(1, None)])
+        mods["scenegraph.figures.rollout"].MotionPlanRunner = Failing
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.dict(sys.modules, mods), \
+                contextlib.redirect_stdout(out):
+            import sim_vla.data.collect as collect
+
+            args = collector_args(tmp, num_traj=1, log_every=1)
+            collect._run_one(args, 0, 1000, 1, 2)
+        self.assertIn("rejected: did not end successful (solver error: "
+                      "RuntimeError: planning failed)", out.getvalue())
+
+    def test_a_dead_worker_is_an_error_not_a_hang(self):
+        import threading
+
+        from sim_vla.data import collect
+
+        box = {}
+
+        def run():
+            try:
+                collect._parallel([(None, 0, 0, 1, 1), (None, 1, 1, 1, 1)], 2,
+                                  worker=_die_in_native_code)
+            except SystemExit as exc:
+                box["exit"] = str(exc)
+            except BaseException as exc:                    # noqa: BLE001
+                box["other"] = repr(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(180)
+        self.assertFalse(thread.is_alive(),
+                         "the collector is still waiting on a dead worker")
+        self.assertIn("worker process died", box.get("exit", ""), box)
+        self.assertIn("--num-procs 1", box["exit"])
+
+    def test_a_stalled_worker_prints_where_it_is_stuck(self):
+        """The watchdog stays quiet while progress is re-arming it, and
+        prints the stack of the function that stopped."""
+        import subprocess
+        import textwrap
+
+        code = textwrap.dedent("""
+            import time
+            from sim_vla.data.collect import arm_stall_dump, disarm_stall_dump
+
+            def making_progress():
+                for _ in range(6):
+                    time.sleep(0.25)
+                    arm_stall_dump(1.0)
+
+            def stuck_in_the_renderer():
+                time.sleep(2.5)
+
+            arm_stall_dump(1.0)
+            making_progress()
+            stuck_in_the_renderer()
+            disarm_stall_dump()
+        """)
+        result = subprocess.run([sys.executable, "-c", code], cwd=str(REPO),
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stuck_in_the_renderer", result.stderr)
+        self.assertNotIn("making_progress", result.stderr)
+
+    def test_stall_dump_is_off_by_default(self):
+        from sim_vla.data.collect import parse_args
+
+        self.assertEqual(parse_args([]).stall_dump, 0.0)
+        self.assertEqual(parse_args(["--stall-dump", "120"]).stall_dump,
+                         120.0)
 
 
 class TestMerge(unittest.TestCase):

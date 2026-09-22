@@ -37,9 +37,12 @@ than leaving it to be rediscovered.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import multiprocessing as mp
 import os
+import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -305,9 +308,70 @@ def make_env(args) -> Tuple[Any, str]:
     return env, str(kwargs["reward_mode"])
 
 
+def enable_fault_reporting() -> None:
+    """Print the Python stack if this process dies in native code.
+
+    A segfault in the renderer or the physics engine otherwise ends a worker
+    with nothing on the terminal at all.
+    """
+    try:
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+    except (AttributeError, ValueError, OSError):
+        pass                        # stderr without a file descriptor
+
+
+def arm_stall_dump(seconds: float) -> None:
+    """(Re)start the stall watchdog, or do nothing when ``seconds`` is 0.
+
+    If it is not re-armed within ``seconds``, every thread's Python stack is
+    written to stderr, and again every ``seconds`` after that. It is re-armed
+    at each start-up milestone and after each attempt, so it fires only for a
+    worker that has stopped making progress -- and then says exactly where.
+    """
+    if not seconds or float(seconds) <= 0:
+        return
+    try:
+        faulthandler.dump_traceback_later(float(seconds), repeat=True,
+                                          file=sys.stderr)
+    except (AttributeError, ValueError, OSError) as exc:
+        print(f"[collect] --stall-dump unavailable here: {exc}", flush=True)
+
+
+def disarm_stall_dump() -> None:
+    faulthandler.cancel_dump_traceback_later()
+
+
+def _log(proc_id: int, message: str) -> None:
+    print(f"[proc {proc_id}] {message}", flush=True)
+
+
 def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
              max_attempts: int) -> Tuple[str, Dict[str, Any]]:
-    """One process: sample seeds forward until ``target`` demos are accepted."""
+    """One process: sample seeds forward until ``target`` demos are accepted.
+
+    It reports each start-up stage before it begins and each attempt's outcome
+    -- rejected ones included -- so a worker that is slow, rejecting everything
+    or stuck can be told apart from the terminal. ``args.stall_dump`` arms a
+    watchdog that prints the worker's stack when it stops making progress; it
+    is disarmed however this returns.
+    """
+    enable_fault_reporting()
+    try:
+        return _collect_block(args, proc_id, start_seed, target, max_attempts)
+    finally:
+        disarm_stall_dump()
+
+
+def _collect_block(args: Namespace, proc_id: int, start_seed: int,
+                   target: int, max_attempts: int
+                   ) -> Tuple[str, Dict[str, Any]]:
+    stall = float(getattr(args, "stall_dump", 0) or 0)
+    started = time.monotonic()
+    _log(proc_id, f"pid {os.getpid()}: building the {args.env_id} env "
+                  f"(sim_backend={args.sim_backend}, shader={args.shader}, "
+                  f"sensors={args.sensor_size})")
+    arm_stall_dump(stall)
+
     from mani_skill.utils import gym_utils
 
     from envs.maniskill import camera_obs_key, rendered_cameras
@@ -320,6 +384,10 @@ def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
     horizon = gym_utils.find_max_episode_steps_value(env)
     cameras = rendered_cameras(env)
     camera_keys = {camera: camera_obs_key(camera) for camera in cameras}
+    _log(proc_id, f"env ready in {time.monotonic() - started:.1f}s "
+                  f"(reward_mode={reward_mode}, cameras={cameras}, "
+                  f"horizon={horizon}); building the graph source and solver")
+    arm_stall_dump(stall)
 
     graphs = FigureGraphSource(
         env,
@@ -355,10 +423,14 @@ def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
     rejected: Dict[str, int] = {}
     rejected_seeds: List[Dict[str, Any]] = []
     seed = int(start_seed)
+    _log(proc_id, f"ready in {time.monotonic() - started:.1f}s; seeds from "
+                  f"{seed}, up to {max_attempts} attempts for {target} demos")
+    arm_stall_dump(stall)
 
     try:
         while kept < target and attempts < max_attempts:
             attempts += 1
+            began = time.monotonic()
             attempt = runner.attempt(seed)
             seed += 1
             successes += int(attempt.success)
@@ -372,6 +444,14 @@ def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
                     "recorded_steps": verdict["recorded_steps"],
                 })
                 buffer.clear()
+                # Reported like a kept one. Rejections used to print nothing,
+                # so a worker rejecting every seed looked exactly like a hung
+                # one until its seed block ran out.
+                _report_attempt(args, proc_id, attempts, attempt,
+                                f"rejected: {reason}",
+                                time.monotonic() - began, kept, target,
+                                successes)
+                arm_stall_dump(stall)
                 continue
 
             # The pad fits in what is left of the budget rather than extending
@@ -430,9 +510,9 @@ def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
             settled_kept.append(int(verdict["settled"]))
             kept += 1
             buffer.clear()
-            if kept == target or attempts % args.log_every == 0:
-                print(f"[proc {proc_id}] {kept}/{target} kept, {attempts} "
-                      f"attempts, {successes} solved, seed at {seed}", flush=True)
+            _report_attempt(args, proc_id, attempts, attempt, "kept",
+                            time.monotonic() - began, kept, target, successes)
+            arm_stall_dump(stall)
     except KeyboardInterrupt:
         print(f"[proc {proc_id}] interrupted at {kept}/{target}", flush=True)
     finally:
@@ -452,6 +532,26 @@ def _run_one(args: Namespace, proc_id: int, start_seed: int, target: int,
         print(f"[proc {proc_id}] WARNING: seed block exhausted at "
               f"{kept}/{target} after {attempts} attempts", flush=True)
     return stats["shard"], stats
+
+
+def _report_attempt(args, proc_id: int, attempts: int, attempt, outcome: str,
+                    seconds: float, kept: int, target: int,
+                    successes: int) -> None:
+    """One line per reported attempt: what happened, how long it took.
+
+    Always the first attempt, so a worker's first line arrives after one
+    episode rather than after ``log_every`` of them; then every ``log_every``
+    attempts, kept or rejected; and the one that completes the target.
+    """
+    every = max(int(getattr(args, "log_every", 25) or 1), 1)
+    if not (attempts == 1 or kept == target or attempts % every == 0):
+        return
+    error = getattr(attempt, "error", None)
+    if error and str(error) not in outcome:
+        outcome += f" (solver error: {str(error)[:200]})"
+    _log(proc_id, f"attempt {attempts} (seed {attempt.seed}): {outcome} -- "
+                  f"{seconds:.1f}s, {getattr(attempt, 'steps', '?')} steps; "
+                  f"{kept}/{target} kept, {successes} solved")
 
 
 def attach_summary(path: Path, summary: Mapping[str, Any]) -> None:
@@ -554,6 +654,13 @@ def collect(args) -> int:
           f"capped at the budget), seed blocks "
           f"{starts[0]}..{starts[-1] + stride - 1}", flush=True)
 
+    print(f"[collect] each worker reports its env build, then its first "
+          f"attempt and every {args.log_every}th after it"
+          + (f"; a worker idle for {args.stall_dump:g}s prints its stack"
+             if getattr(args, "stall_dump", 0) else
+             "; pass --stall-dump SECONDS to print a stuck worker's stack"),
+          flush=True)
+
     jobs = [(args, i, starts[i], targets[i], stride) for i in range(procs)]
     results = ([_run_one(*jobs[0])] if procs == 1
                else _parallel(jobs, procs))
@@ -631,13 +738,34 @@ def collect(args) -> int:
     return 0
 
 
-def _parallel(jobs, procs):
-    pool = mp.Pool(procs)
-    try:
-        return pool.starmap(_run_one, jobs)
-    finally:
-        pool.close()
-        pool.join()
+def _parallel(jobs, procs, worker=None):
+    """Run the per-process jobs, and fail loudly if a worker process dies.
+
+    ``multiprocessing.Pool`` replaced a worker killed by a native crash (the
+    renderer, the physics engine) or by the OOM killer, then waited forever
+    for the task that worker had held -- printing nothing, which is
+    indistinguishable from slow collection. ``ProcessPoolExecutor`` reports
+    the same event as ``BrokenProcessPool``.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    worker = _run_one if worker is None else worker
+    with ProcessPoolExecutor(max_workers=int(procs),
+                             mp_context=mp.get_context("spawn")) as pool:
+        try:
+            return list(pool.map(worker, *zip(*jobs)))
+        except BrokenProcessPool as exc:
+            raise SystemExit(
+                "[collect] a worker process died without a Python error "
+                f"({exc}). That is a crash in native code -- the renderer / "
+                "Vulkan driver or the physics engine -- or the OOM killer; "
+                "the other workers were stopped with it. Look above for a "
+                "'Fatal Python error' stack, check `dmesg` for an OOM kill, "
+                "and rerun with --num-procs 1 to reproduce it in the "
+                "foreground. Shards the workers had started (<name>.<i>.h5) "
+                "are left as they were: delete them before rerunning.") \
+                from exc
 
 
 def parse_args(argv=None):
@@ -693,7 +821,15 @@ def parse_args(argv=None):
     p.add_argument("--whitelist-dir", default=None)
     p.add_argument("--graph-sample", type=int, default=3,
                    help="episodes whose graphs are also written as JSONL")
-    p.add_argument("--log-every", type=int, default=25)
+    p.add_argument("--log-every", type=int, default=25,
+                   help="report every Nth attempt per worker, kept or "
+                        "rejected; the first is always reported")
+    p.add_argument("--stall-dump", type=float, default=0.0,
+                   metavar="SECONDS",
+                   help="print a worker's Python stack whenever it goes this "
+                        "long without finishing a start-up stage or an "
+                        "attempt, and again every SECONDS while it stays "
+                        "stuck. 0 (default) disables it")
     return p.parse_args(argv)
 
 
@@ -737,6 +873,7 @@ def main(argv=None) -> int:
         mp.set_start_method("spawn")
     except RuntimeError:
         pass
+    enable_fault_reporting()
     return collect(resolve_settings(parse_args(argv)))
 
 
