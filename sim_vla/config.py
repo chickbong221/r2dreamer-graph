@@ -19,6 +19,7 @@ the packer ran out of rows.
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -83,6 +84,78 @@ def load_config(task: str, experiment: str,
 
 
 def validate(cfg: Mapping[str, Any]) -> None:
+    online = cfg.get("online") or {}
+    ratio = float(online.get("train_ratio", 64))
+    if not math.isfinite(ratio) or ratio < 0:
+        raise SystemExit("online.train_ratio must be finite and nonnegative")
+    for key in ("imagination_batch", "imagination_microbatch"):
+        if int(online.get(key, 0)) < 0:
+            raise SystemExit(f"online.{key} must be nonnegative")
+    if (online.get("imag_horizon") is not None
+            and int(online["imag_horizon"]) <= 0):
+        raise SystemExit("online.imag_horizon must be positive")
+    if online.get("precision", "bfloat16") not in ("float32", "bfloat16"):
+        raise SystemExit("online.precision must be float32 or bfloat16")
+
+    # The actor objective and everything that only means something under one
+    # of them. Checked here so a bad combination fails in seconds rather than
+    # after Stage 1A and 1B have been restored and a critic warm-up has run.
+    objective = str(online.get("actor_objective", "pathwise"))
+    if objective not in ("pathwise", "flow_reinforce"):
+        raise SystemExit(
+            f"online.actor_objective must be 'pathwise' or 'flow_reinforce', "
+            f"got {objective!r}")
+    noise = online.get("flow_noise_std", 0.0)
+    if objective == "flow_reinforce":
+        if not math.isfinite(float(noise)) or float(noise) <= 0:
+            raise SystemExit(
+                "online.actor_objective=flow_reinforce needs a finite, "
+                f"strictly positive online.flow_noise_std, got {noise!r}. "
+                "A deterministic flow transition has no Gaussian density, so "
+                "there is no log probability to differentiate.")
+        if str(online.get("flow_noise_schedule",
+                          "constant_per_step_scaled_by_sqrt_k")) != \
+                "constant_per_step_scaled_by_sqrt_k":
+            raise SystemExit(
+                "online.flow_noise_schedule must be "
+                "'constant_per_step_scaled_by_sqrt_k'; no other schedule is "
+                "implemented, and silently substituting one would make two "
+                "runs incomparable without saying so.")
+    elif float(noise or 0.0) > 0:
+        raise SystemExit(
+            f"online.flow_noise_std={noise} is set but "
+            f"online.actor_objective={objective!r} never samples stochastically. "
+            "A noise scale that is read and never applied is worse than one "
+            "that is absent; set the objective to flow_reinforce or the scale "
+            "to 0.")
+    for key in ("actor_transition_microbatch", "anchor_rows",
+                "anchor_microbatch", "anchor_retries", "anchor_windows",
+                "anchor_window_microbatch", "grad_report_every",
+                "critic_warmup"):
+        if int(online.get(key, 1)) < 0:
+            raise SystemExit(f"online.{key} must be nonnegative")
+    anchor = float(online.get("demo_anchor", 0.0) or 0.0)
+    if not math.isfinite(anchor) or anchor < 0:
+        raise SystemExit("online.demo_anchor must be finite and nonnegative")
+    if anchor and int(online.get("anchor_rows", 64)) <= 0:
+        raise SystemExit(
+            "online.demo_anchor is nonzero but online.anchor_rows is not "
+            "positive, so the anchor would have no rows to score")
+    if anchor and int(online.get("anchor_windows", 8)) <= 0:
+        raise SystemExit(
+            "online.demo_anchor is nonzero but online.anchor_windows is not "
+            "positive, so no demonstration window would be drawn to take "
+            "rows from")
+    if online.get("actor_lr") is not None and float(online["actor_lr"]) <= 0:
+        raise SystemExit("online.actor_lr must be positive when set")
+    if str(online.get("advantage_scale", "return_ema")) != "return_ema":
+        raise SystemExit(
+            "online.advantage_scale must be 'return_ema'; it names what the "
+            "run does rather than selecting between implementations")
+    if str(online.get("eval_sampler", "stochastic")) not in (
+            "stochastic", "deterministic"):
+        raise SystemExit(
+            "online.eval_sampler must be 'stochastic' or 'deterministic'")
     actor = cfg.get("actor") or {}
     revision = actor.get("revision", "")
     # A commit hash of only decimal digits is a valid hash and an integer in

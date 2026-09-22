@@ -17,11 +17,20 @@ That prior runs inside ``img_step``: with the branch on it returns
 therefore unpacks four values and advances nothing itself, matching
 ``dreamer.py:_imagine``.
 
-Gradients are kept throughout. The actor update differentiates the imagined
-return with respect to the actions that produced it, so every transition, the
-reward head and the flow sampler stay in the graph; the world model's
-*parameters* are frozen for that update, which is not the same thing as
-detaching its outputs.
+There are two rollout functions here, one per actor objective.
+
+:func:`imagine` keeps gradients throughout. The ``pathwise`` actor update
+differentiates the imagined return with respect to the actions that produced
+it, so every transition, the reward head and the flow sampler stay in the
+graph; the world model's *parameters* are frozen for that update, which is not
+the same thing as detaching its outputs.
+
+:func:`imagine_flow_reinforce` keeps none. The ``flow_reinforce`` objective
+never differentiates through the rollout at all -- its gradient comes from
+recomputing individual flow transitions against fixed recorded samples -- so
+the rollout is collected as data and every tensor in it is detached. That is
+the whole memory difference between the two: ``horizon * flow_steps``
+transformer passes held live, versus none.
 """
 
 from __future__ import annotations
@@ -172,6 +181,117 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
         # Probing the stack with autograd.grad returns None and says nothing.
         "action_steps": actions,
     }
+
+
+def imagine_flow_reinforce(world_model, actor, start, horizon: int, *,
+                           flow_steps: int, sigmas: torch.Tensor,
+                           instruction: Optional[Any] = None, coords=None,
+                           generator=None, store_device=None,
+                           record_means: bool = False) -> Dict[str, Any]:
+    """An imagined rollout recorded as data, with no autograd graph at all.
+
+    This is the collection half of the ``flow_reinforce`` objective and the
+    reason that objective is cheaper than the pathwise one. :func:`imagine`
+    keeps the whole sequential expert chain alive so the return's gradient can
+    be pushed back through it; here nothing is retained. The rollout is
+    generated once under ``no_grad``, every tensor is stored detached, and the
+    actor's gradient comes later from recomputing individual transition means
+    against these fixed samples.
+
+    Two consequences worth stating plainly. The flow states are recorded
+    *before* ``coords.executed`` and ``coords.to_dynamics``: clipping and the
+    coordinate change are deterministic downstream mappings, not Gaussian
+    draws, and scoring them as if they were would attribute the policy a
+    density it does not have. And the prefix cache is dropped at the end of
+    every environment step -- it is the largest thing in the loop and nothing
+    later needs it, because scoring rebuilds the prefix *with* gradients.
+
+    ``record_means`` keeps the collection-time transition means so a later
+    scoring pass can be checked against them. It doubles the record, so it is
+    off unless a consistency check is being run.
+    """
+    from ..models.flow_sampler import sample_flow_path
+
+    graph_enabled = bool(world_model.graph_enabled)
+    if graph_enabled:
+        stoch, deter, sem = start
+    else:
+        stoch, deter = start
+        sem = None
+
+    flow_steps = int(flow_steps)
+    if tuple(sigmas.shape) != (flow_steps,):
+        raise ValueError(
+            f"expected one sigma per flow transition ({flow_steps},), got "
+            f"{tuple(sigmas.shape)}")
+
+    batch = stoch.shape[0]
+    keep = (lambda tensor: tensor.detach().to(store_device).float()
+            if store_device is not None else tensor.detach().float())
+
+    feats: List[torch.Tensor] = []
+    flow_states: List[torch.Tensor] = []
+    flow_means: List[torch.Tensor] = []
+    executed_actions: List[torch.Tensor] = []
+    times: Optional[torch.Tensor] = None
+
+    with torch.no_grad():
+        for _ in range(int(horizon)):
+            feat = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
+                    else world_model.rssm.get_feat(stoch, deter))
+            cond = actor.condition(feat, instruction)
+            path = sample_flow_path(
+                actor.velocity_fn(), cond, batch=batch,
+                chunk=actor.chunk_size, dim=actor.action_dim,
+                steps=flow_steps, sigmas=sigmas,
+                # The actor's device, as in imagine(): condition() moves the
+                # feature to where the pretrained weights live.
+                device=getattr(actor, "device", feat.device),
+                dtype=torch.float32, generator=generator)
+            times = path["times"].detach()
+            flow_states.append(keep(path["states"]))
+            if record_means:
+                flow_means.append(keep(path["means"]))
+            action = path["chunk"][:, 0].to(feat.device)
+            executed = coords.executed(action) if coords is not None else action
+            feats.append(keep(feat))
+            executed_actions.append(keep(executed))
+            stepped = (coords.to_dynamics(executed) if coords is not None
+                       else executed)
+            result = world_model.rssm.img_step(stoch, deter, stepped, sem)
+            if graph_enabled:
+                stoch, deter, sem, _sem_logit = result
+            else:
+                stoch, deter = result
+            # The prefix cache is the biggest object in this loop and scoring
+            # rebuilds its own, with gradients. Holding this one would keep a
+            # no-grad cache per imagined step for no purpose.
+            del cond, path
+
+        final = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
+                 else world_model.rssm.get_feat(stoch, deter))
+        feats.append(keep(final))
+
+    record = {
+        "features": torch.stack(feats, 0),                    # (H+1, B, F)
+        "flow_states": torch.stack(flow_states, 0),           # (H, B, K+1, C, D)
+        "executed_actions": torch.stack(executed_actions, 0),  # (H, B, D)
+        "flow_times": times,                                  # (K,)
+        "flow_sigmas": sigmas.detach().float(),               # (K,)
+        "instruction": instruction,
+        "horizon": int(horizon),
+        "batch": int(batch),
+        "flow_steps": flow_steps,
+    }
+    if record_means:
+        record["flow_means"] = torch.stack(flow_means, 0)
+    for name in ("features", "flow_states", "executed_actions"):
+        if record[name].grad_fn is not None:
+            raise RuntimeError(
+                f"the imagined record's {name!r} carries a graph; collection "
+                "must run entirely under no_grad or the memory this objective "
+                "saves is spent anyway")
+    return record
 
 
 def gradient_chain(objective: torch.Tensor, rollout: Dict[str, Any],

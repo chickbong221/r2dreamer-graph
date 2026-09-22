@@ -26,7 +26,6 @@
 
 set -u
 FIRST="${1:-1}"
-LAST="${2:-9}"
 DEMOS="${SIM_VLA_DEMOS:-data/sim_vla_demos}"
 PY="${PYTHON:-python}"
 
@@ -45,7 +44,14 @@ STAGES=(
   "9|progress shaping and its graph dependency|$STAGE sim_vla.tests.test_progress"
   "10|imagined timeline, bootstrap gradient, gradient policy|$STAGE sim_vla.tests.test_timeline"
   "11|recurrent inference and one turn of the online loop|$STAGE sim_vla.tests.test_inference"
+  "12|stochastic flow sampler, score-function actor, demo anchor|$STAGE sim_vla.tests.test_flow_reinforce"
 )
+
+# Defaulted from the list rather than written down: LAST was pinned at 9 while
+# the list grew to 11, so `run_tests.sh` with no arguments silently skipped the
+# last stages while still printing how many passed. A suite that reports green
+# for tests it did not run is the failure this file's header warns about.
+LAST="${2:-${#STAGES[@]}}"
 
 passed=0
 incomplete=()

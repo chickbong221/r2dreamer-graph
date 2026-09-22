@@ -122,7 +122,11 @@ def make_dropping_unknown(make, kwargs: Dict[str, Any], limit: int = 8):
 
 
 def make_mshab_env(section: Dict[str, Any], *, num_envs: int,
-                   max_episode_steps: int, sensor_size: Tuple[int, int]):
+                   max_episode_steps: int, sensor_size: Tuple[int, int],
+                   render_mode: str = "all", shader_dir: str = "minimal",
+                   sensor_shader: str = "",
+                   human_render_size: Optional[Tuple[int, int]] = None,
+                   human_render_shader: str = ""):
     """The wrapper stack the released policies were trained under.
 
     Copied in shape from ``collect_robot_success_states._build_env``, which
@@ -131,6 +135,13 @@ def make_mshab_env(section: Dict[str, Any], *, num_envs: int,
     the config's own ``env_kwargs`` are passed through, because
     ``robot_force_mult`` and ``robot_force_penalty_min`` are terms in the
     reward this tool exists to report.
+
+    The five camera arguments all default to what this tool has always asked
+    for, so the reward runs already recorded under ``data/reward_demos`` are
+    reproduced by the same call. They exist for ``render_mshab_paper_frames``,
+    which replays a recorded episode through this same wrapper stack with the
+    cameras turned up to figure resolution: the stack is what must not drift
+    between the two, and the cameras are the only thing that may.
     """
     import gymnasium as gym
     from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
@@ -151,6 +162,11 @@ def make_mshab_env(section: Dict[str, Any], *, num_envs: int,
     # Cycle the plans when there are fewer than envs, as the collector does.
     task_plans = [plans[i % len(plans)] for i in range(max(1, num_envs))]
 
+    sensor_configs: Dict[str, Any] = dict(width=int(sensor_size[1]),
+                                          height=int(sensor_size[0]))
+    if sensor_shader:
+        sensor_configs["shader_pack"] = sensor_shader
+
     kwargs: Dict[str, Any] = dict(
         id=str(section["env_id"]),
         num_envs=max(1, int(num_envs)),
@@ -159,8 +175,7 @@ def make_mshab_env(section: Dict[str, Any], *, num_envs: int,
         robot_uids="fetch",
         control_mode="pd_joint_delta_pos",
         reward_mode="normalized_dense",
-        render_mode="all",
-        shader_dir="minimal",
+        render_mode=str(render_mode),
         max_episode_steps=int(max_episode_steps),
         task_plans=task_plans,
         scene_builder_cls=plan_data.dataset,
@@ -168,10 +183,21 @@ def make_mshab_env(section: Dict[str, Any], *, num_envs: int,
         require_build_configs_repeated_equally_across_envs=False,
         add_event_tracker_info=True,
         continuous_task=bool(section.get("continuous_task", True)),
-        sensor_configs=dict(width=int(sensor_size[1]),
-                            height=int(sensor_size[0])),
+        sensor_configs=sensor_configs,
         **dict(section.get("env_kwargs") or {}),
     )
+    # ``shader_dir`` is the whole-env shader and overrides every camera, which
+    # is why a caller that sizes the human camera separately passes "" and
+    # names a ``shader_pack`` per camera instead.
+    if shader_dir:
+        kwargs["shader_dir"] = shader_dir
+    if human_render_size is not None:
+        human_configs: Dict[str, Any] = dict(
+            width=int(human_render_size[1]), height=int(human_render_size[0])
+        )
+        if human_render_shader:
+            human_configs["shader_pack"] = human_render_shader
+        kwargs["human_render_camera_configs"] = human_configs
     env = make_dropping_unknown(gym.make, kwargs)
     env = FetchDepthObservationWrapper(
         env,

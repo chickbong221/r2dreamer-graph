@@ -303,6 +303,12 @@ class TestOnlineLoop(unittest.TestCase):
     """Collection, replay mixing, a world-model step, and an actor step."""
 
     def test_one_turn_of_the_loop(self):
+        self._one_turn("float32")
+
+    def test_one_turn_with_bfloat16_and_microbatches(self):
+        self._one_turn("bfloat16")
+
+    def _one_turn(self, precision):
         torch = require_torch()
         from sim_vla.data.replay import OnlineReplay
         from sim_vla.models.critics import ValueCritic
@@ -318,11 +324,12 @@ class TestOnlineLoop(unittest.TestCase):
         cfg = {"task": {"instruction": "do the thing"}, "actor": {"execute": 1},
                "eval": {"seeds_start": 900000}}
         config = OnlineConfig(total_steps=8, episodes_per_collect=2,
-                              updates_per_collect=2, batch_size=4,
+                              train_ratio=4, batch_size=4, precision=precision,
                               sequence_length=4, burn_in=1,
                               imagination_batch=8, max_episode_steps=4,
                               demo_fraction=0.5, seed=7)
-        ac = ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0)
+        ac = ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0,
+                              imagination_microbatch=3, precision=precision)
 
         before = [p.detach().clone() for p in model.parameters()]
         seen: list[dict] = []
@@ -332,11 +339,12 @@ class TestOnlineLoop(unittest.TestCase):
                              on_metrics=seen.append)
 
         self.assertGreaterEqual(trainer.env_steps, 8)
-        self.assertGreaterEqual(trainer.updates, 2)
+        self.assertEqual(trainer.updates, 2)
         self.assertGreater(len(trainer.replay), 0, "nothing was collected")
         self.assertTrue(seen, "no metrics were reported")
 
         last = seen[-1]
+        self.assertEqual(last["train_ratio_actual"], 4.0)
         self.assertIn("world_loss", last)
         self.assertIn("actor_grad_norm", last)
         self.assertGreater(last["actor_grad_norm"], 0.0,

@@ -33,6 +33,7 @@ from typing import Any, Dict, Optional
 from ..config import load_config
 from ..models.model_config import DEFAULT_MODEL
 from . import pretrain_world_model
+from .pretrain_world_model import seed_everything
 from . import progress as progress_module
 from . import train_imitation
 from .actor_critic import ActorCriticConfig
@@ -46,6 +47,63 @@ def stage_paths(root: Path) -> Dict[str, Path]:
     return {"world_model": root / "world_model.pt",
             "imitation": root / "imitation.pt",
             "online": root}
+
+
+def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
+                   save_checkpoints=False):
+    """Resolve shared Dreamer settings and the VLA-specific memory controls."""
+    online_settings = cfg.get("online", {})
+    online_cfg = OnlineConfig(
+        total_steps=int(total_steps),
+        train_ratio=float(online_settings.get("train_ratio", 64)),
+        precision=str(online_settings.get("precision", "bfloat16")),
+        imagination_batch=int(online_settings.get("imagination_batch", 256)),
+        batch_size=int(cfg["data"]["batch_size"]),
+        sequence_length=int(cfg["data"]["sequence_length"]),
+        burn_in=int(cfg["data"]["burn_in"]),
+        max_episode_steps=int(cfg["eval"]["max_steps"]),
+        # One seed for the run: collection used to default to zero on its
+        # own while the sampler took the configured one.
+        seed=int(cfg["data"]["seed"]),
+        ignore_terminations=bool(cfg["data"]["ignore_terminations"]),
+        save_checkpoints=bool(save_checkpoints),
+        eval_episodes=int(cfg["eval"]["episodes"]))
+    ac_kwargs = dict(
+        horizon=int(online_settings.get("imag_horizon")
+                    or model_cfg.imag_horizon),
+        discount=1.0 - 1.0 / float(model_cfg.horizon),
+        lam=float(model_cfg.lamb),
+        imagination_microbatch=int(
+            online_settings.get("imagination_microbatch", 16)),
+        precision=online_cfg.precision,
+        flow_steps=int(flow_steps),
+        # The actor objective and its dependants. Defaulted to the original
+        # behaviour, so a config written before this existed resolves to
+        # exactly what it resolved to then.
+        actor_objective=str(online_settings.get("actor_objective", "pathwise")),
+        flow_noise_std=float(online_settings.get("flow_noise_std", 0.0) or 0.0),
+        flow_noise_schedule=str(online_settings.get(
+            "flow_noise_schedule", "constant_per_step_scaled_by_sqrt_k")),
+        actor_transition_microbatch=int(
+            online_settings.get("actor_transition_microbatch", 16)),
+        critic_warmup=int(online_settings.get("critic_warmup", 150)),
+        demo_anchor=float(online_settings.get("demo_anchor", 0.0) or 0.0),
+        anchor_windows=int(online_settings.get("anchor_windows", 8)),
+        anchor_window_microbatch=int(
+            online_settings.get("anchor_window_microbatch", 4)),
+        anchor_rows=int(online_settings.get("anchor_rows", 64)),
+        anchor_microbatch=int(online_settings.get("anchor_microbatch", 16)),
+        anchor_retries=int(online_settings.get("anchor_retries", 4)),
+        grad_report_every=int(online_settings.get("grad_report_every", 50)),
+        profile=bool(online_settings.get("profile", False)),
+        # Starts at zero and is set per update from the warm-up; the
+        # configured beta is the value it warms up *to*.
+        progress_beta=0.0)
+    if online_settings.get("actor_lr") is not None:
+        ac_kwargs["actor_lr"] = float(online_settings["actor_lr"])
+    ac_cfg = ActorCriticConfig(**ac_kwargs)
+
+    return online_cfg, ac_cfg
 
 
 def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
@@ -213,26 +271,49 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             seed=int(cfg["data"]["seed"]),
             record_graphs=bool(cfg["diagnostics"]["record_graphs"])).build()
 
-        online_cfg = OnlineConfig(
-            total_steps=int(online_steps),
-            batch_size=int(cfg["data"]["batch_size"]),
-            sequence_length=int(cfg["data"]["sequence_length"]),
-            burn_in=int(cfg["data"]["burn_in"]),
-            max_episode_steps=int(cfg["eval"]["max_steps"]),
-            # One seed for the run: collection used to default to zero on its
-            # own while the sampler took the configured one.
-            seed=int(cfg["data"]["seed"]),
-            ignore_terminations=bool(cfg["data"]["ignore_terminations"]),
-            save_checkpoints=bool(save_checkpoints),
-            eval_episodes=int(cfg["eval"]["episodes"]))
-        ac_cfg = ActorCriticConfig(
-            flow_steps=int(stage_b.actor.flow_steps),
-            # Starts at zero and is set per update from the warm-up; the
-            # configured beta is the value it warms up *to*.
-            progress_beta=0.0)
+        online_cfg, ac_cfg = online_configs(
+            cfg, stage_a.model_cfg, total_steps=online_steps,
+            flow_steps=stage_b.actor.flow_steps, save_checkpoints=save_checkpoints)
 
         print(f"[pipeline] stage 2: online, {online_steps} env steps",
               flush=True)
+        settings = {
+            "replay_batch": online_cfg.batch_size,
+            "sequence_length": online_cfg.sequence_length,
+            "train_ratio": online_cfg.train_ratio,
+            "precision": online_cfg.precision,
+            "imagination_batch": online_cfg.imagination_batch,
+            "imagination_microbatch": ac_cfg.imagination_microbatch,
+            "imag_horizon": ac_cfg.horizon,
+            "discount": ac_cfg.discount,
+            "lambda": ac_cfg.lam,
+            "flow_steps": ac_cfg.flow_steps,
+            # The actor objective and everything that only means something
+            # under it. Logged resolved rather than as written, because these
+            # are what the run actually used and what a later comparison has
+            # to match on.
+            "actor_objective": ac_cfg.actor_objective,
+            "actor_lr": ac_cfg.actor_lr,
+            "flow_noise_std": ac_cfg.flow_noise_std,
+            "flow_noise_schedule": ac_cfg.flow_noise_schedule,
+            "actor_transition_microbatch": ac_cfg.actor_transition_microbatch,
+            "demo_anchor": ac_cfg.demo_anchor,
+            "anchor_windows": ac_cfg.anchor_windows,
+            "anchor_window_microbatch": ac_cfg.anchor_window_microbatch,
+            "anchor_rows": ac_cfg.anchor_rows,
+            "anchor_microbatch": ac_cfg.anchor_microbatch,
+            "critic_warmup": ac_cfg.critic_warmup,
+            "grad_report_every": ac_cfg.grad_report_every,
+            "seed": int(cfg["data"]["seed"]),
+            "profile": ac_cfg.profile,
+            "advantage_scale": str(
+                (cfg.get("online") or {}).get("advantage_scale", "return_ema")),
+            "eval_sampler": str(
+                (cfg.get("online") or {}).get("eval_sampler", "stochastic")),
+        }
+        print(f"[pipeline] online settings: {json.dumps(settings)}", flush=True)
+        report["online_settings"] = settings
+        logger.summary({f"online_{key}": value for key, value in settings.items()})
         try:
             trainer = run_online(
                 cfg, stage_a.model, stage_b.actor, critic, stage_a.sampler,
@@ -269,6 +350,67 @@ def parse_args(argv=None):
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--sequence-length", type=int, default=None)
     parser.add_argument("--burn-in", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None,
+                        help="one seed for the whole run: model, adapter and "
+                             "critic initialisation, the demonstration "
+                             "sampler, the online replay, environment "
+                             "collection, the flow sampler and the anchor's "
+                             "row selection. Overrides data.seed.")
+    parser.add_argument("--train-ratio", type=float, default=None,
+                        help="online replay timesteps per environment step; "
+                             "0 uses the legacy 8 updates per collection")
+    parser.add_argument("--online-precision", choices=("float32", "bfloat16"),
+                        default=None)
+    parser.add_argument("--imagination-batch", type=int, default=None,
+                        help="total start states per update; 0 uses all valid starts")
+    parser.add_argument("--imagination-microbatch", type=int, default=None,
+                        help="starts processed at once with gradient accumulation; "
+                             "0 processes the whole imagination batch at once")
+    parser.add_argument("--imag-horizon", type=int, default=None,
+                        help="imagined transitions; defaults to Dreamer's model config")
+    parser.add_argument("--actor-objective",
+                        choices=("pathwise", "flow_reinforce"), default=None,
+                        help="how the actor's gradient is formed: differentiate "
+                             "the imagined return through the sampler "
+                             "(pathwise, the default), or differentiate "
+                             "log pi of a recorded stochastic flow path "
+                             "against a detached advantage (flow_reinforce)")
+    parser.add_argument("--flow-noise-std", type=float, default=None,
+                        help="injected Gaussian noise per flow transition; "
+                             "required and positive for flow_reinforce")
+    parser.add_argument("--actor-transition-microbatch", type=int, default=None,
+                        help="scored flow transitions per backward pass; "
+                             "bounds flow_reinforce's actor memory")
+    parser.add_argument("--demo-anchor", type=float, default=None,
+                        help="weight on the demonstration flow-matching loss "
+                             "summed into the actor update; 0 disables it")
+    parser.add_argument("--anchor-rows", type=int, default=None,
+                        help="demonstration rows drawn per anchored update")
+    parser.add_argument("--anchor-microbatch", type=int, default=None,
+                        help="anchor rows conditioned at once")
+    parser.add_argument("--anchor-windows", type=int, default=None,
+                        help="demonstration windows drawn and encoded per "
+                             "anchored update; separate from --anchor-rows, "
+                             "which caps the eligible positions kept")
+    parser.add_argument("--anchor-window-microbatch", type=int, default=None,
+                        help="windows encoded at once; bounds the anchor's "
+                             "world-model memory")
+    parser.add_argument("--critic-warmup", type=int, default=None,
+                        help="actor-critic updates before the actor steps; "
+                             "the actor has no signal through a fresh value "
+                             "head, so this is a requirement not a margin")
+    parser.add_argument("--grad-report-every", type=int, default=None,
+                        help="updates between separate RL/anchor gradient "
+                             "measurements; 0 disables them")
+    parser.add_argument("--profile-online", action="store_true",
+                        help="measure per-phase wall time and CUDA peak "
+                             "memory for each actor update")
+    parser.add_argument("--actor-lr", type=float, default=None,
+                        help="actor learning rate; a score-function estimator "
+                             "does not inherit the pathwise one's tuning")
+    parser.add_argument("--eval-sampler",
+                        choices=("stochastic", "deterministic"), default=None,
+                        help="which sampler the reported evaluation uses")
     parser.add_argument("--out", default="")
     parser.add_argument(
         "--resume-from", default="",
@@ -292,19 +434,52 @@ def main(argv=None) -> int:
     overrides = {}
     for key, value in (("batch_size", args.batch_size),
                        ("sequence_length", args.sequence_length),
-                       ("burn_in", args.burn_in)):
+                       ("burn_in", args.burn_in),
+                       ("seed", args.seed)):
         if value is not None:
             overrides[key] = value
+    online_overrides = {}
+    for key, value in (("train_ratio", args.train_ratio),
+                       ("precision", args.online_precision),
+                       ("imagination_batch", args.imagination_batch),
+                       ("imagination_microbatch", args.imagination_microbatch),
+                       ("imag_horizon", args.imag_horizon),
+                       ("actor_objective", args.actor_objective),
+                       ("flow_noise_std", args.flow_noise_std),
+                       ("actor_transition_microbatch",
+                        args.actor_transition_microbatch),
+                       ("demo_anchor", args.demo_anchor),
+                       ("anchor_rows", args.anchor_rows),
+                       ("anchor_microbatch", args.anchor_microbatch),
+                       ("anchor_windows", args.anchor_windows),
+                       ("anchor_window_microbatch",
+                        args.anchor_window_microbatch),
+                       ("critic_warmup", args.critic_warmup),
+                       ("grad_report_every", args.grad_report_every),
+                       ("profile", True if args.profile_online else None),
+                       ("actor_lr", args.actor_lr),
+                       ("eval_sampler", args.eval_sampler)):
+        if value is not None:
+            online_overrides[key] = value
     cfg = load_config(args.task, args.experiment,
-                      overrides={"data": overrides} if overrides else None)
+                      overrides={"data": overrides, "online": online_overrides})
     model_yaml = Path(args.model_config)
     if not model_yaml.is_file():
         raise SystemExit(f"model config does not exist: {model_yaml}")
     cfg.setdefault("runtime", {})["model_config"] = str(model_yaml)
 
+    # Seeded here, before anything is constructed. build() seeds again on its
+    # own, but that is Stage 1A's call: the critic and the adapter are built
+    # afterwards, and on the --resume-from path Stage 1A is skipped entirely.
+    # Doing it once at the top covers fresh initialisation and restoration
+    # alike, and makes the ordering a property of this function rather than of
+    # which stages happen to run.
+    seed = int(cfg["data"]["seed"])
+    seed_everything(seed)
+
     root = Path(args.out or f"runs/sim_vla/{args.task}/{args.experiment}")
-    print(f"[pipeline] {args.task} / {args.experiment} on {args.device}",
-          flush=True)
+    print(f"[pipeline] {args.task} / {args.experiment} on {args.device} "
+          f"seed {seed}", flush=True)
     print("[pipeline] checkpoints: "
           + (f"on -> {root}" if args.save_checkpoints
              else "off (stages pass their models in memory)"), flush=True)
@@ -330,6 +505,7 @@ def main(argv=None) -> int:
         "imitation_steps": int(args.imitation_steps),
         "online_steps": int(args.online_steps),
         "device": str(args.device),
+        "seed": int(cfg["data"]["seed"]),
         "model_config": str(model_yaml),
         "save_checkpoints": bool(args.save_checkpoints)})
     try:

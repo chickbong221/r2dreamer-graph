@@ -82,10 +82,49 @@ Frozen means `requires_grad=False`, never `detach()`: gradients flow *through*
 the frozen transformer into the adapter, which is the only reason conditioning
 it works.
 
-The online actor update differentiates the imagined return with respect to the
-sampled action. It is **not** `log pi(a) * advantage` — a flow policy has no
-tractable log-probability, and the flow-matching loss is a regression, not one.
-Both arms use the same objective.
+There are two online actor objectives, selected by `online.actor_objective`.
+Both arms always use the same one — it is the estimator, not the state.
+
+| | `pathwise` (default) | `flow_reinforce` |
+| --- | --- | --- |
+| gradient | differentiate the imagined return through the sampler | `advantage * d/dtheta log pi` of a recorded flow path |
+| sampler | deterministic Euler | Euler + fixed Gaussian noise per transition |
+| rollout graph | the whole chain is retained | none; collected under `no_grad` |
+| actor memory bounded by | `imagination_microbatch` | `actor_transition_microbatch` |
+| imitation anchor | unavailable | `demo_anchor`, a real flow-matching gradient |
+
+`flow_reinforce` is **not PPO**: no importance ratio, no clipping, no
+old-policy copy, no repeated epochs over one imagined batch. Exactly one actor
+optimizer step per freshly collected batch, so the parameters that drew the
+samples are the parameters that score them.
+
+The deterministic sampler still has no tractable log-probability, and the
+flow-matching loss is still a regression, not one. `flow_reinforce` does not
+pretend otherwise — it samples a genuinely different, stochastic policy whose
+per-transition Gaussian density is exact, and scores that. The injected noise
+changes the policy before any training happens, so the starting policy's task
+success is a validation gate rather than an assumption.
+
+**Neither objective has a learning signal through identically zero reward and
+value heads**, and both start that way. The heads' output layers initialise to
+zero, so their output does not depend on the feature and neither does its
+gradient. `flow_reinforce` then multiplies `log pi` by a zero advantage;
+`pathwise` differentiates a return that is constant in the action. Measured on
+a fresh toy model, both give an actor gradient norm of exactly 0.0.
+
+(An earlier version of this file claimed `pathwise` was immune to this. It is
+not. Inside `update()` the two differ only in that `pathwise` re-imagines
+*after* the critic step and so picks up a ~1e-5 trace from it, while
+`flow_reinforce` computed its advantage before that step and stays exactly
+zero for one more update. Neither is a usable signal; `critic_warmup` is
+load-bearing for both.)
+
+Which is why `advantage_abs`, `advantage_std`, `rl_grad_norm`,
+`anchor_grad_norm` and `anchor_grad_ratio` are logged. A zero actor gradient
+during warm-up is expected; a zero one *after* warm-up is a broken run, and
+the loss value alone cannot tell them apart. Note also that asserting
+`p.grad is not None` does not demonstrate a live gradient — both objectives
+populate `.grad` with zeros in that state.
 
 ## The adapter
 
@@ -210,6 +249,125 @@ and then drops it, which it says on startup:
 python -m sim_vla.training.pretrain_world_model --task pickcube --experiment graph --steps 50000 --save-checkpoints
 ```
 
+### Online training and the original Dreamer loop
+
+The original `dreamer.py` imagines with frozen modules, detaches the rollout,
+and trains a distribution actor with `log_prob(action) * advantage` and an
+entropy bonus. SmolVLA's *deterministic* flow sampler does not expose that
+action likelihood, which is why `pathwise` differentiates the imagined return
+through the sampler and world-model transitions instead; detaching that
+rollout would remove its learning signal.
+
+`flow_reinforce` recovers the original shape by changing the policy rather
+than the loss. Adding fixed Gaussian noise to every Euler transition makes
+each one a Gaussian with an exact log density, so the rollout *can* be
+detached and the actor trained with a detached advantage times a trainable log
+probability — the Dreamer form, on the denoising path rather than on a single
+action distribution. The advantage is normalized once by the same
+`networks.ReturnEMA` spread (floored at 1) that `dreamer.py` uses.
+
+Entropy regularization stays at zero and is not a placeholder. With a fixed
+sigma, the Gaussian transition entropy does not depend on the velocity mean,
+so an entropy bonus here would have exactly zero gradient, and a sampled
+negative log probability is not Dreamer's action entropy either. Learnable
+exploration noise is a separate experiment.
+
+The demo mixture, critic warm-up, separate AdamW optimizers, and VLA
+progress-shaping design are retained under both objectives. Progress shaping
+is unchanged: potential-based shaping is advantage-estimator-agnostic, and
+this change does not switch to the original Dreamer's separate progress
+critic.
+
+The online pipeline now follows the original ManiSkill Dreamer's **64 replay
+timesteps per environment step** and uses **bfloat16 autocast**. Horizon,
+discount (`1 - 1 / horizon`), and lambda come from the original model config;
+the default imagined horizon is 15. Collection still happens two episodes at
+a time. Fractional update budgets carry across collections: with batch 16 and
+length 64, 300 environment steps earn 18.75 updates, instead of the old fixed
+eight. The ratio includes demonstration rows and burn-in rows. This increases
+training work per environment step; it is not a throughput optimization.
+
+Replay batch size stays 16. The pipeline selects up to 256 valid imagination
+starts and processes them in **microbatches of 16**. Each rollout is consumed
+by backward before the next is built, with gradients weighted by group size
+and accumulated before one optimizer step. A shorter final group is weighted
+correctly. This keeps the same mean actor objective and total start count;
+random draws and numerical results need not match a single large batch.
+
+Both `runs/sim_vla/server1/*_online.sh` scripts restore their own
+`world_model.pt` and `imitation.pt`, then start a fresh online phase. They do
+not restore an interrupted online replay, critic, optimizer, or step counter.
+Deploy the updated Python files with these scripts. Their relevant flags are:
+
+```bash
+--batch-size 16 --imagination-batch 256 --imagination-microbatch 16 \
+--imag-horizon 15 --train-ratio 64 --online-precision bfloat16
+```
+
+If memory is still tight, lower `--imagination-microbatch` to 8 or 4 while
+keeping replay batch and total imagination starts unchanged. The YAML settings
+are under `online`. `--train-ratio 0` selects the old fixed eight updates per
+collection, `--online-precision float32` disables autocast, and
+`--imagination-microbatch 0` processes all starts together. Startup logs and
+the run summary record the resolved online settings.
+
+### Running `flow_reinforce`
+
+`runs/sim_vla/server1/*_online_flow_reinforce.sh` resume the same Stage 1
+checkpoints into a separate output directory. Their flags:
+
+```bash
+--actor-objective flow_reinforce --flow-noise-std 0.03 \
+--actor-transition-microbatch 16 --demo-anchor 1.0 \
+--anchor-rows 64 --anchor-microbatch 16 --actor-lr 1e-5 \
+--eval-sampler stochastic
+```
+
+**None of those four values is validated.** Noise scale, actor learning rate
+and anchor weight all need the pilot in
+`docs/SMOLVLA_DREAMER_POLICY_GRADIENT_PLAN.md` §11 first: evaluate the restored
+Stage 1B policy under the deterministic sampler and under noise scales 0.01 /
+0.03 / 0.1 on matched seeds before committing to a long run. A descending
+actor loss is not evidence — a score-function loss's magnitude depends on the
+density scale and is not a performance metric.
+
+`--flow-noise-std` is refused unless the objective is `flow_reinforce`, and
+`flow_reinforce` is refused without it; a nonzero `--demo-anchor` without a
+demonstration sampler is refused too, rather than silently ignored. Failures
+surface at config validation, before Stage 1 is restored.
+
+Memory moves from the actor's backward graph to detached trajectory storage:
+the backward is bounded by `--actor-transition-microbatch`, while the recorded
+rollout still grows with horizon × imagination batch × flow steps. Prefix
+recomputation during scoring costs additional compute, so no wall-time
+improvement is claimed.
+
+#### The anchor's two budgets
+
+`--anchor-windows` is how many demonstration *windows* are drawn and encoded
+(one world-model forward each, over the whole window); `--anchor-rows` is how
+many eligible *positions* survive to be conditioned (one actor forward each).
+One window yields many eligible rows, so these must not be tied together.
+`--anchor-window-microbatch` bounds the encoding itself; windows are grouped
+along the window axis only, never sliced in time, because a window cut in time
+would give row `t` a posterior that never consumed rows `0..t`.
+
+**Do not assume `demo_anchor=1.0` is balanced.** The RL and anchor gradients
+can differ by many orders of magnitude — in one toy measurement the RL term
+was 1.3e8 and the anchor 6.4, which in float32 means the anchor vanished
+entirely when the two were summed, while still being applied and still being
+nonzero. `anchor_grad_ratio` exists to make that visible; check it before
+trusting an anchor weight.
+
+#### Profiling
+
+`--profile-online` reports per-phase wall time and CUDA peak memory —
+`collect`, `targets`, `critic`, `score`, `anchor` — for each actor update.
+GPU timing requires a synchronize per phase boundary, so this is a profiling
+setting and not a training one. Use it to decide
+`--actor-transition-microbatch` from measurement rather than from guesswork;
+16 is a starting point chosen for safety, not for speed.
+
 ## Layout
 
 ```
@@ -221,5 +379,5 @@ envs/         the online env, matched to the dataset's recorded contract
 training/     pretrain, imitation, imagination, actor_critic, progress, online
 evaluation/   world-model diagnostics, policy rollouts, arm comparison
 runtime/      checkpoints that carry the decisions their weights depend on
-tests/        stages 3-9; stages 1-2 are in the repo's top-level tests/
+tests/        stages 3-12; stages 1-2 are in the repo's top-level tests/
 ```

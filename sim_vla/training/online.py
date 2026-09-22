@@ -44,6 +44,7 @@ from ..data.replay import OnlineEpisode, OnlineReplay, mixed_batch
 from ..runtime.checkpoint import CheckpointMeta, save
 from .actor_critic import ActorCriticConfig, ActorCriticTrainer
 from .imagination import start_states
+from .precision import autocast
 
 
 @dataclass
@@ -51,6 +52,10 @@ class OnlineConfig:
     total_steps: int = 1_000_000
     episodes_per_collect: int = 2
     updates_per_collect: int = 8
+    # Replay timesteps trained per environment step, as in trainer.py.
+    # Zero preserves the legacy fixed updates_per_collect schedule.
+    train_ratio: float = 0.0
+    precision: str = "float32"
     demo_fraction: float = 0.5
     batch_size: int = 16
     sequence_length: int = 64
@@ -73,6 +78,20 @@ class OnlineConfig:
     checkpoint_every: int = 10_000
     eval_every: int = 0             # 0 disables periodic evaluation
     eval_episodes: int = 10
+
+    def updates_due(self, env_steps: int, updates: int) -> int:
+        if not np.isfinite(self.train_ratio) or self.train_ratio < 0:
+            raise ValueError("train_ratio must be finite and nonnegative")
+        if self.batch_size <= 0 or self.sequence_length <= 0:
+            raise ValueError("batch_size and sequence_length must be positive")
+        if self.train_ratio == 0:
+            return int(self.updates_per_collect)
+        # Count whole windows, including burn-in, just as the original trainer
+        # counts batch_size * batch_length. Carry fractional updates forward
+        # by using cumulative steps instead of rounding each collection.
+        target = int(env_steps * self.train_ratio
+                     / (self.batch_size * self.sequence_length))
+        return max(0, target - updates)
 
 
 def collect_episode(env, policy, *, max_steps: int = 150,
@@ -155,7 +174,8 @@ class LatentPolicy:
 
     def __init__(self, world_model, actor, *, device="cuda", normalizer=None,
                  coords=None, instruction: Optional[str] = None,
-                 execute: int = 1, flow_steps: Optional[int] = None):
+                 execute: int = 1, flow_steps: Optional[int] = None,
+                 flow_sigmas=None):
         self.world_model = world_model
         self.actor = actor
         self.device = torch.device(device)
@@ -183,6 +203,9 @@ class LatentPolicy:
         self.execute = execute
         self.chunk_size = chunk
         self.flow_steps = int(flow_steps or actor.flow_steps)
+        # None keeps the deterministic sampler. A tensor switches this policy
+        # to the stochastic one flow_reinforce trains and evaluates.
+        self.flow_sigmas = flow_sigmas
         self.action_dim = int(actor.action_dim)
         # The environment's clipping lives in coords, so this policy returns
         # the command that will actually be run. Declared so a caller does not
@@ -238,17 +261,33 @@ class LatentPolicy:
         evaluation loop, say -- left the policy conditioning on an action that
         was never executed.
         """
-        from ..models.flow_sampler import sample_actions
+        from ..models.flow_sampler import sample_actions, sample_flow_path
 
         cond = self.actor.condition(feat, self.instruction)
-        chunk = sample_actions(
-            self.actor.velocity_fn(), cond, batch=1,
-            chunk=int(self.actor.chunk_size), dim=self.action_dim,
-            steps=self.flow_steps,
-            # The actor's device, not the feature's: condition() moved the
-            # feature to the pretrained weights and the noise starts there.
-            device=getattr(self.actor, "device", feat.device),
-            dtype=feat.dtype, differentiable=False)
+        device = getattr(self.actor, "device", feat.device)
+        if self.flow_sigmas is not None:
+            # The policy being improved is the stochastic one, so the policy
+            # that collects has to be the stochastic one too. Collecting with
+            # the deterministic sampler would fill the replay with a behaviour
+            # distribution the imagined rollouts never model, and the world
+            # model would be fit to one policy while the actor optimizes
+            # another.
+            with torch.no_grad():
+                chunk = sample_flow_path(
+                    self.actor.velocity_fn(), cond, batch=1,
+                    chunk=int(self.actor.chunk_size), dim=self.action_dim,
+                    steps=self.flow_steps,
+                    sigmas=self.flow_sigmas.to(device),
+                    device=device, dtype=torch.float32)["chunk"]
+        else:
+            chunk = sample_actions(
+                self.actor.velocity_fn(), cond, batch=1,
+                chunk=int(self.actor.chunk_size), dim=self.action_dim,
+                steps=self.flow_steps,
+                # The actor's device, not the feature's: condition() moved the
+                # feature to the pretrained weights and the noise starts there.
+                device=device,
+                dtype=feat.dtype, differentiable=False)
         normalized = chunk[0, : self.execute]
         if self.coords is not None:
             bounded = self.coords.executed(normalized)
@@ -302,9 +341,17 @@ class OnlineTrainer:
         self.progress_opt = (
             torch.optim.AdamW(progress_head.parameters(), lr=progress_lr)
             if progress_head is not None else None)
+        # The demonstration sampler and the batch converter are handed over so
+        # the actor update can build its own imitation anchor. Passing them
+        # unconditionally is deliberate: ActorCriticTrainer refuses a nonzero
+        # demo_anchor without them, and that refusal should be about the
+        # configuration rather than about which caller happened to wire them.
         self.ac = ActorCriticTrainer(world_model, actor, critic, ac_config,
                                      coords=coords,
-                                     progress_head=progress_head)
+                                     progress_head=progress_head,
+                                     demo_sampler=demo_sampler,
+                                     to_model_batch=self.to_torch,
+                                     device=self.device, seed=int(seed))
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.meta = meta
         self.env_steps = 0
@@ -323,19 +370,25 @@ class OnlineTrainer:
             self.config.demo_fraction, lookahead=int(self.config.lookahead),
             ignore_terminations=bool(self.config.ignore_terminations)))
 
-        total, _losses, _aux = self.world_model.loss(batch)
         self.world_opt.zero_grad(set_to_none=True)
+        with autocast(self.device, self.config.precision):
+            total, _losses, _aux = self.world_model.loss(batch)
         total.backward()
         torch.nn.utils.clip_grad_norm_(self.world_model.parameters(), 100.0)
         self.world_opt.step()
         metrics = {"world_loss": float(total.detach())}
+        # These outputs and gradients are not needed for the actor update.
+        del total, _losses, _aux
+        self.world_opt.zero_grad(set_to_none=True)
 
-        metrics |= self.update_progress(batch)
+        with autocast(self.device, self.config.precision):
+            metrics |= self.update_progress(batch)
 
         # Re-encoded after the step, not reused from before it. The posterior
         # in ``_aux`` came from the parameters that have just been replaced.
-        start = start_states(self.world_model, batch,
-                             limit=int(self.config.imagination_batch))
+        with autocast(self.device, self.config.precision):
+            start = start_states(self.world_model, batch,
+                                 limit=int(self.config.imagination_batch))
         metrics["imagination_starts"] = float(start[0].shape[0])
         self.updates += 1
         if self.updates % max(int(self.config.actor_every), 1) == 0:
@@ -399,14 +452,57 @@ class OnlineTrainer:
         # say which revision they came from cannot be checked against one.
         revision = str(getattr(getattr(self.actor, "loaded", None), "revision",
                                "") or self.meta.pretrained_revision or "")
+        ac = self.ac.config
+        # What the run actually optimized, not what a config file said. Two
+        # checkpoints with the same weights and different objectives are
+        # different experiments, and a resume that switches between them is a
+        # new experiment rather than a continuation -- so the identity is
+        # written down where a later reader will find it.
+        extra = dict(self.meta.extra or {})
+        extra |= {
+            "actor_objective": str(ac.actor_objective),
+            "flow_noise_std": float(ac.flow_noise_std),
+            "flow_noise_schedule": str(ac.flow_noise_schedule),
+            "flow_steps": int(ac.flow_steps),
+            "demo_anchor": float(ac.demo_anchor),
+            "anchor_rows": int(ac.anchor_rows),
+            "anchor_microbatch": int(ac.anchor_microbatch),
+            "actor_transition_microbatch": int(ac.actor_transition_microbatch),
+            "imagination_batch": int(self.config.imagination_batch),
+            "imagination_microbatch": int(ac.imagination_microbatch),
+            "imag_horizon": int(ac.horizon),
+            "discount": float(ac.discount),
+            "lam": float(ac.lam),
+            "actor_lr": float(ac.actor_lr),
+            "critic_lr": float(ac.critic_lr),
+            "precision": str(ac.precision),
+            "advantage_scale": "return_ema",
+            # Counters, so a resumed run can say how far the previous one got
+            # and a log can be aligned to it.
+            "actor_updates": int(self.ac.actor_steps),
+            "actor_critic_updates": int(self.ac.step),
+            "world_updates": int(self.updates),
+            "env_steps": int(self.env_steps),
+            # The coordinate identity: an action recorded under one
+            # normalization is a different action under another, and the flow
+            # states this objective scores are in normalized coordinates.
+            "action_coordinates": (self.coords.describe()
+                                   if hasattr(self.coords, "describe")
+                                   else None),
+        }
         meta = CheckpointMeta(**{**self.meta.__dict__, "stage": "online",
                                  "pretrained_revision": revision,
-                                 "step": self.env_steps})
+                                 "step": self.env_steps, "extra": extra})
         return save(self.checkpoint_dir / f"online_{tag}.pt", meta,
                     {"world_model": self.world_model, "actor": self.actor,
-                     "critic": self.critic, "progress": self.progress_head},
+                     "critic": self.critic, "progress": self.progress_head,
+                     # Running advantage statistics are state, not a metric: a
+                     # resume that restarted them would rescale every
+                     # advantage for the first few hundred updates.
+                     "return_ema": self.ac.return_ema},
                     {"world": self.world_opt, "actor": self.ac.actor_opt,
-                     "critic": self.ac.critic_opt})
+                     "critic": self.ac.critic_opt,
+                     "progress": self.progress_opt})
 
 
 def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
@@ -421,7 +517,8 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
 
     Env steps and updates are counted separately, because they are different
     budgets: ``updates_per_collect`` decides how hard the model is trained per
-    unit of experience, and reporting one as the other hides that ratio.
+    unit of experience when train_ratio is zero. Otherwise the schedule uses
+    replay timesteps per environment step, matching the original Dreamer.
     """
     # Replay windows are cut like demonstration windows, chunk lookahead
     # included, so a mixed batch is one distribution and not two. See
@@ -436,11 +533,35 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
         checkpoint_dir=checkpoint_dir, meta=meta, normalizer=normalizer,
         coords=coords, seed=int(config.seed), potential=potential,
         progress_config=progress_config)
+    # Collection samples from the policy being improved. Under flow_reinforce
+    # that is the stochastic flow, with the same sigmas the imagined rollouts
+    # and the scoring use -- taken from the trainer rather than rebuilt here,
+    # so there is one schedule per run and not two that happen to agree.
     policy = LatentPolicy(
         world_model, actor, device=device, normalizer=normalizer,
         coords=coords,
         instruction=str(cfg["task"].get("instruction") or "") or None,
-        execute=int(cfg["actor"].get("execute") or 1))
+        execute=int(cfg["actor"].get("execute") or 1),
+        flow_sigmas=trainer.ac.flow_sigmas)
+    # Which policy the reported evaluation runs. The default is the policy
+    # being trained, which under flow_reinforce is the stochastic one. A
+    # deterministic evaluation is allowed but is a *different* policy, so it
+    # gets its own object and its own metric prefix rather than quietly
+    # standing in for the trained one.
+    eval_sampler = str((cfg.get("online") or {}).get(
+        "eval_sampler", "stochastic"))
+    eval_policy, eval_prefix = policy, "eval"
+    if policy.flow_sigmas is not None and eval_sampler == "deterministic":
+        eval_policy = LatentPolicy(
+            world_model, actor, device=device, normalizer=normalizer,
+            coords=coords,
+            instruction=str(cfg["task"].get("instruction") or "") or None,
+            execute=int(cfg["actor"].get("execute") or 1),
+            flow_sigmas=None)
+        eval_prefix = "eval_deterministic"
+        print("[online] eval_sampler=deterministic: the reported evaluation "
+              "runs a DIFFERENT policy from the one being trained (noise "
+              "off); its metrics are prefixed eval_deterministic_", flush=True)
 
     seed = int(config.seed)
     next_checkpoint = int(config.checkpoint_every)
@@ -462,11 +583,15 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
             collected.append(episode)
             seed += 1
 
-        for _ in range(int(config.updates_per_collect)):
+        updates_due = config.updates_due(trainer.env_steps, trainer.updates)
+        for _ in range(updates_due):
             last = trainer.update()
         last["env_steps"] = float(trainer.env_steps)
         last["updates"] = float(trainer.updates)
         last["replay_episodes"] = float(len(trainer.replay))
+        last["train_ratio_actual"] = (
+            trainer.updates * config.batch_size * config.sequence_length
+            / max(trainer.env_steps, 1))
         # From the rollouts just collected, not a separate evaluation: these
         # are the training-time curves the original pipeline reports.
         episode = episode_metrics(collected)
@@ -483,19 +608,19 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
         if config.eval_every and trainer.env_steps >= next_eval:
             from ..evaluation.policy import evaluate_policy
 
-            policy.reset()
+            eval_policy.reset()
             report = evaluate_policy(
-                env, policy, episodes=int(config.eval_episodes),
+                env, eval_policy, episodes=int(config.eval_episodes),
                 seed_start=int(cfg["eval"]["seeds_start"]),
                 max_steps=int(config.max_episode_steps))
-            print(f"[online] eval {report}", flush=True)
+            print(f"[online] {eval_prefix} {report}", flush=True)
             if on_metrics is not None:
                 # Success rate and environment return are what the arms are
                 # compared on, so they go through the same sink as the losses --
                 # against env_steps, and never mixed with the shaping reward.
                 # per_episode is a list, which the sink drops on its own.
                 on_metrics({"env_steps": float(trainer.env_steps),
-                            **{f"eval_{key}": value
+                            **{f"{eval_prefix}_{key}": value
                                for key, value in report.items()
                                if isinstance(value, (int, float, bool))}})
             next_eval += int(config.eval_every)

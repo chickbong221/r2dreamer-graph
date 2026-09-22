@@ -1,0 +1,22 @@
+ 15 
+imitation alone does not directly optimize deployment objectives (success rate, time-to-completion, robustness to disturbances) and often fails to eliminate rare failure modes.  RL-based post-training offers a principled way to refine imitation policies into deployable controllers. Yet, naively applying online RL on top of IL often encounters distribution shift and overly aggressive updates, leading to performance crashes or sub-optimality (47). Recent behavior-centric policy optimization methods point to a remedy: BPPO (48) adopts the clipped importance-weighted surrogate from PPO to conservatively improve an imitation-initialized behavior policy in the offline regime, and Uni-O4 (47) extends this idea by using the same clipped PPO surrogate objective to smoothly transition from offline refinement to on-policy online fine-tuning. Using a consistent proximal objective across regimes helps avoid performance dips and improves stability in practice, motivating a unified IL-to-RL post-training recipe.  Extending this idea to modern visuomotor manipulation is nontrivial: diffusion-based policies generate actions through a multi-step denoising process with highly nonlinear, multimodal structure, and applying RL only at the final action yields weak credit assignment. RL-100 addresses this by modeling denoising as a two-level MDP and sharing the environment-level advantage across denoising steps, enabling stable refinement of diffusion-based visuomotor policies in both offline and online regimes via the clipped PPO surrogate objective, while retaining their expressivity—crucial for high-dimensional, contact-rich tasks such as bimanual box folding.  Overall, RL-100 is a three-stage pipeline, as illustrated in Fig. 6: (i) IL from demonstrations to initialize an expressive behavior prior, (ii) iterative offline RL with progressive data expansion to harvest most performance gains under conservative updates, and (iii) brief online fine-tuning to eliminate residual failures. The key innovation is a unified clipped PPO surrogate objective that applies consistently across diffusion denoising steps, enabling smooth offline-to-online refinement without changing the learning objective. 
+ Fig. 6. Overview of RL-100. We mark key takeaways with numbers. (A) The framework features a three-stage training pipeline—imitation learning from human demonstrations, iterative offline post-training with data expansion, and continuous online post-training. A unified formulation 
+Learnfrom Human Priors
+DatasetReward
+Post-Training – Iterative OfflinePost-Training – Online
+BC Loss
+Env-Robot
+A. TrainingPipeline ①
+B. Policy ! Breakdown
+RL-100EncoderVisual Feature!Regularization ③ for training stability
+Robot State
+Policy – Perception
+Tele-opRolloutHuman Policy- Continuousx MTimes
+Once
+ObservationProprioceptionAction…… !!""#$
+On-policyDatasetUnified RL-100Loss ②Unified RL-100Loss ② !%#&'(""#$
+)!"#$$%&
+Policy – DecisionC. Distillation ④RL-100Actor(DDIM)
+Iterative denoising ×K steps
+RL-100Actor(CM)One-step denoisingHigh-freq control
+!!*+

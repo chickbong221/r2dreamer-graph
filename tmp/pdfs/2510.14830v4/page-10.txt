@@ -1,0 +1,29 @@
+ 10 
+ Fig. 3. Evaluating our policies under various task variations. (A-F) Zero-shot adaptation to novel dynamics without retraining. (G-I) Few-shot adaptation to unseen scenarios with minimal additional training data. (J-Q) Robustness against external disturbances. (A) Pouring with granular/fluid materials. (B) Dynamic Push-T on altered surface friction. (C) Dynamic Push-T with visual and physical interference objects. (D) Agile Bowling on modified surface. (E) Soft towel Folding generalizes to unseen shapes; green arrows mark the diverse test-time configurations. (F) Box Folding with unseen shape and orientation (G) Soft-towel Folding with a different towel exhibiting altered deformable properties. (H) Pouring with a modified container shape and size. (I) Agile Bowling with inverted pin arrangement. (J-K) Soft-towel Folding recovers from external pulling and lateral dragging at different manipulation stages. (L) Dynamic Unscrewing withstands counter-rotational interference from human hand. (M) Dynamic Push-T handles dragging perturbations to the block. Arrows indicate variations or disturbances. (N-Q) Box Folding with human disturbances during execution, including dragging, pushing, and tapping. 
+NutsWater
+Changed Surface 
+InterferenceObjects
+Changed Surface 
+A
+B
+C
+D
+ G
+Changed Object Inversion
+H
+I
+J
+K
+L
+M
+E
+N
+O
+P
+Q
+𝜃
+𝜃 𝜃
+𝜃
+𝜃Training
+T esting
+F

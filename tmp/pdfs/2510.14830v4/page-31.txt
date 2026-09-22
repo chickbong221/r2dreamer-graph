@@ -1,0 +1,17 @@
+ 31 
+ Fig. S2. The object initialization workspaces for the eight real-world tasks. At the beginning of each episode, objects-of-interest are randomly positioned within the areas denoted by the red boundaries and annotations.  
+ Fig. S3. Comparison between different stages of unscrewing task.  (A) an unremovable nut and (B) a removable one, as well as their corresponding point-cloud observations (C-D). Robot policies must be accurate enough to recognize the removable state by the tiny tilt shown in (B) and (D) to guarantee success grasps.  
+ Fig. S4. Challenging parts of the orange juicing task. (A)-(B) spatial robustness w.r.t. orange appearances and positions; (C) force-sensitive manipulation of deformable orange discards.  
+75 cm55 cm
+60 cm55 cm15 cm15 cm20 cmA
+ 18 cm20 cm
+B
+ 39 cm16 cm28 cm20 cm
+C
+⌀12.5 cm
+D
+42 cm40 cm
+E
+ 29 cm20 cm⌀11 cmF
+G
+A B C
