@@ -246,9 +246,10 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             enabled=enabled,
             beta=float(cfg["model"]["progress"]["beta"]),
             warmup_start=warmup_start, warmup_end=warmup_end)
-        # Fitted in Stage 1A on the demonstrations, or restored from the
-        # world model's file beside the weights it was fitted to -- never
-        # built fresh here, where its first shaping rewards would be noise.
+        # The exact object Stage 1A trained jointly with this world model on
+        # the demonstrations, or restored from the world model's file beside
+        # the weights it was trained with -- never built fresh here, where its
+        # first shaping rewards would be noise.
         progress_head, potential = stage_a.progress_head, stage_a.potential
         if enabled and (progress_head is None or potential is None):
             raise SystemExit(
@@ -262,7 +263,7 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             report["progress"] = potential.describe() | {
                 "beta": progress_cfg.beta,
                 "warmup": [warmup_start, warmup_end],
-                "head": "pretrained in stage 1A"}
+                "head": "trained jointly with the world model in stage 1A"}
             # In the summary rather than only the log: which schedule the arm
             # was shaped against, and how strongly, is what distinguishes this
             # run from the plain graph arm.

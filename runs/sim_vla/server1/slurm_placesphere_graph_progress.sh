@@ -27,6 +27,17 @@
 # recorded absolute-token vocabulary before Stage 1A starts, and refuses the
 # run rather than training a head on invented targets if any of them is
 # missing.
+#
+# Runs all three stages in one process (world model -> imitation -> online),
+# per sim_vla/training/pipeline.py; the stages hand their models over in
+# memory. --save-checkpoints additionally writes them under --out:
+# world_model.pt (+ normalization.json) after Stage 1A -- carrying the
+# progress head trained jointly with that world model -- imitation.pt after
+# Stage 1B, and online_latest.pt, rewritten every 10k env steps in Stage 2.
+# A later job can pass `--resume-from <that --out dir>` to restore Stage 1A
+# (head included) and 1B from the first two and go straight to online
+# training; Stage 2 itself is not resumed from online_latest.pt. A
+# world_model.pt written before joint progress pretraining is refused.
 
 echo "================================="
 echo "Job started on $(hostname)"
@@ -114,7 +125,7 @@ IMITATION_LR=1.5e-4
 
 # Stage 2: the flow_reinforce actor objective with the settings of
 # slurm_peginsertion_*_online_flow_reinforce.sh, run in this same job right
-# after Stage 1B -- there is no PlaceSphere checkpoint to resume from.
+# after Stage 1B, on the models it hands over in memory.
 # Overridable from the submitting environment, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
 ACTOR_LR="${ACTOR_LR:-1e-5}"
@@ -166,6 +177,7 @@ python -m sim_vla.training.pipeline \
   --num-envs $NUM_ENVS \
   --eval-sampler stochastic \
   --device cuda \
+  --save-checkpoints \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/graph_progress
 
 # Stop GPU monitor

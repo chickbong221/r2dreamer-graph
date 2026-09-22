@@ -155,20 +155,73 @@ def check_identity(stored: Mapping[str, Any], wanted: CheckpointMeta) -> None:
             f"checkpoint={recorded_data!r} run={current_data!r}.")
 
 
+def check_extra(stored: Mapping[str, Any], required: Mapping[str, Any],
+                explain: Optional[Mapping[str, str]] = None) -> None:
+    """Refuse a checkpoint whose ``extra`` entries differ from what is required.
+
+    ``extra`` is free-form and most of it is a record, not a contract. The
+    entries named here are the exception: what the weights *are* -- which
+    module class, trained under which objective -- and a checkpoint that does
+    not record one predates it, which is itself the incompatibility.
+    """
+    recorded = dict(stored.get("extra") or {})
+    differ = sorted(key for key, value in required.items()
+                    if recorded.get(key) != value)
+    if not differ:
+        return
+    detail = "; ".join(
+        f"{key}: checkpoint={recorded.get(key)!r} run={required[key]!r}"
+        for key in differ)
+    notes = " ".join(explain[key] for key in differ
+                     if explain and key in explain)
+    raise SystemExit(f"refusing to load this checkpoint: {detail}. "
+                     + (notes or "These weights are a different object "
+                        "from the one this run builds."))
+
+
+def structure_mismatch(module: Any, state: Mapping[str, Any]) -> list:
+    """Why ``state`` cannot be loaded into ``module``, or an empty list."""
+    own = module.state_dict()
+    problems = []
+    missing = sorted(set(own) - set(state))
+    unexpected = sorted(set(state) - set(own))
+    if missing:
+        problems.append(f"missing {missing[:4]}"
+                        + (f" and {len(missing) - 4} more" if len(missing) > 4
+                           else ""))
+    if unexpected:
+        problems.append(f"unexpected {unexpected[:4]}"
+                        + (f" and {len(unexpected) - 4} more"
+                           if len(unexpected) > 4 else ""))
+    for key in sorted(set(own) & set(state)):
+        have = tuple(getattr(own[key], "shape", ()))
+        got = tuple(getattr(state[key], "shape", ()))
+        if have != got:
+            problems.append(f"{key} is {got} in the checkpoint, {have} here")
+    return problems
+
+
 def load(path: str | Path, wanted: CheckpointMeta, modules: Mapping[str, Any],
          optimizers: Optional[Mapping[str, Any]] = None,
          *, strict: bool = True,
-         explain: Optional[Mapping[str, str]] = None) -> CheckpointMeta:
+         explain: Optional[Mapping[str, str]] = None,
+         require_extra: Optional[Mapping[str, Any]] = None) -> CheckpointMeta:
     """Restore a checkpoint into this run, or refuse it.
 
-    ``explain`` says, per module name, why that module being absent matters
-    and what to do instead; it replaces the generic ``strict=False`` advice,
-    which is the wrong fix for a module the run cannot do without.
+    ``explain`` says, per module name (or ``require_extra`` key), why that
+    module being absent or not fitting matters and what to do instead; it
+    replaces the generic ``strict=False`` advice, which is the wrong fix for a
+    module the run cannot do without.
+
+    ``require_extra`` names ``meta.extra`` entries that must be recorded with
+    exactly these values. Checked before any weights are touched.
     """
     payload = torch.load(str(path), map_location="cpu", weights_only=False)
     stored = dict(payload.get("meta") or {})
     check_compatible(stored, wanted)
     check_identity(stored, wanted)
+    if require_extra:
+        check_extra(stored, require_extra, explain)
 
     requested = {name for name, module in modules.items() if module is not None}
     absent = sorted(requested - set(payload.get("modules") or {}))
@@ -182,6 +235,20 @@ def load(path: str | Path, wanted: CheckpointMeta, modules: Mapping[str, Any],
             f"refusing to load this checkpoint: it has no weights for "
             f"{absent}; it stores {sorted(payload.get('modules') or {})}. "
             + (notes or "Pass strict=False to accept a partial restore."))
+    if strict:
+        # Every module is checked before any is written, so a refusal leaves
+        # nothing half-restored. load_state_dict would raise too, but from
+        # inside torch with a key list and no word about which module or why.
+        for name, module in modules.items():
+            if module is None or name not in payload["modules"]:
+                continue
+            problems = structure_mismatch(module, payload["modules"][name])
+            if problems:
+                note = explain.get(name, "") if explain else ""
+                raise SystemExit(
+                    f"refusing to load this checkpoint: its {name!r} weights "
+                    f"do not fit this run's {type(module).__name__} ("
+                    + "; ".join(problems) + "). " + note)
     for name, module in modules.items():
         if module is None or name not in payload["modules"]:
             continue

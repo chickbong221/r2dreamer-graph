@@ -5,12 +5,16 @@ heads are trained alongside reconstruction, the recurrent state is rebuilt with
 burn-in, and the graph arm additionally trains the semantic prior that
 imagination depends on.
 
-The graph_progress arm also fits its progress head here, on the same
-demonstration batches, so the head Stage 2 shapes the actor with has already
-learned the schedule rather than starting from random weights. It regresses on
-detached features with its own optimizer, exactly as Stage 2 keeps training
-it, so it never moves the world model: that arm's world model is the graph
-arm's, trained on the same draws.
+The graph_progress arm trains its progress head here jointly with the world
+model, as ``dreamer.py`` does: the regular trainer's ``networks.ProgressHead``
+reads the *attached* posterior feature, its masked Huber loss onto the
+observed-graph schedule potential is added to the world-model loss with weight
+``loss_scales.progress_model``, and one backward pass and one optimizer step
+train both. So the progress target shapes that arm's representation -- its
+world model is no longer the graph arm's -- and the head Stage 2 shapes the
+actor with has already learned the schedule. Stage 2 keeps fitting the head on
+detached features with its own optimizer (``progress.fit_progress``).
+The dreamer and graph arms build no head and train exactly as before.
 
 The two arms get separate world models and are never initialised from each
 other. ``sim_vla/runtime/checkpoint.py`` enforces that for the checkpoints that
@@ -69,8 +73,9 @@ class Stage1A:
     coords: Any = None
     losses: Dict[str, float] = field(default_factory=dict)
     path: Optional[Path] = None      # where it was written, or None
-    # The graph_progress arm's head, fitted here, and the schedule potential
-    # it was fitted to. None for every other arm.
+    # The graph_progress arm's head, trained here jointly with ``model``, and
+    # the schedule potential it was trained onto. None for every other arm.
+    # Stage 2 receives this exact object.
     progress_head: Any = None
     potential: Any = None
     # The learning rate this run trained with; None when it was restored.
@@ -92,17 +97,20 @@ def build_progress_head(cfg: Dict[str, Any], model_cfg, model, *,
                         device: str):
     """The graph_progress arm's head, or None for any other arm.
 
-    Initialised under a forked random state. Drawing its weights from the
-    global stream would shift every later draw of a latent sample, and the
-    arm's world model would stop matching the graph arm's for a
-    reason that has nothing to do with progress.
+    Initialised under a forked random state, CPU and every CUDA device alike.
+    ``torch.manual_seed`` reseeds the CUDA generators too, so forking the CPU
+    stream alone left CUDA reseeded to the run's seed after this returned --
+    and every later CUDA draw of the run shifted for a reason that has nothing
+    to do with progress.
     """
     from .progress import build_progress
 
     arm = dict(cfg.get("model") or {})
     if not bool((arm.get("progress") or {}).get("enabled")):
         return None
-    with torch.random.fork_rng(devices=[]):
+    devices = (list(range(torch.cuda.device_count()))
+               if torch.cuda.is_available() else [])
+    with torch.random.fork_rng(devices=devices):
         torch.manual_seed(int(cfg["data"]["seed"]))
         head = build_progress(
             model_cfg, int(model.feature_dim),
@@ -111,26 +119,57 @@ def build_progress_head(cfg: Dict[str, Any], model_cfg, model, *,
     return head.to(device)
 
 
+def stage_parameters(model, progress_head=None) -> list:
+    """What Stage 1A's one optimizer steps and one clip bounds.
+
+    The head is part of it when there is one, as it is part of the world-model
+    optimizer in ``dreamer.py``. With no head the list is exactly
+    ``model.parameters()``, so the other arms' optimizer is unchanged.
+    """
+    params = list(model.parameters())
+    if progress_head is not None:
+        params += list(progress_head.parameters())
+    return params
+
+
+def progress_extra(progress_head, weight: Optional[float]) -> Dict[str, Any]:
+    """The checkpoint metadata that says what the head is, or {} with none."""
+    if progress_head is None:
+        return {}
+    from .progress import HEAD_IDENTITY
+
+    return {"progress_head": dict(HEAD_IDENTITY),
+            "progress_model_scale": float(weight)}
+
+
 def train_step(model, optimizer, batch: Dict[str, torch.Tensor], *,
                progress=None) -> tuple:
-    """One world-model step, then one progress-head step on its features.
+    """One step of the world-model loss, plus the progress term when given.
 
-    ``progress`` is ``(head, optimizer, potential)`` or None. The head reads
-    the posterior features the world-model loss already computed, detached,
-    so it costs no second encoder pass and sends nothing back.
+    ``progress`` is ``(head, potential, weight)`` or None. With it, the head
+    reads the posterior feature the world-model loss already computed --
+    attached, so the progress loss trains the head *and* the world-model
+    components that produced the feature -- and ``weight * progress_loss`` is
+    added to the total before the one backward pass. ``optimizer`` must hold
+    the head's parameters (see :func:`stage_parameters`); the clip covers
+    them too. Without it this is the plain world-model step.
     """
-    from .progress import fit_progress
+    from .progress import joint_progress_loss
 
     total, losses, aux = model.loss(batch)
+    extra: Dict[str, float] = {}
+    head = None
+    if progress is not None:
+        head, potential, weight = progress
+        term, extra = joint_progress_loss(head, potential, aux["feat"], batch)
+        total = total + float(weight) * term
+        losses = dict(losses) | {"progress_model": term}
     optimizer.zero_grad(set_to_none=True)
     total.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 100.0)
+    torch.nn.utils.clip_grad_norm_(stage_parameters(model, head), 100.0)
     optimizer.step()
     last = {name: float(value.detach()) for name, value in losses.items()}
-    if progress is not None:
-        head, head_opt, potential = progress
-        last |= fit_progress(head, head_opt, potential, aux["feat"], batch)
-    return total, last
+    return total, last | extra
 
 
 def observation_shapes(batch: Dict[str, torch.Tensor]) -> Dict[str, tuple]:
@@ -210,26 +249,31 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
     """
     from ..models.action_space import ActionBounds, ActionCoordinates
 
-    from .progress import PROGRESS_LR, build_potential
+    from .progress import build_potential, progress_weight
 
     data, sampler, model, model_cfg = build(
         cfg, device=device, model_yaml=model_yaml)
     try:
         lr = world_lr(cfg, model_cfg)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-        print(f"[world_model] lr {lr:g}", flush=True)
-
+        # Built before the optimizer, because it is in it. Its initialisation
+        # forks the random state, so building it first shifts no other draw.
         progress_head = build_progress_head(cfg, model_cfg, model,
                                             device=device)
-        potential = progress_opt = None
+        potential = weight = None
         if progress_head is not None:
             potential = build_potential(cfg, data.metadata, device=device)
-            progress_opt = torch.optim.AdamW(progress_head.parameters(),
-                                             lr=PROGRESS_LR)
-            print(f"[world_model] progress head fitted alongside: "
+            weight = progress_weight(model_cfg)
+        # One optimizer, the world model's type and learning rate, over the
+        # world model and -- for graph_progress only -- its head.
+        optimizer = torch.optim.AdamW(stage_parameters(model, progress_head),
+                                      lr=lr)
+        print(f"[world_model] lr {lr:g}", flush=True)
+        if progress_head is not None:
+            print(f"[world_model] progress head trained jointly "
+                  f"(loss_scales.progress_model={weight:g}): "
                   f"{potential.describe()}", flush=True)
         progress = (None if progress_head is None
-                    else (progress_head, progress_opt, potential))
+                    else (progress_head, potential, weight))
 
         from ..models.action_space import FieldScaler
 
@@ -275,8 +319,8 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
                                 **last})
                 shown = sorted((k, v) for k, v in last.items()
                                if not k.startswith("progress_"))[:5]
-                if "progress_loss" in last:
-                    shown.append(("progress_loss", last["progress_loss"]))
+                if "progress_model" in last:
+                    shown.append(("progress_model", last["progress_model"]))
                 print(f"[world_model] step {step} total {float(total):.4f} "
                       + " ".join(f"{k}={v:.3f}" for k, v in shown),
                       flush=True)
@@ -295,6 +339,7 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
                                     if normalizer is not None
                                     else {"mode": "none"}),
             config=cfg, step=int(steps),
+            extra=progress_extra(progress_head, weight),
         )
 
         path: Optional[Path] = None
@@ -302,12 +347,12 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
             if out is None:
                 raise ValueError(
                     "save_checkpoint=True needs an output path; pass out=...")
-            # The head goes in the world model's file: it was fitted to this
-            # model's features, and restoring it beside any other would pair
-            # it with a representation it has never read.
+            # The head goes in the world model's file: the two were trained
+            # together, and restoring it beside any other would pair it with a
+            # representation it has never read. One optimizer holds both.
             path = save(Path(out), meta,
                         {"world_model": model, "progress": progress_head},
-                        {"world_model": optimizer, "progress": progress_opt})
+                        {"world_model": optimizer})
     except BaseException:
         # Ownership transfers to the caller only when this returns.
         data.close()
@@ -368,6 +413,12 @@ def resume(cfg: Dict[str, Any], *, device: str, path: Path,
             ActionBounds.from_metadata(data.metadata, action_dim),
             device=device, action_dim=action_dim)
 
+        from .progress import HEAD_IDENTITY, progress_weight
+
+        progress_head = build_progress_head(cfg, model_cfg, model,
+                                            device=device)
+        weight = (progress_weight(model_cfg) if progress_head is not None
+                  else None)
         # Built exactly as run() builds it, because this is what the stored
         # metadata is compared against. step is the one field that may differ
         # and is not one of the checked ones.
@@ -382,16 +433,38 @@ def resume(cfg: Dict[str, Any], *, device: str, path: Path,
                                     if normalizer is not None
                                     else {"mode": "none"}),
             config=cfg, step=0,
+            extra=progress_extra(progress_head, weight),
         )
-        progress_head = build_progress_head(cfg, model_cfg, model,
-                                            device=device)
+        if progress_head is not None:
+            why = (
+                "This world model was written before Stage 1A trained the "
+                "progress head jointly with it (networks.ProgressHead, masked "
+                "Huber): its head, if any, is the older detached twohot "
+                "readout, and its world model never saw the progress loss. "
+                "Restoring it would start Stage 2's shaping from a head that "
+                "is not this one. Re-run Stage 1A for this arm (drop "
+                "--resume-from, or point it at a newer run).")
+        else:
+            why = (
+                "This world model was trained jointly with a progress head "
+                "(the graph_progress arm): the progress loss reached its "
+                "encoder, recurrent state and graph branch, so it is not this "
+                "arm's world model with a head left over, and restoring it "
+                "without the head would compare graph_progress's "
+                "representation under this arm's name. Train this arm's "
+                "world model from scratch, or resume the checkpoint as "
+                "--experiment graph_progress.")
+        # Required in both directions. A head-less arm requires the identity
+        # to be *absent*: a checkpoint from before joint pretraining carries
+        # none and still loads, because its detached head never moved the
+        # world model, but a jointly trained one is refused rather than
+        # restored with its head silently dropped.
         stored = load(
             path, meta, {"world_model": model, "progress": progress_head},
-            explain={"progress": (
-                "This world model was written before Stage 1A fitted the "
-                "progress head, so restoring it would start Stage 2's shaping "
-                "from a random head. Re-run Stage 1A for this arm (drop "
-                "--resume-from, or point it at a newer run).")})
+            explain={"progress": why, "progress_head": why},
+            require_extra={"progress_head": (HEAD_IDENTITY
+                                             if progress_head is not None
+                                             else None)})
         potential = None
         if progress_head is not None:
             from .progress import build_potential

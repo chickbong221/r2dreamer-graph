@@ -16,15 +16,22 @@ leaves the optimal policy unchanged, which is what makes the arm a comparison
 of learning speed rather than of a different objective.
 
 The baseline arm receives none of this -- no targets, no head, no reward term.
+
+The head is the regular trainer's: :class:`networks.ProgressHead`, one sigmoid
+scalar in ``[0, 1]``, regressed with the masked Huber loss of
+``dreamer.py:_progress_model_loss``. Stage 1A trains it jointly with the world
+model, as ``dreamer.py`` does -- its loss is added to the world-model loss on
+attached posterior features. Stage 2 keeps it fitted on detached features with
+its own optimizer, so online the world model is never moved by it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 
 import networks
 
@@ -39,10 +46,28 @@ DEFAULT_CONFIGS_DIR = "scenegraph/configs"
 WARMUP_START_FRACTION = 0.2
 WARMUP_END_FRACTION = 0.6
 
-# The head's own optimizer, in both stages that train it. It is fitted on
-# detached features, so neither number reaches the world model.
+# Stage 2's own optimizer for the head. Stage 2 fits it on detached features,
+# so neither number reaches the world model. Stage 1A uses neither: there the
+# head is one more parameter group of the world model's optimizer, under the
+# world model's learning rate and clipping.
 PROGRESS_LR = 3e-4
 PROGRESS_GRAD_CLIP = 1.0
+
+# dreamer.py:_progress_model_loss. Huber rather than squared error because the
+# target is a weighted step function: a frame that crosses two rungs at once
+# is a real jump, not an outlier to chase.
+PROGRESS_HUBER_DELTA = 0.1
+
+# What a stored head is, beyond its tensors. Written into the world model's
+# checkpoint metadata and required on restore. A head from before joint
+# pretraining was a twohot readout fitted on detached features, beside a world
+# model the progress loss never reached; neither half is what this trains.
+HEAD_IDENTITY = {
+    "architecture": "networks.ProgressHead",
+    "output": "sigmoid_0_1",
+    "objective": f"masked_huber_delta_{PROGRESS_HUBER_DELTA:g}",
+    "stage_1a": "joint_with_world_model",
+}
 
 
 @dataclass
@@ -82,83 +107,171 @@ def beta_at(config: ProgressConfig, step: int) -> float:
     return float(config.beta) * (step - config.warmup_start) / span
 
 
-class ProgressHead(nn.Module):
-    """Predicts scalar task progress from a latent feature.
-
-    Only ever constructed for the graph arm: its target is the graph schedule's
-    phase, and there is no schedule without a graph.
-    """
-
-    def __init__(self, config, feature_dim: int):
-        super().__init__()
-        self.net = networks.MLPHead(config.critic, int(feature_dim))
-
-    def potential(self, feat: torch.Tensor) -> torch.Tensor:
-        return self.net(feat).mode().squeeze(-1)
-
-    def loss(self, feat: torch.Tensor, target: torch.Tensor,
-             mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        error = (self.potential(feat) - target.detach()) ** 2
-        if mask is None:
-            return error.mean()
-        weight = mask.to(error.dtype)
-        return (error * weight).sum() / weight.sum().clamp(min=1.0)
+def predict(head: networks.ProgressHead, feat: torch.Tensor) -> torch.Tensor:
+    """``phi(s)`` in ``[0, 1]``, shaped like ``feat`` without its last axis."""
+    return head(feat).squeeze(-1)
 
 
-def shaping_reward(head: ProgressHead, feat: torch.Tensor, discount: float
-                   ) -> torch.Tensor:
+def shaping_reward(head: networks.ProgressHead, feat: torch.Tensor,
+                   discount: float) -> torch.Tensor:
     """``gamma * phi(s') - phi(s)`` over an imagined rollout.
 
     Potential-based, so it cannot change which policy is optimal -- only how
-    quickly one is found.
+    quickly one is found. The sigmoid bounds ``phi``, so ``|F_t| <= 1``.
     """
-    phi = head.potential(feat)
+    phi = predict(head, feat)
     return discount * phi[1:] - phi[:-1]
 
 
-def fit_progress(head: ProgressHead, optimizer, potential, feat: torch.Tensor,
-                 batch, *, grad_clip: float = PROGRESS_GRAD_CLIP
-                 ) -> Dict[str, float]:
-    """One regression step of the head onto the observed-graph potential.
+def progress_mask(batch: Mapping[str, torch.Tensor],
+                  phi_valid: torch.Tensor) -> torch.Tensor:
+    """The ``(batch, time)`` rows a progress target may be scored at.
 
-    The one objective the head has, whichever stage calls it: Stage 1A fits
-    it on demonstrations so its first predictions already mean something, and
-    Stage 2 keeps it tracking a world model that is still moving.
+    ``loss_mask`` drops burn-in and padding, exactly as it does for every
+    world-model term. ``valid`` is padding alone and already implied by it; it
+    is ANDed in anyway so a loader that ever loosened ``loss_mask`` could not
+    start scoring a repeated padding row. ``phi_valid`` drops frames the
+    schedule cannot score -- a role that matched no node, a relation the frame
+    never observed. Scoring those as zero would teach the head that an unseen
+    target is a failed reach.
+    """
+    mask = batch["loss_mask"].bool() & phi_valid.to(
+        batch["loss_mask"].device).bool()
+    if "valid" in batch:
+        mask = mask & batch["valid"].bool()
+    return mask
+
+
+def progress_loss(head: networks.ProgressHead, feat: torch.Tensor,
+                  target: torch.Tensor, mask: torch.Tensor
+                  ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Masked Huber between the head and the observed potential.
+
+    The objective of ``dreamer.py:_progress_model_loss``, and the only one the
+    head has in either stage. What it trains is decided by the caller through
+    ``feat``: attached, the gradient reaches the world model too (Stage 1A);
+    detached, only the head (Stage 2). The target is always detached.
+
+    Invalid rows are replaced by zero before the loss rather than multiplied
+    by the mask afterwards, so a NaN the scorer left in a row it marked invalid
+    cannot reach the sum as ``NaN * 0``.
+    """
+    phi = predict(head, feat)
+    if tuple(phi.shape) != tuple(target.shape):
+        # F.huber_loss broadcasts a (B, T, 1) against a (B, T) with only a
+        # warning, and the loss is then over B*T*T pairs.
+        raise ValueError(
+            f"progress target {tuple(target.shape)} does not match the head's "
+            f"prediction {tuple(phi.shape)}")
+    mask = mask.to(phi.device).bool()
+    target = torch.where(mask, target.detach().to(phi.device, phi.dtype),
+                         torch.zeros_like(phi))
+    weight = mask.to(phi.dtype)
+    count = weight.sum().clamp_min(1.0)
+    error = F.huber_loss(phi, target, reduction="none",
+                         delta=PROGRESS_HUBER_DELTA)
+    loss = (error * weight).sum() / count
+    with torch.no_grad():
+        mean = (target * weight).sum() / count
+        std = ((((target - mean) ** 2) * weight).sum() / count).sqrt()
+        # The four dreamer.py logs. A low valid fraction reads as a
+        # persistence bug; a near-zero target_std means behaviour produces no
+        # spread to learn, and makes every other progress number meaningless.
+        metrics = {
+            "progress_valid": float(weight.mean()),
+            "progress_target_mean": float(mean),
+            "progress_target_std": float(std),
+            "progress_head_mae": float(
+                ((phi.detach() - target).abs() * weight).sum() / count),
+        }
+    return loss, metrics
+
+
+def joint_progress_loss(head: networks.ProgressHead, potential,
+                        feat: torch.Tensor, batch: Mapping[str, torch.Tensor]
+                        ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Stage 1A's progress term, on the world model's own posterior features.
+
+    ``feat`` must be the attached feature the world-model loss was computed
+    from: that is what lets this term train the encoder, the recurrent state
+    and the graph branch alongside the head, as the regular trainer does. The
+    caller adds ``loss_scales.progress_model`` times the loss to the
+    world-model loss before its single backward pass.
+    """
+    phi, phi_valid = potential.targets(batch)
+    return progress_loss(head, feat, phi, progress_mask(batch, phi_valid))
+
+
+def progress_weight(model_cfg) -> float:
+    """``loss_scales.progress_model``: the head's weight in the world-model loss.
+
+    Not ``progress.beta``. Beta weights the shaping reward the actor sees in
+    Stage 2; this weights a supervised term in Stage 1A. The two happen to be
+    configured near each other and must not be read for one another.
+    """
+    scales = getattr(model_cfg, "loss_scales", None)
+    if scales is None or "progress_model" not in scales:
+        raise SystemExit(
+            "the model config has no loss_scales.progress_model; the "
+            "graph_progress arm trains its head inside the world-model loss "
+            "and needs that weight (configs/model/_base_.yaml sets it)")
+    weight = float(scales["progress_model"])
+    if not weight > 0.0:
+        # dreamer.py refuses the same configuration.
+        raise SystemExit(
+            f"loss_scales.progress_model={weight:g} leaves the progress head "
+            "untrained; Stage 2 would shape the actor with an unsupervised "
+            "readout")
+    return weight
+
+
+def fit_progress(head: networks.ProgressHead, optimizer, potential,
+                 feat: torch.Tensor, batch, *,
+                 grad_clip: float = PROGRESS_GRAD_CLIP) -> Dict[str, float]:
+    """Stage 2's regression step of the head onto the observed-graph potential.
+
+    Stage 2 keeps the head tracking a world model that is still moving. Same
+    objective as Stage 1A's joint term, but ``feat`` is detached here: this
+    trains the head and nothing else, which is why it has its own optimizer.
 
     The targets come from the *recorded* graph labels, not from the decoder's
     predictions, so the head is regressed onto something the dataset actually
-    contains. ``feat`` is detached here: this trains the head and nothing
-    else, which is why it has its own optimizer.
-
-    Rows whose potential is invalid -- a role that matched no node, a relation
-    the frame never observed -- are masked rather than counted as zero
-    progress. A schedule role that never resolves would otherwise teach the
-    head that the task never advances.
+    contains. A batch with nothing scorable takes no step.
     """
     phi, phi_valid = potential.targets(batch)
-    mask = batch["loss_mask"].bool() & phi_valid
+    mask = progress_mask(batch, phi_valid)
     if not bool(mask.any()):
         return {"progress_valid": 0.0}
-    loss = head.loss(feat.detach(), phi, mask)
+    loss, metrics = progress_loss(head, feat.detach(), phi, mask)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     torch.nn.utils.clip_grad_norm_(head.parameters(), float(grad_clip))
     optimizer.step()
-    return {"progress_loss": float(loss.detach()),
-            "progress_valid": float(mask.float().mean()),
-            "progress_target_mean": float(phi[mask].mean())}
+    return {"progress_loss": float(loss.detach())} | metrics
 
 
 def build_progress(config, feature_dim: int, *, graph_enabled: bool,
-                   progress_enabled: bool) -> Optional[ProgressHead]:
-    """A head for the graph arm with shaping on, and None otherwise."""
+                   progress_enabled: bool
+                   ) -> Optional[networks.ProgressHead]:
+    """The regular trainer's head for the graph arm with shaping on, else None.
+
+    ``config`` is the model config; the head is built from its
+    ``progress.head`` block, as ``dreamer.py`` builds it.
+    """
     if not progress_enabled:
         return None
     if not graph_enabled:
         raise SystemExit(
             "progress shaping requires the graph arm: its targets come from "
             "the graph schedule, and a baseline has no schedule to read.")
-    return ProgressHead(config, feature_dim)
+    progress = config.get("progress") if hasattr(config, "get") else None
+    head_cfg = progress.get("head") if progress is not None else None
+    if head_cfg is None:
+        raise SystemExit(
+            "the model config has no progress.head block; the progress head "
+            "is networks.ProgressHead and is configured from it, as in "
+            "configs/model/_base_.yaml")
+    return networks.ProgressHead(head_cfg, int(feature_dim))
 
 
 class SchedulePotential:

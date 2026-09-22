@@ -21,9 +21,13 @@
 # graphs and asserts a baseline's batches are byte-identical.
 #
 # Runs all three stages in one process (world model -> imitation -> online),
-# per sim_vla/training/pipeline.py. Checkpoints are saved so a crashed run's
-# world-model/imitation weights are not lost, even though the pipeline itself
-# does not resume a run from them.
+# per sim_vla/training/pipeline.py; the stages hand their models over in
+# memory. --save-checkpoints additionally writes them under --out:
+# world_model.pt (+ normalization.json) after Stage 1A, imitation.pt after
+# Stage 1B, and online_latest.pt, rewritten every 10k env steps in Stage 2.
+# A later job can pass `--resume-from <that --out dir>` to restore Stage 1A
+# and 1B from the first two and go straight to online training; Stage 2 itself
+# is not resumed from online_latest.pt.
 
 echo "================================="
 echo "Job started on $(hostname)"
@@ -103,8 +107,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # fractions to whatever --online-steps is given here, so the baseline and the
 # graph_progress run only need to agree on this number, not on an absolute
 # warm-up window.
-WORLD_STEPS=30000
-IMITATION_STEPS=25000
+WORLD_STEPS=100
+IMITATION_STEPS=100
 ONLINE_STEPS=500000
 # 2x Stage 1A's default (4e-5) and 1.5x Stage 1B's (1e-4), for the shorter
 # budgets above.
@@ -113,7 +117,7 @@ IMITATION_LR=1.5e-4
 
 # Stage 2: the flow_reinforce actor objective with the settings of
 # slurm_peginsertion_*_online_flow_reinforce.sh, run in this same job right
-# after Stage 1B -- there is no PlaceSphere checkpoint to resume from.
+# after Stage 1B, on the models it hands over in memory.
 # Overridable from the submitting environment, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
 ACTOR_LR="${ACTOR_LR:-1e-5}"
@@ -127,7 +131,7 @@ IMAGINATION_MICROBATCH=32
 IMAG_HORIZON=15
 TRAIN_RATIO=64
 ONLINE_PRECISION=bfloat16
-CRITIC_WARMUP=150
+CRITIC_WARMUP=0
 ANCHOR_WINDOWS=8
 ANCHOR_WINDOW_MICROBATCH=4
 ANCHOR_ROWS=64
@@ -165,6 +169,7 @@ python -m sim_vla.training.pipeline \
   --num-envs $NUM_ENVS \
   --eval-sampler stochastic \
   --device cuda \
+  --save-checkpoints \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/dreamer
 
 # Stop GPU monitor

@@ -112,13 +112,13 @@ python -m sim_vla.download_pretrained --out "$HF_HOME"
 # documented example; NUM_PROCS is CPU-side (collect.py forces sim_backend=cpu
 # and batch size 1 per env -- the scripted solutions read an unbatched pose),
 # so it scales with cores, not with the single GPU shared for rendering.
-NUM_TRAJ=500
+NUM_TRAJ=1000
 NUM_PROCS=16
 # Server 1's own storage, not the repo-relative default: this mount is what
 # the training scripts in this folder symlink data/sim_vla_demos to.
 OUT_DIR=/home/tuannl/mnt_data/data/maniskill
 
-for ENV_ID in PickCube-v1 PlaceSphere-v1 PegInsertionSide-v1; do
+for ENV_ID in PlaceSphere-v1; do
   echo "--------------------------------"
   echo "[collect] $ENV_ID"
   echo "--------------------------------"

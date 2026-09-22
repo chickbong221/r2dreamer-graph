@@ -451,10 +451,13 @@ class OnlineTrainer:
     def update_progress(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Keep the progress head fitted to the observed-graph potential.
 
-        The head arrives trained from Stage 1A; it keeps training here because
-        the features it reads move with the world model. The objective is
-        :func:`sim_vla.training.progress.fit_progress`, the same one Stage 1A
-        uses, on features re-encoded by the just-updated world model.
+        The head arrives trained from Stage 1A, where it was trained jointly
+        with the world model; it keeps training here because the features it
+        reads move with the world model. Here the fit is detached, with the
+        head's own optimizer (:func:`sim_vla.training.progress.fit_progress`):
+        the same masked Huber objective Stage 1A adds to the world-model loss,
+        on features re-encoded by the just-updated world model, and it moves
+        the head alone.
         """
         if self.progress_opt is None or self.potential is None:
             return {}
