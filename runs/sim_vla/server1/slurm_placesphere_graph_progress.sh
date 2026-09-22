@@ -8,36 +8,21 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# sim_vla arm 3: graph + progress shaping (configs/experiments/graph_progress.
-# yaml), beta=0.05 from sim_vla/configs/base.yaml's model.progress.beta --
-# the same default configs/model/_base_.yaml uses for the simulator's own
-# graph arm. Actor/critic state is (h, z, g); the progress head regresses onto
-# SchedulePotential's observed-graph phase (scenegraph/configs/schedules/
-# PlaceSphere-v1.json + subtask_whitelists/PlaceSphere-v1), and beta*(gamma*
-# phi(s') - phi(s)) is added to the imagined advantage during stage 2 only --
-# it is never added to the environment reward that gets reported.
+# sim_vla arm 3: graph + progress shaping (configs/experiments/
+# graph_progress.yaml). Actor/critic state is (h, z, g); the progress head
+# regresses onto SchedulePotential's observed-graph phase and shapes the
+# imagined reward during Stage 2 only, with beta=0.05 from
+# sim_vla/configs/base.yaml -- never the environment reward that gets
+# reported. Compared against slurm_placesphere_baseline.sh at the same stage
+# budgets, which is what isolates the method.
 #
-# Compared against slurm_placesphere_baseline.sh's "dreamer" arm at the same
-# --world-steps/--imitation-steps/--online-steps: that isolates the graph +
-# progress method's effect, since every other setting matches.
-#
-# Needs data/sim_vla_demos/PlaceSphere-v1/demos.h5 -- run
-# slurm_collect_data.sh first. progress_module.preflight() (sim_vla/training/
-# progress.py) checks the schedule, the whitelist directory and the dataset's
-# recorded absolute-token vocabulary before Stage 1A starts, and refuses the
-# run rather than training a head on invented targets if any of them is
-# missing.
-#
-# Runs all three stages in one process (world model -> imitation -> online),
-# per sim_vla/training/pipeline.py; the stages hand their models over in
-# memory. --save-checkpoints additionally writes them under --out:
-# world_model.pt (+ normalization.json) after Stage 1A -- carrying the
-# progress head trained jointly with that world model -- imitation.pt after
-# Stage 1B, and online_latest.pt, rewritten every 10k env steps in Stage 2.
-# A later job can pass `--resume-from <that --out dir>` to restore Stage 1A
-# (head included) and 1B from the first two and go straight to online
-# training; Stage 2 itself is not resumed from online_latest.pt. A
-# world_model.pt written before joint progress pretraining is refused.
+# Needs data/sim_vla_demos/PlaceSphere-v1/demos.h5 -- run slurm_collect_data.sh
+# first. progress_module.preflight() refuses the run before Stage 1A if the
+# schedule, the whitelist directory or the dataset's recorded token vocabulary
+# is missing, rather than training a head on invented targets. The
+# world_model.pt written by --save-checkpoints carries the progress head
+# trained jointly with it, and --resume-from refuses one written before joint
+# pretraining. Anything not passed below is whatever base.yaml says.
 
 echo "================================="
 echo "Job started on $(hostname)"
@@ -46,7 +31,6 @@ echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
 echo "sim_vla: PlaceSphere-v1, arm=graph_progress (beta=0.05), actor=pathwise executed chunk"
 echo "================================="
 
-# Activate conda
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate dreamer
 
@@ -72,78 +56,45 @@ export LD_LIBRARY_PATH=$NVIDIA_USERSPACE_DIR:${LD_LIBRARY_PATH:-}
 export VK_DRIVER_FILES=$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json
 export VK_ICD_FILENAMES=$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json
 
-# Move to project directory
 cd $HOME/projects/r2dreamer-graph
 
-# Demos were collected by slurm_collect_data.sh into server 1's own storage,
-# not the repo-relative default (sim_vla/configs/base.yaml: data.root=
-# data/sim_vla_demos). sim_vla.training.pipeline has no --data-root flag, so
-# this symlink is what makes ${data.root}/<EnvId>/${data.name} resolve to the
-# real files.
+# The demos live in server 1's own storage and the pipeline has no --data-root
+# flag, so this symlink is what makes ${data.root}/<EnvId>/demos.h5 resolve.
 mkdir -p data
 ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
 
 export MS_ASSET_DIR=/mnt/data/tuannl
-
 export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
-
-# Matches slurm_collect_data.sh's HF_HOME: same cache, so this job loads the
-# already-downloaded SmolVLA weights instead of reaching the network again.
+# Same cache as slurm_collect_data.sh: SmolVLA is downloaded there already.
 export HF_HOME=/home/tuannl/mnt_data/mshab_transfer_checkpoint
-
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
-
-# As in the PegInsertion online scripts. Optional allocator aid; the
-# real memory controls are the microbatch settings below.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 mkdir -p $HOME/output
 
-# Print initial GPU state
 nvidia-smi
-
-# Monitor GPU every 100 seconds in background
 nvidia-smi -l 100 > $HOME/output/gpu_${SLURM_JOB_ID}.log &
 GPU_MONITOR_PID=$!
 
-# Generate timestamp properly
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Must match slurm_placesphere_baseline.sh's stage budgets -- the comparison
-# is only valid at equal steps. beta itself is not overridden here: it comes
-# from sim_vla/configs/base.yaml (0.05) via configs/experiments/
-# graph_progress.yaml turning progress.enabled on.
+# Must match slurm_placesphere_baseline.sh: the comparison is only valid at
+# equal steps and equal rates.
 WORLD_STEPS=30000
 IMITATION_STEPS=25000
 ONLINE_STEPS=500000
-# 2x Stage 1A's default (4e-5) and 1.5x Stage 1B's (1e-4), for the shorter
-# budgets above.
 WORLD_LR=1e-4
-IMITATION_LR=2e-4
+IMITATION_LR=1e-4
 
-# Stage 2: the online actor-critic, run in this same job right after Stage 1B,
-# on the models it hands over in memory. Every eligible replay state starts one
-# imagined rollout: the actor generates one action chunk there, the first
-# actor.execute of its actions (5, from sim_vla/configs/base.yaml) are stepped
-# through the world model, and the actor maximises that chunk's bootstrapped
-# return while the critic is fitted to the same return at the start state. The
-# environment replans on the same period, so the policy optimised is the policy
-# collecting.
 # Overridable from the submitting environment, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
-ACTOR_LR="${ACTOR_LR:-1e-5}"
-# Also Stage 1A/1B's batch: one shared setting, 16 either way.
-BATCH_SIZE=16
-# Starts imagined together. An update has no cap on its starts -- it imagines
-# every scored row of the replay batch, about 16 x 65 -- so this is what bounds
-# the memory one update uses.
+ACTOR_LR="${ACTOR_LR:-6e-5}"
+# Start states imagined together. An update has no cap on its starts -- it
+# imagines every scored row of the replay batch -- so this bounds its memory.
 IMAGINATION_MICROBATCH=32
-TRAIN_RATIO=64
-ONLINE_PRECISION=bfloat16
 CRITIC_WARMUP=150
-# Parallel online envs on the GPU backend, as the main trainer runs them.
 NUM_ENVS=128
 
 python -m sim_vla.training.pipeline \
@@ -155,10 +106,7 @@ python -m sim_vla.training.pipeline \
   --imitation-lr $IMITATION_LR \
   --online-steps $ONLINE_STEPS \
   --seed "$SEED" \
-  --batch-size $BATCH_SIZE \
   --imagination-microbatch $IMAGINATION_MICROBATCH \
-  --train-ratio $TRAIN_RATIO \
-  --online-precision $ONLINE_PRECISION \
   --critic-warmup $CRITIC_WARMUP \
   --actor-lr "$ACTOR_LR" \
   --num-envs $NUM_ENVS \
@@ -166,7 +114,6 @@ python -m sim_vla.training.pipeline \
   --save-checkpoints \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/graph_progress
 
-# Stop GPU monitor
 kill $GPU_MONITOR_PID
 
 echo "Job finished"
