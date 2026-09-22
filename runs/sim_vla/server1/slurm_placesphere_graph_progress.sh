@@ -32,7 +32,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PlaceSphere-v1, arm=graph_progress (beta=0.05)"
+echo "sim_vla: PlaceSphere-v1, arm=graph_progress (beta=0.05), actor=flow_reinforce"
 echo "================================="
 
 # Activate conda
@@ -83,6 +83,11 @@ export HF_HOME=/home/tuannl/mnt_data/mshab_transfer_checkpoint
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 
+# As in the PegInsertion flow_reinforce scripts. Optional allocator aid; the
+# real memory controls are the microbatch settings below.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+
 mkdir -p $HOME/output
 
 # Print initial GPU state
@@ -99,16 +104,67 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # is only valid at equal steps. beta itself is not overridden here: it comes
 # from sim_vla/configs/base.yaml (0.05) via configs/experiments/
 # graph_progress.yaml turning progress.enabled on.
-WORLD_STEPS=100000
-IMITATION_STEPS=50000
+WORLD_STEPS=30000
+IMITATION_STEPS=25000
 ONLINE_STEPS=500000
+# 2x Stage 1A's default (4e-5) and 1.5x Stage 1B's (1e-4), for the shorter
+# budgets above.
+WORLD_LR=8e-5
+IMITATION_LR=1.5e-4
+
+# Stage 2: the flow_reinforce actor objective with the settings of
+# slurm_peginsertion_*_online_flow_reinforce.sh, run in this same job right
+# after Stage 1B -- there is no PlaceSphere checkpoint to resume from.
+# Overridable from the submitting environment, e.g. SEED=1 sbatch <this file>.
+SEED="${SEED:-0}"
+ACTOR_LR="${ACTOR_LR:-1e-5}"
+DEMO_ANCHOR="${DEMO_ANCHOR:-0.5}"
+FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.03}"
+ACTOR_TRANSITION_MICROBATCH="${ACTOR_TRANSITION_MICROBATCH:-64}"
+# Also Stage 1A/1B's batch: one shared setting, 16 either way.
+BATCH_SIZE=16
+IMAGINATION_BATCH=128
+IMAGINATION_MICROBATCH=32
+IMAG_HORIZON=15
+TRAIN_RATIO=64
+ONLINE_PRECISION=bfloat16
+CRITIC_WARMUP=150
+ANCHOR_WINDOWS=8
+ANCHOR_WINDOW_MICROBATCH=4
+ANCHOR_ROWS=64
+ANCHOR_MICROBATCH=16
+GRAD_REPORT_EVERY=50
+# Parallel online envs on the GPU backend, as the main trainer runs them.
+NUM_ENVS=128
 
 python -m sim_vla.training.pipeline \
   --task placesphere \
   --experiment graph_progress \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
+  --world-lr $WORLD_LR \
+  --imitation-lr $IMITATION_LR \
   --online-steps $ONLINE_STEPS \
+  --seed "$SEED" \
+  --batch-size $BATCH_SIZE \
+  --imagination-batch $IMAGINATION_BATCH \
+  --imagination-microbatch $IMAGINATION_MICROBATCH \
+  --imag-horizon $IMAG_HORIZON \
+  --train-ratio $TRAIN_RATIO \
+  --online-precision $ONLINE_PRECISION \
+  --critic-warmup $CRITIC_WARMUP \
+  --actor-objective flow_reinforce \
+  --flow-noise-std "$FLOW_NOISE_STD" \
+  --actor-transition-microbatch "$ACTOR_TRANSITION_MICROBATCH" \
+  --actor-lr "$ACTOR_LR" \
+  --demo-anchor "$DEMO_ANCHOR" \
+  --anchor-windows $ANCHOR_WINDOWS \
+  --anchor-window-microbatch $ANCHOR_WINDOW_MICROBATCH \
+  --anchor-rows $ANCHOR_ROWS \
+  --anchor-microbatch $ANCHOR_MICROBATCH \
+  --grad-report-every $GRAD_REPORT_EVERY \
+  --num-envs $NUM_ENVS \
+  --eval-sampler stochastic \
   --device cuda \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/graph_progress
 
