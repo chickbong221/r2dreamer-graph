@@ -2,7 +2,7 @@
 #SBATCH --job-name=r2d-svla-collect
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=0
 #SBATCH --output=/home/%u/output/%x_%j.out
