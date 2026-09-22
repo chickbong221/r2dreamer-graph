@@ -112,8 +112,8 @@ IMITATION_STEPS=100
 ONLINE_STEPS=500000
 # 2x Stage 1A's default (4e-5) and 1.5x Stage 1B's (1e-4), for the shorter
 # budgets above.
-WORLD_LR=8e-5
-IMITATION_LR=1.5e-4
+WORLD_LR=1e-4
+IMITATION_LR=2e-4
 
 # Stage 2: the flow_reinforce actor objective with the settings of
 # slurm_peginsertion_*_online_flow_reinforce.sh, run in this same job right
