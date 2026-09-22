@@ -69,77 +69,20 @@ online:
   train_ratio: 64
   # Mixed precision for online training; checkpoint parameters stay unchanged.
   precision: bfloat16
-  imagination_batch: 256
-  # All selected starts contribute to one update, in bounded-memory groups.
+  # Start states imagined together, with gradients accumulated across groups.
+  # Every eligible replay state is a start -- there is no cap on how many --
+  # so this is what bounds an update's memory. 0 imagines them all at once.
   imagination_microbatch: 16
-  # null inherits imag_horizon from the original Dreamer model config.
-  imag_horizon: null
-
-  # --------------------------------------------------------- actor objective
-  # How the actor's gradient is formed. Both arms of an experiment must use
-  # the same value: this is the estimator, not the state, and a difference
-  # here would not be a difference between the arms being compared.
-  #
-  # pathwise         differentiate the imagined return through every flow
-  #                  step. The original, and the default: an existing run is
-  #                  unaffected by these settings existing.
-  # flow_reinforce   sample a stochastic flow path with no graph, then
-  #                  differentiate log pi of that recorded path against a
-  #                  detached advantage. No PPO: no importance ratio, no
-  #                  clipping, no old-policy copy, one optimizer step per
-  #                  freshly collected imagined batch.
-  actor_objective: pathwise
-  # Injected Gaussian noise for flow_reinforce's sampler, in normalized action
-  # coordinates. Required and strictly positive for that objective; ignored by
-  # pathwise. This is a nominal aggregate scale, not a guarantee about the
-  # final action's variance, and it changes the sampling distribution even
-  # before any training -- pilot it against the restored Stage 1B policy
-  # rather than assuming a value. Candidates to try: 0.01, 0.03, 0.1.
-  flow_noise_std: 0.0
-  # Versioned, and recorded in the checkpoint: two runs under different
-  # schedules are not comparable, and the scale alone does not say which ran.
-  flow_noise_schedule: constant_per_step_scaled_by_sqrt_k
-  # Scored (environment-step, start-state, flow-step) tuples per backward pass.
-  # This is what bounds the actor's backward memory under flow_reinforce, the
-  # way imagination_microbatch bounds collection. Independent of both.
-  actor_transition_microbatch: 16
-  # Actor-critic updates before the actor is allowed to step at all. Neither
-  # objective has a learning signal through a freshly initialised value head,
-  # so this is not a safety margin -- it is the number of updates it takes for
-  # the critic to mean something.
+  # Actor-critic updates before the actor is allowed to step at all. The
+  # reward and value heads start flat, so the imagined return does not depend
+  # on the action and the actor gradient is exactly zero through them: this is
+  # not a safety margin, it is how long the critic takes to mean something.
   critic_warmup: 150
-  # Flow-matching imitation loss on demonstrations, summed into the same actor
-  # update. Zero disables it and does no demonstration work at all; a nonzero
-  # value requires a demonstration sampler and fails loudly without one.
-  # Not a proven value -- judge it by retained task success, not by the ratio
-  # of two losses.
-  demo_anchor: 0.0
-  # Two separate budgets, because they cost different things. anchor_windows
-  # is how many demonstration *windows* are drawn and encoded -- one world
-  # model forward each, over the whole window. anchor_rows is how many
-  # eligible *positions* survive to be conditioned -- one actor forward each.
-  # One window yields many eligible rows, so asking the sampler for
-  # anchor_rows windows paid for the expensive half about sequence_length
-  # times over.
-  anchor_windows: 8
-  anchor_window_microbatch: 4
-  anchor_rows: 64
-  anchor_microbatch: 16
-  anchor_retries: 4
-  # How often to pay for a separate RL-versus-anchor gradient measurement.
-  # Exact separation needs a snapshot of every gradient, so it runs on a
-  # cadence; 0 disables it. Worth keeping on: the two terms can differ by
-  # enough orders of magnitude that the anchor vanishes into float32 rounding
-  # when they are summed, which looks identical to a balanced anchor unless
-  # anchor_grad_ratio is logged.
-  grad_report_every: 50
-  # Per-phase wall time and CUDA peak memory for each actor update. Off by
-  # default: measuring GPU time means synchronizing at every phase boundary,
-  # which is itself a cost. Turn it on for a profiling run, not for training.
+  # Per-phase wall time and CUDA peak memory for each actor-critic update. Off
+  # by default: measuring GPU time means synchronizing at every phase
+  # boundary, which is itself a cost. Turn it on for a profiling run.
   profile: false
-  # null keeps ActorCriticConfig's own 3e-5. Exposed because a score-function
-  # estimator is not the pathwise one and does not inherit its tuning; pilot
-  # lower values first.
+  # null keeps ActorCriticConfig's own 3e-5.
   actor_lr: null
   # Parallel online envs, like the main trainer's env_num. 1 is the single CPU
   # env the demonstrations were collected in; more than 1 runs ManiSkill's GPU
@@ -152,13 +95,6 @@ online:
   # env and never at more, so a parallel run trains on num_envs fixed shapes
   # unless this is set (1 rebuilds every round, and a GPU rebuild is slow).
   reconfiguration_freq: null
-  # Recorded rather than chosen: the advantage is divided once by the Dreamer
-  # return EMA's spread, floored at 1, exactly as dreamer.py does it.
-  advantage_scale: return_ema
-  # Which sampler the reported evaluation uses. flow_reinforce trains a
-  # stochastic policy, so that is the policy to evaluate; a deterministic run
-  # may be reported beside it but is a different policy and is labelled as one.
-  eval_sampler: stochastic
 
 actor:
   # "The pretrained checkpoint" is not a reproducible object without a
@@ -175,7 +111,11 @@ actor:
   # model was trained with. These are not defaults to be assumed: the loaded
   # config is what decides, and the tests assert against it.
   chunk_size: 0            # actions predicted per call
-  execute: 1               # actions executed before replanning
+  # Actions executed from one generated chunk before replanning. One setting
+  # for the environment and for imagination: an imagined rollout executes the
+  # same number of actions from one chunk, so the policy being optimised is
+  # the policy being run. Must not exceed chunk_size.
+  execute: 5
   flow_steps: 0            # euler steps; 0 takes the checkpoint's num_steps
   # One MLP-generated state token beside the tokenized instruction. There is
   # no context-token block.

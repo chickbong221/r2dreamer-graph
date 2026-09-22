@@ -239,15 +239,50 @@ class TestRecurrentInference(unittest.TestCase):
         self.assertGreater(policy.clipped, 0,
                            "the clip counter was never incremented")
 
-    def test_execute_beyond_one_is_refused_for_online_training(self):
+    def test_it_replans_once_per_execute_steps(self):
+        """One chunk generation, then its actions in order -- the same shape
+        imagination rolls out. Every observation is still encoded, including
+        the ones no planning happens at."""
         require_torch()
-        from sim_vla.training.online import LatentPolicy
+        policy, _model, actor = self.policy(execute=3)
+        plans = []
+        original = actor.condition
+        actor.condition = lambda feat, instruction=None: (
+            plans.append(1), original(feat, instruction))[1]
 
-        model, _cfg = build_model()
-        actor = tiny_actor(model.feature_dim, chunk=4)
-        with self.assertRaises(NotImplementedError):
-            LatentPolicy(model, actor, device="cpu", coords=coordinates(),
-                         execute=2)
+        policy.reset()
+        env = FakeEnv(steps=12)
+        obs = env.reset(0)
+        states = []
+        for _ in range(6):
+            action = policy(obs)
+            states.append(tuple(t.clone() for t in policy._state))
+            obs = env.step(action)["obs"]
+
+        self.assertEqual(len(plans), 2, "one plan per execute=3 actions")
+        self.assertEqual(len(env.commands), 6)
+        # Distinct commands inside one chunk: the queue is being consumed, not
+        # a single action repeated.
+        first = np.stack(env.commands[:3])
+        self.assertFalse(np.allclose(first[0], first[1]))
+        self.assertFalse(np.allclose(first[1], first[2]))
+        # And the recurrent state advanced at every step, planning or not.
+        for step in range(1, len(states)):
+            moved = any(not np.allclose(a.numpy(), b.numpy())
+                        for a, b in zip(states[step - 1], states[step]))
+            self.assertTrue(moved, f"the state stalled at step {step}")
+
+    def test_reset_clears_a_partly_consumed_queue(self):
+        """An episode must not start on actions planned for the previous one."""
+        require_torch()
+        policy, _model, _actor = self.policy(execute=4)
+        policy.reset()
+        env = FakeEnv(steps=8)
+        obs = env.reset(0)
+        policy(obs)                      # plans four, consumes one
+        self.assertEqual(len(policy._queue), 3)
+        policy.reset()
+        self.assertEqual(policy._queue, [])
 
     def test_execute_outside_the_chunk_is_refused(self):
         require_torch()
@@ -432,15 +467,15 @@ class TestOnlineLoop(unittest.TestCase):
         critic = ValueCritic(model_cfg, model.feature_dim)
         demo = DemoStub(fill_replay(OnlineReplay(seed=0)), 4, 1)
 
-        cfg = {"task": {"instruction": "do the thing"}, "actor": {"execute": 1},
+        cfg = {"task": {"instruction": "do the thing"}, "actor": {"execute": 2},
                "eval": {"seeds_start": 900000}}
         config = OnlineConfig(total_steps=8, episodes_per_collect=2,
                               train_ratio=4, batch_size=4, precision=precision,
                               sequence_length=4, burn_in=1,
-                              imagination_batch=8, max_episode_steps=4,
+                              max_episode_steps=4,
                               demo_fraction=0.5, seed=7)
-        ac = ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0,
-                              imagination_microbatch=3, precision=precision)
+        ac = ActorCriticConfig(execute=2, flow_steps=2, critic_warmup=0,
+                               imagination_microbatch=3, precision=precision)
 
         before = [p.detach().clone() for p in model.parameters()]
         seen: list[dict] = []
@@ -524,13 +559,13 @@ class TestParallelLoop(unittest.TestCase):
         actor = tiny_actor(model.feature_dim)
         critic = ValueCritic(model_cfg, model.feature_dim)
         demo = DemoStub(fill_replay(OnlineReplay(seed=0)), 4, 1)
-        cfg = {"task": {"instruction": "do the thing"}, "actor": {"execute": 1},
+        cfg = {"task": {"instruction": "do the thing"}, "actor": {"execute": 2},
                "eval": {"seeds_start": 900000}}
         settings = dict(total_steps=32, train_ratio=2, batch_size=4,
-                        sequence_length=4, burn_in=1, imagination_batch=8,
+                        sequence_length=4, burn_in=1,
                         max_episode_steps=4, demo_fraction=0.5, seed=7)
         settings |= overrides
-        ac = ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0)
+        ac = ActorCriticConfig(execute=2, flow_steps=2, critic_warmup=0)
         return cfg, model, actor, critic, demo, OnlineConfig(**settings), ac
 
     def run_loop(self, env, **overrides):

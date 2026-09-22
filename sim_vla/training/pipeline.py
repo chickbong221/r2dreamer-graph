@@ -36,6 +36,7 @@ from . import pretrain_world_model
 from .pretrain_world_model import seed_everything
 from . import progress as progress_module
 from . import train_imitation
+from . import actor_critic
 from .actor_critic import ActorCriticConfig
 from .online import OnlineConfig, run_online
 from .progress import ProgressConfig
@@ -57,7 +58,6 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         total_steps=int(total_steps),
         train_ratio=float(online_settings.get("train_ratio", 64)),
         precision=str(online_settings.get("precision", "bfloat16")),
-        imagination_batch=int(online_settings.get("imagination_batch", 256)),
         batch_size=int(cfg["data"]["batch_size"]),
         sequence_length=int(cfg["data"]["sequence_length"]),
         burn_in=int(cfg["data"]["burn_in"]),
@@ -69,32 +69,19 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         save_checkpoints=bool(save_checkpoints),
         eval_episodes=int(cfg["eval"]["episodes"]))
     ac_kwargs = dict(
-        horizon=int(online_settings.get("imag_horizon")
-                    or model_cfg.imag_horizon),
+        # The number of actions one generated chunk contributes, in the
+        # environment and in imagination alike. Taken from actor.execute so
+        # there is exactly one setting for it.
+        execute=int((cfg.get("actor") or {}).get("execute") or 1),
+        # The root model's horizon decides the discount, as it does for the
+        # simulator's own trainer. It is unrelated to how long an imagined
+        # rollout is, which is actor.execute.
         discount=1.0 - 1.0 / float(model_cfg.horizon),
-        lam=float(model_cfg.lamb),
         imagination_microbatch=int(
             online_settings.get("imagination_microbatch", 16)),
         precision=online_cfg.precision,
         flow_steps=int(flow_steps),
-        # The actor objective and its dependants. Defaulted to the original
-        # behaviour, so a config written before this existed resolves to
-        # exactly what it resolved to then.
-        actor_objective=str(online_settings.get("actor_objective", "pathwise")),
-        flow_noise_std=float(online_settings.get("flow_noise_std", 0.0) or 0.0),
-        flow_noise_schedule=str(online_settings.get(
-            "flow_noise_schedule", "constant_per_step_scaled_by_sqrt_k")),
-        actor_transition_microbatch=int(
-            online_settings.get("actor_transition_microbatch", 16)),
         critic_warmup=int(online_settings.get("critic_warmup", 150)),
-        demo_anchor=float(online_settings.get("demo_anchor", 0.0) or 0.0),
-        anchor_windows=int(online_settings.get("anchor_windows", 8)),
-        anchor_window_microbatch=int(
-            online_settings.get("anchor_window_microbatch", 4)),
-        anchor_rows=int(online_settings.get("anchor_rows", 64)),
-        anchor_microbatch=int(online_settings.get("anchor_microbatch", 16)),
-        anchor_retries=int(online_settings.get("anchor_retries", 4)),
-        grad_report_every=int(online_settings.get("grad_report_every", 50)),
         profile=bool(online_settings.get("profile", False)),
         # Starts at zero and is set per update from the warm-up; the
         # configured beta is the value it warms up *to*.
@@ -299,34 +286,20 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             "sequence_length": online_cfg.sequence_length,
             "train_ratio": online_cfg.train_ratio,
             "precision": online_cfg.precision,
-            "imagination_batch": online_cfg.imagination_batch,
             "imagination_microbatch": ac_cfg.imagination_microbatch,
-            "imag_horizon": ac_cfg.horizon,
             "discount": ac_cfg.discount,
-            "lambda": ac_cfg.lam,
             "flow_steps": ac_cfg.flow_steps,
-            # The actor objective and everything that only means something
-            # under it. Logged resolved rather than as written, because these
-            # are what the run actually used and what a later comparison has
-            # to match on.
-            "actor_objective": ac_cfg.actor_objective,
+            # What the actor update is, resolved rather than as written: this
+            # is what a later comparison has to match on.
+            "actor_objective": actor_critic.OBJECTIVE,
+            "return": actor_critic.RETURN,
+            "start_selection": actor_critic.START_SELECTION,
+            "execute": ac_cfg.execute,
             "actor_lr": ac_cfg.actor_lr,
-            "flow_noise_std": ac_cfg.flow_noise_std,
-            "flow_noise_schedule": ac_cfg.flow_noise_schedule,
-            "actor_transition_microbatch": ac_cfg.actor_transition_microbatch,
-            "demo_anchor": ac_cfg.demo_anchor,
-            "anchor_windows": ac_cfg.anchor_windows,
-            "anchor_window_microbatch": ac_cfg.anchor_window_microbatch,
-            "anchor_rows": ac_cfg.anchor_rows,
-            "anchor_microbatch": ac_cfg.anchor_microbatch,
+            "critic_lr": ac_cfg.critic_lr,
             "critic_warmup": ac_cfg.critic_warmup,
-            "grad_report_every": ac_cfg.grad_report_every,
             "seed": int(cfg["data"]["seed"]),
             "profile": ac_cfg.profile,
-            "advantage_scale": str(
-                (cfg.get("online") or {}).get("advantage_scale", "return_ema")),
-            "eval_sampler": str(
-                (cfg.get("online") or {}).get("eval_sampler", "stochastic")),
         }
         print(f"[pipeline] online settings: {json.dumps(settings)}", flush=True)
         report["online_settings"] = settings
@@ -351,7 +324,58 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         stage_a.data.close()
 
 
+# Flags the online redesign removed, and what to do instead. argparse would
+# reject them as unknown, which says they are gone but not why -- and a script
+# that silently lost a flag it thought it was setting would be running a
+# different experiment.
+REMOVED_FLAGS = {
+    "--actor-objective":
+        "there is one online objective: the pathwise return of an executed "
+        "chunk. Drop the flag.",
+    "--flow-noise-std":
+        "the stochastic flow sampler went with flow_reinforce. Drop the flag.",
+    "--actor-transition-microbatch":
+        "no flow transition is scored any more; --imagination-microbatch is "
+        "what bounds the actor's memory.",
+    "--imagination-batch":
+        "imagination starts from every eligible replay state, so there is no "
+        "cap to set; --imagination-microbatch is the memory control.",
+    "--imag-horizon":
+        "a rollout is exactly actor.execute transitions of one generated "
+        "chunk. Set actor.execute in the config.",
+    "--demo-anchor": "online imitation was removed; Stage 1B imitates.",
+    "--anchor-rows": "online imitation was removed.",
+    "--anchor-microbatch": "online imitation was removed.",
+    "--anchor-windows": "online imitation was removed.",
+    "--anchor-window-microbatch": "online imitation was removed.",
+    "--grad-report-every":
+        "it measured the RL gradient against the imitation anchor's, and "
+        "there is no anchor.",
+    "--eval-sampler":
+        "there is one sampler, so the evaluation already runs the policy "
+        "being trained.",
+}
+
+
+def refuse_removed_flags(argv) -> None:
+    """Fail on a flag this pipeline no longer has, saying what replaced it."""
+    used = [flag for flag in REMOVED_FLAGS
+            if any(str(item) == flag or str(item).startswith(flag + "=")
+                   for item in (argv or []))]
+    if not used:
+        return
+    detail = "\n".join(f"  {flag}: {REMOVED_FLAGS[flag]}" for flag in used)
+    raise SystemExit(
+        "these flags were removed with the online actor redesign:\n" + detail
+        + "\nThe online update now imagines one generated chunk from every "
+        "eligible replay state, executes actor.execute of its actions, and "
+        "maximises that chunk's bootstrapped return.")
+
+
 def parse_args(argv=None):
+    import sys
+
+    refuse_removed_flags(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description="Run Stage 1A, 1B and 2 in one process")
     parser.add_argument("--task", default="pickcube")
@@ -376,63 +400,26 @@ def parse_args(argv=None):
                         help="one seed for the whole run: model, adapter and "
                              "critic initialisation, the demonstration "
                              "sampler, the online replay, environment "
-                             "collection, the flow sampler and the anchor's "
-                             "row selection. Overrides data.seed.")
+                             "collection and the flow sampler. Overrides "
+                             "data.seed.")
     parser.add_argument("--train-ratio", type=float, default=None,
                         help="online replay timesteps per environment step; "
                              "0 uses the legacy 8 updates per collection")
     parser.add_argument("--online-precision", choices=("float32", "bfloat16"),
                         default=None)
-    parser.add_argument("--imagination-batch", type=int, default=None,
-                        help="total start states per update; 0 uses all valid starts")
     parser.add_argument("--imagination-microbatch", type=int, default=None,
-                        help="starts processed at once with gradient accumulation; "
-                             "0 processes the whole imagination batch at once")
-    parser.add_argument("--imag-horizon", type=int, default=None,
-                        help="imagined transitions; defaults to Dreamer's model config")
-    parser.add_argument("--actor-objective",
-                        choices=("pathwise", "flow_reinforce"), default=None,
-                        help="how the actor's gradient is formed: differentiate "
-                             "the imagined return through the sampler "
-                             "(pathwise, the default), or differentiate "
-                             "log pi of a recorded stochastic flow path "
-                             "against a detached advantage (flow_reinforce)")
-    parser.add_argument("--flow-noise-std", type=float, default=None,
-                        help="injected Gaussian noise per flow transition; "
-                             "required and positive for flow_reinforce")
-    parser.add_argument("--actor-transition-microbatch", type=int, default=None,
-                        help="scored flow transitions per backward pass; "
-                             "bounds flow_reinforce's actor memory")
-    parser.add_argument("--demo-anchor", type=float, default=None,
-                        help="weight on the demonstration flow-matching loss "
-                             "summed into the actor update; 0 disables it")
-    parser.add_argument("--anchor-rows", type=int, default=None,
-                        help="demonstration rows drawn per anchored update")
-    parser.add_argument("--anchor-microbatch", type=int, default=None,
-                        help="anchor rows conditioned at once")
-    parser.add_argument("--anchor-windows", type=int, default=None,
-                        help="demonstration windows drawn and encoded per "
-                             "anchored update; separate from --anchor-rows, "
-                             "which caps the eligible positions kept")
-    parser.add_argument("--anchor-window-microbatch", type=int, default=None,
-                        help="windows encoded at once; bounds the anchor's "
-                             "world-model memory")
+                        help="start states imagined at once, with gradient "
+                             "accumulation across groups; 0 imagines every "
+                             "eligible replay state together")
     parser.add_argument("--critic-warmup", type=int, default=None,
                         help="actor-critic updates before the actor steps; "
                              "the actor has no signal through a fresh value "
                              "head, so this is a requirement not a margin")
-    parser.add_argument("--grad-report-every", type=int, default=None,
-                        help="updates between separate RL/anchor gradient "
-                             "measurements; 0 disables them")
     parser.add_argument("--profile-online", action="store_true",
                         help="measure per-phase wall time and CUDA peak "
-                             "memory for each actor update")
+                             "memory for each actor-critic update")
     parser.add_argument("--actor-lr", type=float, default=None,
-                        help="actor learning rate; a score-function estimator "
-                             "does not inherit the pathwise one's tuning")
-    parser.add_argument("--eval-sampler",
-                        choices=("stochastic", "deterministic"), default=None,
-                        help="which sampler the reported evaluation uses")
+                        help="actor learning rate")
     parser.add_argument("--num-envs", type=int, default=None,
                         help="parallel online envs, stepped in lockstep with "
                              "updates between steps; more than 1 runs "
@@ -471,24 +458,10 @@ def main(argv=None) -> int:
     online_overrides = {}
     for key, value in (("train_ratio", args.train_ratio),
                        ("precision", args.online_precision),
-                       ("imagination_batch", args.imagination_batch),
                        ("imagination_microbatch", args.imagination_microbatch),
-                       ("imag_horizon", args.imag_horizon),
-                       ("actor_objective", args.actor_objective),
-                       ("flow_noise_std", args.flow_noise_std),
-                       ("actor_transition_microbatch",
-                        args.actor_transition_microbatch),
-                       ("demo_anchor", args.demo_anchor),
-                       ("anchor_rows", args.anchor_rows),
-                       ("anchor_microbatch", args.anchor_microbatch),
-                       ("anchor_windows", args.anchor_windows),
-                       ("anchor_window_microbatch",
-                        args.anchor_window_microbatch),
                        ("critic_warmup", args.critic_warmup),
-                       ("grad_report_every", args.grad_report_every),
                        ("profile", True if args.profile_online else None),
                        ("actor_lr", args.actor_lr),
-                       ("eval_sampler", args.eval_sampler),
                        ("num_envs", args.num_envs),
                        ("reconfiguration_freq", args.reconfiguration_freq)):
         if value is not None:

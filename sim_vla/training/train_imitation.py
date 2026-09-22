@@ -45,7 +45,6 @@ frozen forward pass and cannot go stale.
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -56,7 +55,6 @@ import torch
 from ..data.batch import to_model_batch
 
 from ..models.flow_sampler import flow_matching_loss
-from .precision import autocast
 from ..runtime.checkpoint import CheckpointMeta, load, save
 
 # The canonical key a window exposes for the action taken *at* each row.
@@ -103,78 +101,44 @@ def chunk_targets(targets: torch.Tensor, available: torch.Tensor,
     return gathered, mask, eligible
 
 
-def encode_windows(world_model, batch: Dict[str, torch.Tensor], *,
-                   window_microbatch: int = 0, precision: Optional[str] = None
+def encode_windows(world_model, batch: Dict[str, torch.Tensor]
                    ) -> torch.Tensor:
-    """Posterior features for a batch of windows, in bounded-memory groups.
+    """Posterior features for a batch of windows, every window encoded whole.
 
-    Groups are taken along the *window* axis and every window is encoded
-    whole. Splitting the time axis instead would cut each window's recurrent
-    history, and the posterior at row ``t`` would no longer be the one that
-    consumed rows ``0..t``: the causality this feature depends on is a
-    property of the whole window, not of the row.
-
-    ``window_microbatch=0`` encodes everything at once, which is what Stage 1B
-    does and what this used to do unconditionally.
+    Splitting the time axis would cut each window's recurrent history, and the
+    posterior at row ``t`` would no longer be the one that consumed rows
+    ``0..t``: the causality this feature depends on is a property of the whole
+    window, not of the row.
     """
-    windows = int(batch["loss_mask"].shape[0])
-    group = int(window_microbatch) or windows
-    context = (autocast(next(world_model.parameters()).device, precision)
-               if precision else contextlib.nullcontext())
-    feats = []
-    for offset in range(0, windows, group):
-        stop = offset + group
-        piece = {
-            key: (value[offset:stop]
-                  if torch.is_tensor(value) and value.ndim >= 1
-                  and int(value.shape[0]) == windows else value)
-            for key, value in batch.items()}
-        with torch.no_grad(), context:
-            out = world_model.observe(piece)
-            # float32 regardless of the autocast used to get here: what the
-            # adapter and the density arithmetic downstream expect.
-            feats.append(world_model.features(out["post"]).float())
-    return torch.cat(feats, dim=0) if len(feats) > 1 else feats[0]
+    with torch.no_grad():
+        out = world_model.observe(batch)
+        # float32 regardless of any autocast used to get here: what the
+        # adapter and the flow loss downstream expect.
+        return world_model.features(out["post"]).float()
 
 
-def prepare_anchor_rows(world_model, batch: Dict[str, torch.Tensor],
-                        chunk_size: int, *, max_rows: int = 0,
-                        generator=None, window_microbatch: int = 0,
-                        precision: Optional[str] = None
-                        ) -> Optional[Tuple[torch.Tensor, ...]]:
+def prepare_imitation_rows(world_model, batch: Dict[str, torch.Tensor],
+                           chunk_size: int
+                           ) -> Optional[Tuple[torch.Tensor, ...]]:
     """Eligible ``(feature, action chunk, chunk mask)`` rows from one window.
 
-    Extracted from :meth:`ImitationTrainer.loss` so Stage 1B and the Stage 2
-    demonstration anchor supervise *the same thing*. An anchor that rebuilt
-    this alignment separately would be a second, silently divergent definition
-    of what a demonstration row is -- and the alignment is the part that was
-    hard to get right: the chunk comes from ``action_target``, not from
-    ``action``, which is the previous action the posterior already consumed.
+    Stage 1B's supervision, in one place: the chunk comes from
+    ``action_target``, not from ``action``, which is the previous action the
+    posterior already consumed, and a row is eligible only if it is scored and
+    has a target of its own.
 
     Features are posterior and detached: the world model is never trained by
-    the actor's objective, in either stage.
+    the actor's objective.
 
-    Two budgets, deliberately separate. How many *windows* are drawn and
-    encoded is the caller's `demo_sampler.batch(...)` size and costs a
-    world-model forward pass each; how many *eligible rows* survive is
-    ``max_rows`` and costs actor conditioning each. Conflating them made the
-    online anchor encode one whole window per row it intended to keep, which
-    is the expensive half done 8x over for nothing. ``window_microbatch``
-    bounds the encoding itself.
-
-    ``max_rows`` caps the eligible rows, sampled without replacement. Stage 1B
-    passes zero and keeps them all. Returns ``None`` when no window has an
-    eligible row at all, which the caller must handle rather than average over
-    an empty selection.
+    Returns ``None`` when no window has an eligible row at all, which the
+    caller must handle rather than average over an empty selection.
     """
     if TARGET_KEY not in batch:
         raise KeyError(
             f"the batch has no {TARGET_KEY!r}; imitation is supervised on "
             "the action taken at each row, not on the previous action the "
             f"posterior consumed. Windows carry {sorted(batch)[:10]}")
-    feat = encode_windows(world_model, batch,
-                          window_microbatch=window_microbatch,
-                          precision=precision)
+    feat = encode_windows(world_model, batch)
     scored = batch["loss_mask"].bool()
     # The target axis is longer than the observation axis by the lookahead,
     # so eligibility is built from its leading rows only.
@@ -189,10 +153,6 @@ def prepare_anchor_rows(world_model, batch: Dict[str, torch.Tensor],
     keep = torch.nonzero(flat_eligible, as_tuple=False).squeeze(-1)
     if keep.numel() == 0:
         return None
-    if max_rows and keep.numel() > int(max_rows):
-        pick = torch.randperm(keep.numel(), device=keep.device,
-                              generator=generator)[: int(max_rows)]
-        keep = keep[pick]
 
     # Selected before conditioning: the flow forward is the expensive part
     # and there is no reason to run it on rows that are masked out.
@@ -265,8 +225,8 @@ class ImitationTrainer:
             return self.world_model.features(out["post"])
 
     def loss(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict]:
-        rows = prepare_anchor_rows(self.world_model, batch,
-                                   self.config.chunk_size)
+        rows = prepare_imitation_rows(self.world_model, batch,
+                                      self.config.chunk_size)
         if rows is None:
             # Explicit rather than a NaN mean over an empty selection. The
             # caller skips the optimizer step; a batch of pure burn-in is a

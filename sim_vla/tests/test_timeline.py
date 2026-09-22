@@ -5,11 +5,10 @@ a stylistic question: the reward head predicts the reward that arrived at a
 state, so the reward belonging to a transition is the successor's. Reading it
 one step early takes a reward no imagined action can influence and drops the
 reward earned by the last action -- and the run trains, the return descends,
-and the final action of every rollout learns from nothing.
+and the final action of every chunk learns from nothing.
 
-The lambda-return cases are hand-computed and written out, horizon one
-included, because a recurrence that is wrong by one step still produces
-plausible numbers.
+The second half is about reach: every one of the executed actions has to be
+able to move the objective, and nothing outside the actor may be trained by it.
 """
 
 from __future__ import annotations
@@ -19,6 +18,8 @@ from types import SimpleNamespace
 
 from .common import (DummyExpert, fake_batch, obs_shapes, require_torch,
                      small_model_config)
+
+EXECUTE = 5
 
 
 def excite(module, scale: float = 0.1, seed: int = 0):
@@ -78,48 +79,12 @@ def build(graph_enabled=False, lively=True):
     return model, critic, batch
 
 
-class TestLambdaReturn(unittest.TestCase):
-    """Hand-computed, including horizon one."""
+def config(**overrides):
+    from sim_vla.training.actor_critic import ActorCriticConfig
 
-    def test_horizon_one(self):
-        torch = require_torch()
-        from sim_vla.training.imagination import lambda_return
-
-        # carry starts at value[-1]; with one step the lam mixture collapses,
-        # because value[step + 1] and carry are the same tensor:
-        #     G_0 = r_0 + gamma * c_0 * v_1
-        reward = torch.tensor([[2.0]])
-        value = torch.tensor([[10.0], [5.0]])
-        cont = torch.tensor([[1.0]])
-        out = lambda_return(reward, value, cont, 0.9, 0.95)
-        self.assertEqual(tuple(out.shape), (1, 1))
-        self.assertAlmostEqual(float(out[0, 0]), 2.0 + 0.9 * 5.0, places=5)
-
-    def test_horizon_one_with_a_terminal_successor(self):
-        """cont = 0 removes the bootstrap entirely."""
-        torch = require_torch()
-        from sim_vla.training.imagination import lambda_return
-
-        out = lambda_return(torch.tensor([[2.0]]),
-                            torch.tensor([[10.0], [5.0]]),
-                            torch.tensor([[0.0]]), 0.9, 0.95)
-        self.assertAlmostEqual(float(out[0, 0]), 2.0, places=6)
-
-    def test_horizon_three(self):
-        torch = require_torch()
-        from sim_vla.training.imagination import lambda_return
-
-        # gamma = 0.9, lam = 0.5, cont = 1 throughout.
-        #   carry  = v3                                    = 40
-        #   G_2    = 3 + .9 * (.5 * v3 + .5 * 40)          = 39.0
-        #   G_1    = 2 + .9 * (.5 * v2 + .5 * 39)          = 33.05
-        #   G_0    = 1 + .9 * (.5 * v1 + .5 * 33.05)       = 24.8725
-        reward = torch.tensor([[1.0], [2.0], [3.0]])
-        value = torch.tensor([[10.0], [20.0], [30.0], [40.0]])
-        cont = torch.ones(3, 1)
-        out = lambda_return(reward, value, cont, 0.9, 0.5)
-        for index, expected in enumerate((24.8725, 33.05, 39.0)):
-            self.assertAlmostEqual(float(out[index, 0]), expected, places=4)
+    settings = dict(execute=EXECUTE, flow_steps=3, critic_warmup=0)
+    settings.update(overrides)
+    return ActorCriticConfig(**settings)
 
 
 class StubCritic:
@@ -138,76 +103,84 @@ class StubCritic:
 
     def target_value(self, feat, *, detach=False):
         self.calls.append("target")
-        return self.values[-1:]
+        return self.values[-1]
 
 
 class TestImaginedTimeline(unittest.TestCase):
     """The reward and continuation belonging to a transition are the
     successor's."""
 
-    def stub(self, rewards, conts, horizon=3):
+    def stub(self, rewards, conts, execute=3):
         torch = require_torch()
         import sim_vla.training.actor_critic as module
 
-        feat = torch.arange((horizon + 1) * 2, dtype=torch.float32
-                            ).reshape(horizon + 1, 1, 2)
-        heads = {"reward": torch.as_tensor(rewards).reshape(horizon + 1, 1),
-                 "cont": torch.as_tensor(conts).reshape(horizon + 1, 1)}
-        original = (module.imagine, module.imagined_rewards)
+        feat = torch.arange((execute + 1) * 2, dtype=torch.float32
+                            ).reshape(execute + 1, 1, 2)
+        heads = {"reward": torch.as_tensor(rewards).reshape(execute + 1, 1),
+                 "cont": torch.as_tensor(conts).reshape(execute + 1, 1)}
+        original = (module.imagine_chunk, module.imagined_rewards)
 
-        module.imagine = lambda *a, **k: {
-            "feat": feat, "action": torch.zeros(horizon, 1, 2),
-            "action_steps": []}
+        module.imagine_chunk = lambda *a, **k: {
+            "feat": feat, "action": torch.zeros(execute, 1, 2),
+            "action_steps": [], "chunk": torch.zeros(1, execute, 2)}
         module.imagined_rewards = lambda _model, _feat: heads
         self.addCleanup(
-            lambda: setattr(module, "imagine", original[0]))
+            lambda: setattr(module, "imagine_chunk", original[0]))
         self.addCleanup(
             lambda: setattr(module, "imagined_rewards", original[1]))
         return module, feat
 
+    def objective(self, module, critic, execute=3, **overrides):
+        settings = dict(execute=execute, discount=0.9)
+        settings.update(overrides)
+        return module.executed_chunk_objective(
+            SimpleNamespace(parameters=lambda: iter(())), None, critic, None,
+            config(**settings))
+
     def test_reward_is_read_at_the_successor(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig
 
         # 100.0 is the reward that arrived at the rollout's *start*: no
         # imagined action produced it and it must not appear in the return.
-        module, feat = self.stub([100.0, 1.0, 2.0, 3.0], [1.0, 1.0, 1.0, 1.0])
+        module, _feat = self.stub([100.0, 1.0, 2.0, 3.0], [1.0] * 4)
         critic = StubCritic(torch.tensor([[10.0], [20.0], [30.0], [40.0]]))
-        out = module.actor_loss(
-            SimpleNamespace(parameters=lambda: iter(())), None, critic, None,
-            ActorCriticConfig(horizon=3, discount=0.9, lam=0.5))
+        out = self.objective(module, critic)
         self.assertEqual([float(v) for v in out["reward"].reshape(-1)],
                          [1.0, 2.0, 3.0])
-        # The same numbers as the hand-computed lambda-return case.
-        self.assertAlmostEqual(float(out["returns"][0, 0]), 24.8725, places=4)
+        # G = 1 + .9(2 + .9(3 + .9*40)) = 1 + .9*2 + .81*3 + .729*40 = 34.39
+        self.assertAlmostEqual(float(out["returns"][0]), 34.39, places=4)
 
     def test_continuation_is_read_at_the_successor(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig
 
         # Terminal on arrival at the final imagined state: the last
         # transition's bootstrap is cut, the earlier ones are not.
         module, _feat = self.stub([0.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 0.0])
         critic = StubCritic(torch.tensor([[10.0], [20.0], [30.0], [40.0]]))
-        out = module.actor_loss(
-            SimpleNamespace(parameters=lambda: iter(())), None, critic, None,
-            ActorCriticConfig(horizon=3, discount=0.9, lam=0.5))
+        out = self.objective(module, critic)
         self.assertEqual([float(v) for v in out["cont"].reshape(-1)],
                          [1.0, 1.0, 0.0])
-        # With cont_2 = 0 the last return is its reward alone.
-        self.assertAlmostEqual(float(out["returns"][2, 0]), 1.0, places=6)
+        # The last transition keeps its own reward and drops the bootstrap:
+        # G = 1 + .9(1 + .9*1) = 2.71
+        self.assertAlmostEqual(float(out["returns"][0]), 2.71, places=5)
 
     def test_the_last_action_contributes_a_reward(self):
-        """Reading ``[:-1]`` dropped it, so the horizon's action was free."""
+        """Reading ``[:-1]`` dropped it, so the final action was free."""
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig
 
-        critic = StubCritic(torch.tensor([[0.0], [0.0], [0.0], [0.0]]))
+        critic = StubCritic(torch.zeros(4, 1))
         module, _ = self.stub([0.0, 0.0, 0.0, 7.0], [1.0] * 4)
-        out = module.actor_loss(
-            SimpleNamespace(parameters=lambda: iter(())), None, critic, None,
-            ActorCriticConfig(horizon=3, discount=1.0, lam=1.0))
-        self.assertAlmostEqual(float(out["returns"][0, 0]), 7.0, places=6)
+        out = self.objective(module, critic, discount=1.0)
+        self.assertAlmostEqual(float(out["returns"][0]), 7.0, places=6)
+
+    def test_the_objective_is_the_negative_mean_return(self):
+        torch = require_torch()
+
+        module, _ = self.stub([0.0, 1.0, 1.0, 1.0], [1.0] * 4)
+        critic = StubCritic(torch.zeros(4, 1))
+        out = self.objective(module, critic, discount=1.0)
+        self.assertAlmostEqual(float(out["loss"]),
+                               -float(out["returns"].mean()), places=6)
 
 
 class TestBootstrapGradient(unittest.TestCase):
@@ -238,7 +211,7 @@ class TestBootstrapGradient(unittest.TestCase):
             self.assertIsNone(parameter.grad,
                               "the frozen target head accumulated a gradient")
 
-    def make_actor(self, model, action_dim=8):
+    def make_actor(self, model, action_dim=8, chunk=8):
         torch = require_torch()
         from sim_vla.models.latent_adapter import LatentAdapter
 
@@ -251,7 +224,7 @@ class TestBootstrapGradient(unittest.TestCase):
                                              layers=1)
                 self.expert = expert
                 self.expert_linear = expert.linear
-                self.chunk_size = 2
+                self.chunk_size = chunk
                 self.action_dim = action_dim
                 self.flow_steps = 3
 
@@ -264,12 +237,32 @@ class TestBootstrapGradient(unittest.TestCase):
 
         return Actor()
 
+    def test_every_executed_action_can_move_the_objective(self):
+        """All five, not just the first: each one is a separate path from the
+        chunk into the return, and a rollout that stopped stepping early would
+        leave the later ones with no gradient at all."""
+        torch = require_torch()
+        from sim_vla.training.actor_critic import executed_chunk_objective
+
+        torch.manual_seed(0)
+        model, critic, batch = build()
+        actor = self.make_actor(model)
+        out = executed_chunk_objective(model, actor, critic,
+                                       start_from(model, batch), config())
+        actions = out["action_steps"]
+        self.assertEqual(len(actions), EXECUTE)
+        grads = torch.autograd.grad(out["loss"], actions, retain_graph=True,
+                                    allow_unused=True)
+        for step, grad in enumerate(grads):
+            self.assertIsNotNone(grad, f"action {step} reaches nothing")
+            self.assertGreater(float(grad.abs().sum()), 0.0,
+                               f"action {step} has no influence on the return")
+
     def test_gradient_from_the_bootstrap_alone(self):
         """Constant immediate reward: the only path left is the terminal
         value."""
         torch = require_torch()
         import sim_vla.training.actor_critic as module
-        from sim_vla.training.actor_critic import ActorCriticConfig
 
         torch.manual_seed(0)
         model, critic, batch = build()
@@ -282,9 +275,9 @@ class TestBootstrapGradient(unittest.TestCase):
         self.addCleanup(
             lambda: setattr(module, "imagined_rewards", original))
 
-        start = start_from(model, batch)
-        out = module.actor_loss(model, actor, critic, start,
-                                ActorCriticConfig(horizon=2, flow_steps=3))
+        out = module.executed_chunk_objective(model, actor, critic,
+                                              start_from(model, batch),
+                                              config())
         out["loss"].backward()
         grads = [p.grad for p in actor.adapter.parameters()
                  if p.grad is not None and float(p.grad.abs().sum()) > 0]
@@ -296,23 +289,21 @@ class TestBootstrapGradient(unittest.TestCase):
     def test_gradient_from_the_immediate_successor_reward(self):
         """Constant critic: the only path left is the reward head."""
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
+        from sim_vla.training.actor_critic import executed_chunk_objective
 
         torch.manual_seed(0)
         model, _critic, batch = build()
         actor = self.make_actor(model)
-        flat = StubCritic(None)
 
         class ConstantCritic(StubCritic):
             def value(self, feat):
                 return torch.zeros(feat.shape[0], feat.shape[1])
 
             def target_value(self, feat, *, detach=False):
-                return torch.zeros(feat.shape[0], feat.shape[1])
+                return torch.zeros(feat.shape[0])
 
-        start = start_from(model, batch)
-        out = actor_loss(model, actor, ConstantCritic(None), start,
-                         ActorCriticConfig(horizon=2, flow_steps=3))
+        out = executed_chunk_objective(model, actor, ConstantCritic(None),
+                                       start_from(model, batch), config())
         out["loss"].backward()
         grads = [p.grad for p in actor.adapter.parameters()
                  if p.grad is not None and float(p.grad.abs().sum()) > 0]
@@ -322,14 +313,13 @@ class TestBootstrapGradient(unittest.TestCase):
 
     def test_frozen_modules_accumulate_no_gradients(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
+        from sim_vla.training.actor_critic import executed_chunk_objective
 
         torch.manual_seed(0)
         model, critic, batch = build()
         actor = self.make_actor(model)
-        start = start_from(model, batch)
-        out = actor_loss(model, actor, critic, start,
-                         ActorCriticConfig(horizon=2, flow_steps=3))
+        out = executed_chunk_objective(model, actor, critic,
+                                       start_from(model, batch), config())
         out["loss"].backward()
         for name, parameter in model.named_parameters():
             self.assertIsNone(parameter.grad,
@@ -342,21 +332,22 @@ class TestBootstrapGradient(unittest.TestCase):
 
 
 class TestGradientPolicy(unittest.TestCase):
-    """Critic targets must build no actor graph; actor updates must keep it."""
+    """Warm-up rollouts must build no actor graph; actor updates must keep it."""
 
     def make_actor(self, model):
         return TestBootstrapGradient.make_actor(self, model)
 
     def test_non_differentiable_rollout_detaches_the_actions(self):
         torch = require_torch()
-        from sim_vla.training.imagination import imagine
+        from sim_vla.training.imagination import imagine_chunk
 
         torch.manual_seed(0)
         model, _critic, batch = build()
         actor = self.make_actor(model)
-        start = start_from(model, batch)
-        rollout = imagine(model, actor, start, 2, flow_steps=3,
-                          differentiable=False)
+        with torch.no_grad():
+            rollout = imagine_chunk(model, actor, start_from(model, batch),
+                                    EXECUTE, flow_steps=3,
+                                    differentiable=False)
         for step, action in enumerate(rollout["action_steps"]):
             self.assertFalse(action.requires_grad,
                              f"imagined action {step} kept a graph while the "
@@ -364,14 +355,13 @@ class TestGradientPolicy(unittest.TestCase):
 
     def test_differentiable_rollout_keeps_the_actions(self):
         torch = require_torch()
-        from sim_vla.training.imagination import imagine
+        from sim_vla.training.imagination import imagine_chunk
 
         torch.manual_seed(0)
         model, _critic, batch = build()
         actor = self.make_actor(model)
-        start = start_from(model, batch)
-        rollout = imagine(model, actor, start, 2, flow_steps=3,
-                          differentiable=True)
+        rollout = imagine_chunk(model, actor, start_from(model, batch),
+                                EXECUTE, flow_steps=3, differentiable=True)
         self.assertTrue(all(a.requires_grad
                             for a in rollout["action_steps"]))
 

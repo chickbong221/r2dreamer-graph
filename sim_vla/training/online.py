@@ -26,7 +26,9 @@ Acting is recurrent. :class:`LatentPolicy` advances the posterior on every
 observation and re-plans a chunk every ``actor.execute`` steps, and its state is
 reset per episode. A policy that carried the previous episode's state into the
 next one would still produce plausible rollouts, and they would not mean
-anything.
+anything. Imagination executes the same ``execute`` actions per chunk (see
+:mod:`sim_vla.training.imagination`), so the policy the actor update optimises
+is the one collecting.
 """
 
 from __future__ import annotations
@@ -61,12 +63,13 @@ class OnlineConfig:
     batch_size: int = 16
     sequence_length: int = 64
     burn_in: int = 8
-    imagination_batch: int = 256
     max_episode_steps: int = 150
     seed: int = 0
     actor_every: int = 1
-    # Action-only lookahead for replay windows, matching the demonstration
-    # sampler's. Set from the actor's chunk size by run_online.
+    # Action-only lookahead for replay windows. Zero online, for both replay
+    # sources: it existed to supervise whole demonstrated chunks, and nothing
+    # in Stage 2 imitates. run_online sets it, and the demonstration sampler's,
+    # so a mixed batch stays one shape.
     lookahead: int = 0
     # One switch for the dataset, the replay, the env and imagination. A
     # replay that honoured terminations while the loader ignored them would
@@ -190,8 +193,7 @@ class LatentPolicy:
 
     def __init__(self, world_model, actor, *, device="cuda", normalizer=None,
                  coords=None, instruction: Optional[str] = None,
-                 execute: int = 1, flow_steps: Optional[int] = None,
-                 flow_sigmas=None):
+                 execute: int = 1, flow_steps: Optional[int] = None):
         self.world_model = world_model
         self.actor = actor
         self.device = torch.device(device)
@@ -205,23 +207,12 @@ class LatentPolicy:
                 f"execute={execute} must be at least 1 and at most the chunk "
                 f"size {chunk}: executing more actions than the policy "
                 "predicts would repeat or invent commands.")
-        if execute != 1:
-            # imagination.imagine replans at every transition. At execute=1
-            # that is exactly what happens online; at anything larger the
-            # imagined rollout models a policy that does not exist, and the
-            # actor would be optimised for it. Refused rather than
-            # approximated.
-            raise NotImplementedError(
-                f"execute={execute} is not supported for online training: "
-                "sim_vla.training.imagination replans every transition, so "
-                "imagined and executed policies would differ. Use execute=1, "
-                "or implement matching imagined execution semantics first.")
+        # Imagination executes the same number of actions from one generated
+        # chunk, so the imagined policy is this policy. The trainer passes its
+        # own resolved value rather than reading the config twice.
         self.execute = execute
         self.chunk_size = chunk
         self.flow_steps = int(flow_steps or actor.flow_steps)
-        # None keeps the deterministic sampler. A tensor switches this policy
-        # to the stochastic one flow_reinforce trains and evaluates.
-        self.flow_sigmas = flow_sigmas
         self.action_dim = int(actor.action_dim)
         # The environment's clipping lives in coords, so this policy returns
         # the command that will actually be run. Declared so a caller does not
@@ -291,34 +282,19 @@ class LatentPolicy:
         evaluation loop, say -- left the policy conditioning on an action that
         was never executed.
         """
-        from ..models.flow_sampler import sample_actions, sample_flow_path
+        from ..models.flow_sampler import sample_actions
 
         cond = self.actor.condition(feat, self.instruction)
         device = getattr(self.actor, "device", feat.device)
         rows = int(feat.shape[0])
-        if self.flow_sigmas is not None:
-            # The policy being improved is the stochastic one, so the policy
-            # that collects has to be the stochastic one too. Collecting with
-            # the deterministic sampler would fill the replay with a behaviour
-            # distribution the imagined rollouts never model, and the world
-            # model would be fit to one policy while the actor optimizes
-            # another.
-            with torch.no_grad():
-                chunk = sample_flow_path(
-                    self.actor.velocity_fn(), cond, batch=rows,
-                    chunk=int(self.actor.chunk_size), dim=self.action_dim,
-                    steps=self.flow_steps,
-                    sigmas=self.flow_sigmas.to(device),
-                    device=device, dtype=torch.float32)["chunk"]
-        else:
-            chunk = sample_actions(
-                self.actor.velocity_fn(), cond, batch=rows,
-                chunk=int(self.actor.chunk_size), dim=self.action_dim,
-                steps=self.flow_steps,
-                # The actor's device, not the feature's: condition() moved the
-                # feature to the pretrained weights and the noise starts there.
-                device=device,
-                dtype=feat.dtype, differentiable=False)
+        chunk = sample_actions(
+            self.actor.velocity_fn(), cond, batch=rows,
+            chunk=int(self.actor.chunk_size), dim=self.action_dim,
+            steps=self.flow_steps,
+            # The actor's device, not the feature's: condition() moved the
+            # feature to the pretrained weights and the noise starts there.
+            device=device,
+            dtype=feat.dtype, differentiable=False)
         normalized = chunk[:, : self.execute]             # (rows, execute, A)
         if self.coords is not None:
             bounded = self.coords.executed(normalized)
@@ -385,17 +361,13 @@ class OnlineTrainer:
         self.progress_opt = (
             torch.optim.AdamW(progress_head.parameters(), lr=progress_lr)
             if progress_head is not None else None)
-        # The demonstration sampler and the batch converter are handed over so
-        # the actor update can build its own imitation anchor. Passing them
-        # unconditionally is deliberate: ActorCriticTrainer refuses a nonzero
-        # demo_anchor without them, and that refusal should be about the
-        # configuration rather than about which caller happened to wire them.
+        # The demonstration sampler stays with this trainer: it feeds the
+        # world model's mixed batches. The actor update never sees it -- there
+        # is no online imitation term.
         self.ac = ActorCriticTrainer(world_model, actor, critic, ac_config,
                                      coords=coords,
                                      progress_head=progress_head,
-                                     demo_sampler=demo_sampler,
-                                     to_model_batch=self.to_torch,
-                                     device=self.device, seed=int(seed))
+                                     device=self.device)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.meta = meta
         self.env_steps = 0
@@ -426,14 +398,17 @@ class OnlineTrainer:
         del total, _losses, _aux
         self.world_opt.zero_grad(set_to_none=True)
 
-        with autocast(self.device, self.config.precision):
-            metrics |= self.update_progress(batch)
-
-        # Re-encoded after the step, not reused from before it. The posterior
+        # Re-encoded after the step, not reused from before it: the posterior
         # in ``_aux`` came from the parameters that have just been replaced.
+        # Encoded once and shared, because the progress head and imagination
+        # want the same posterior of the same batch under the same model;
+        # encoding twice paid for a second forward pass and gave the two
+        # different latent samples.
+        with torch.no_grad(), autocast(self.device, self.config.precision):
+            post = self.world_model.observe(batch)["post"]
         with autocast(self.device, self.config.precision):
-            start = start_states(self.world_model, batch,
-                                 limit=int(self.config.imagination_batch))
+            metrics |= self.update_progress(batch, post)
+            start = start_states(self.world_model, batch, post=post)
         metrics["imagination_starts"] = float(start[0].shape[0])
         self.updates += 1
         if self.updates % max(int(self.config.actor_every), 1) == 0:
@@ -448,7 +423,8 @@ class OnlineTrainer:
 
         return beta_at(self.progress_config, self.env_steps)
 
-    def update_progress(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    def update_progress(self, batch: Dict[str, torch.Tensor],
+                        post=None) -> Dict[str, float]:
         """Keep the progress head fitted to the observed-graph potential.
 
         The head arrives trained from Stage 1A, where it was trained jointly
@@ -458,14 +434,18 @@ class OnlineTrainer:
         the same masked Huber objective Stage 1A adds to the world-model loss,
         on features re-encoded by the just-updated world model, and it moves
         the head alone.
+
+        ``post`` is that re-encoding when the caller already has it; the
+        features are taken from it rather than encoding the same batch again.
         """
         if self.progress_opt is None or self.potential is None:
             return {}
         from .progress import fit_progress
 
         with torch.no_grad():
-            feat = self.world_model.features(
-                self.world_model.observe(batch)["post"])
+            if post is None:
+                post = self.world_model.observe(batch)["post"]
+            feat = self.world_model.features(post)
         return fit_progress(self.ac.progress_head, self.progress_opt,
                             self.potential, feat, batch,
                             grad_clip=self.ac.config.grad_clip)
@@ -492,34 +472,34 @@ class OnlineTrainer:
         # different experiments, and a resume that switches between them is a
         # new experiment rather than a continuation -- so the identity is
         # written down where a later reader will find it.
+        from .actor_critic import OBJECTIVE, RETURN, START_SELECTION
+
         extra = dict(self.meta.extra or {})
         extra |= {
-            "actor_objective": str(ac.actor_objective),
-            "flow_noise_std": float(ac.flow_noise_std),
-            "flow_noise_schedule": str(ac.flow_noise_schedule),
+            # What was optimised, and over what. A checkpoint whose weights
+            # came from a different objective is a different experiment, not a
+            # continuation, and this is where a later reader finds that out.
+            "actor_objective": OBJECTIVE,
+            "return": RETURN,
+            "execute": int(ac.execute),
+            "start_selection": START_SELECTION,
             "flow_steps": int(ac.flow_steps),
-            "demo_anchor": float(ac.demo_anchor),
-            "anchor_rows": int(ac.anchor_rows),
-            "anchor_microbatch": int(ac.anchor_microbatch),
-            "actor_transition_microbatch": int(ac.actor_transition_microbatch),
-            "imagination_batch": int(self.config.imagination_batch),
-            "imagination_microbatch": int(ac.imagination_microbatch),
-            "imag_horizon": int(ac.horizon),
             "discount": float(ac.discount),
-            "lam": float(ac.lam),
+            "imagination_microbatch": int(ac.imagination_microbatch),
+            "critic_warmup": int(ac.critic_warmup),
+            "grad_clip": float(ac.grad_clip),
             "actor_lr": float(ac.actor_lr),
             "critic_lr": float(ac.critic_lr),
             "precision": str(ac.precision),
-            "advantage_scale": "return_ema",
-            # Counters, so a resumed run can say how far the previous one got
-            # and a log can be aligned to it.
+            "train_ratio": float(self.config.train_ratio),
+            # Counters, so a later run can say how far this one got and a log
+            # can be aligned to it.
             "actor_updates": int(self.ac.actor_steps),
             "actor_critic_updates": int(self.ac.step),
             "world_updates": int(self.updates),
             "env_steps": int(self.env_steps),
             # The coordinate identity: an action recorded under one
-            # normalization is a different action under another, and the flow
-            # states this objective scores are in normalized coordinates.
+            # normalization is a different action under another.
             "action_coordinates": (self.coords.describe()
                                    if hasattr(self.coords, "describe")
                                    else None),
@@ -529,11 +509,7 @@ class OnlineTrainer:
                                  "step": self.env_steps, "extra": extra})
         return save(self.checkpoint_dir / f"online_{tag}.pt", meta,
                     {"world_model": self.world_model, "actor": self.actor,
-                     "critic": self.critic, "progress": self.progress_head,
-                     # Running advantage statistics are state, not a metric: a
-                     # resume that restarted them would rescale every
-                     # advantage for the first few hundred updates.
-                     "return_ema": self.ac.return_ema},
+                     "critic": self.critic, "progress": self.progress_head},
                     {"world": self.world_opt, "actor": self.ac.actor_opt,
                      "critic": self.ac.critic_opt,
                      "progress": self.progress_opt})
@@ -554,12 +530,23 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
     unit of experience when train_ratio is zero. Otherwise the schedule uses
     replay timesteps per environment step, matching the original Dreamer.
     """
-    # Replay windows are cut like demonstration windows, chunk lookahead
-    # included, so a mixed batch is one distribution and not two. See
-    # train_imitation.run for why this is the chunk size and not one less.
-    config.lookahead = max(int(getattr(actor, "chunk_size", 1)), 0)
+    # No lookahead online, for either source. It exists to supervise whole
+    # demonstrated action chunks, which is Stage 1B's job; Stage 2 trains the
+    # world model on these windows and imagines its own actions. Both sources
+    # are set here because a mixed batch needs one target-axis length.
+    config.lookahead = 0
     if hasattr(demo_sampler, "lookahead"):
-        demo_sampler.lookahead = config.lookahead
+        demo_sampler.lookahead = 0
+
+    # One resolved value for both: the number of actions imagination executes
+    # from a chunk is the number the environment executes before replanning.
+    execute = int(ac_config.execute)
+    configured = int((cfg.get("actor") or {}).get("execute") or execute)
+    if configured != execute:
+        raise ValueError(
+            f"actor.execute={configured} but the actor-critic config was "
+            f"built with execute={execute}. One setting decides how many "
+            "actions a chunk contributes, in imagination and online alike.")
 
     trainer = OnlineTrainer(
         world_model, actor, critic, demo_sampler, config=config,
@@ -567,35 +554,15 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
         checkpoint_dir=checkpoint_dir, meta=meta, normalizer=normalizer,
         coords=coords, seed=int(config.seed), potential=potential,
         progress_config=progress_config)
-    # Collection samples from the policy being improved. Under flow_reinforce
-    # that is the stochastic flow, with the same sigmas the imagined rollouts
-    # and the scoring use -- taken from the trainer rather than rebuilt here,
-    # so there is one schedule per run and not two that happen to agree.
+    # Collection samples from the policy being improved, with the same
+    # deterministic flow sampler imagination uses.
     policy = LatentPolicy(
         world_model, actor, device=device, normalizer=normalizer,
         coords=coords,
         instruction=str(cfg["task"].get("instruction") or "") or None,
-        execute=int(cfg["actor"].get("execute") or 1),
-        flow_sigmas=trainer.ac.flow_sigmas)
-    # Which policy the reported evaluation runs. The default is the policy
-    # being trained, which under flow_reinforce is the stochastic one. A
-    # deterministic evaluation is allowed but is a *different* policy, so it
-    # gets its own object and its own metric prefix rather than quietly
-    # standing in for the trained one.
-    eval_sampler = str((cfg.get("online") or {}).get(
-        "eval_sampler", "stochastic"))
+        execute=execute)
+    # One policy: the evaluation runs exactly what is being trained.
     eval_policy, eval_prefix = policy, "eval"
-    if policy.flow_sigmas is not None and eval_sampler == "deterministic":
-        eval_policy = LatentPolicy(
-            world_model, actor, device=device, normalizer=normalizer,
-            coords=coords,
-            instruction=str(cfg["task"].get("instruction") or "") or None,
-            execute=int(cfg["actor"].get("execute") or 1),
-            flow_sigmas=None)
-        eval_prefix = "eval_deterministic"
-        print("[online] eval_sampler=deterministic: the reported evaluation "
-              "runs a DIFFERENT policy from the one being trained (noise "
-              "off); its metrics are prefixed eval_deterministic_", flush=True)
 
     num_envs = int(getattr(env, "num_envs", 1))
     if num_envs > 1:

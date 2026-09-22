@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-svla-pi-bl-fr
+#SBATCH --job-name=r2d-svla-pi-gp-online
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -14,19 +14,21 @@
 # CUDA_VISIBLE_DEVICES before Slurm necessarily defines them.
 set -eo pipefail
 
-# sim_vla arm 1 (Dreamer + SmolVLA, no graph), stage 2 only: restores Stage 1A + 1B from an earlier
-# --save-checkpoints run and trains online with the Dreamer-style
-# score-function actor objective (flow_reinforce). Compared against
-# slurm_peginsertion_graph_progress_online_flow_reinforce.sh, which differs by
+# sim_vla arm 3 (graph + progress shaping), stage 2 only: restores Stage 1A + 1B from an earlier
+# --save-checkpoints run and trains online with the executed-chunk actor.
+# Compared against slurm_peginsertion_baseline_online.sh, which differs by
 # --experiment and its resume directory alone; every training flag here is
 # identical on purpose.
 #
-# flow_reinforce collects an imagined rollout with no autograd graph, then
-# differentiates sum_k log pi(u_(k+1) | u_k, s) of that recorded stochastic
-# flow path against a detached, return-EMA-normalised advantage. Not PPO: no
-# importance ratio, no clipping, no old-policy copy, one actor optimizer step
-# per freshly collected imagined batch. Density arithmetic stays float32; only
-# the transformer runs under bfloat16 autocast.
+# Every eligible replay state starts one imagined rollout: the actor is
+# conditioned there once, generates one action chunk, and the first
+# actor.execute of its actions (5, from sim_vla/configs/base.yaml) are stepped
+# through the world model. The actor maximises that chunk's bootstrapped
+# return pathwise -- through the flow sampler, the transitions and the heads --
+# and the critic is fitted to the same return at the start state. The
+# environment replans on the same period, so the policy optimised is the
+# policy collecting. Returns stay float32; only the transformer runs under
+# bfloat16 autocast.
 #
 # This is a NEW stage 2 run. It restores Stage 1A/1B weights and nothing else
 # -- not the replay, critic, optimizer state, step counter or environment
@@ -41,7 +43,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PegInsertionSide-v1, arm=dreamer, stage 2 only, actor=flow_reinforce"
+echo "sim_vla: PegInsertionSide-v1, arm=graph_progress, stage 2 only, actor=pathwise executed chunk"
 echo "================================="
 
 # Activate conda
@@ -116,25 +118,17 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 SEED="${SEED:-0}"
 ONLINE_STEPS="${ONLINE_STEPS:-500000}"
 ACTOR_LR="${ACTOR_LR:-1e-5}"
-DEMO_ANCHOR="${DEMO_ANCHOR:-0.5}"
-FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.03}"
-ACTOR_TRANSITION_MICROBATCH="${ACTOR_TRANSITION_MICROBATCH:-64}"
 
-# Fixed for this experiment, and identical in both arms: these are the
-# estimator and its budgets, not the state, so a difference here would not be
-# a difference between the arms being compared.
+# Fixed for this experiment, and identical in both arms: these are the update
+# rule and its budgets, not the state, so a difference here would not be a
+# difference between the arms being compared.
 BATCH_SIZE=16
-IMAGINATION_BATCH=128
+# Starts imagined together. An update has no cap on its starts -- it imagines
+# every scored row of the replay batch -- so this is what bounds its memory.
 IMAGINATION_MICROBATCH=32
-IMAG_HORIZON=15
 TRAIN_RATIO=64
 ONLINE_PRECISION=bfloat16
 CRITIC_WARMUP=150
-ANCHOR_WINDOWS=8
-ANCHOR_WINDOW_MICROBATCH=4
-ANCHOR_ROWS=64
-ANCHOR_MICROBATCH=16
-GRAD_REPORT_EVERY=50
 # Parallel online envs on the GPU backend, as the main trainer runs them.
 # Updates happen between vector steps at the same train_ratio, so the update
 # budget is unchanged; only collection gets faster.
@@ -142,14 +136,16 @@ NUM_ENVS=128
 
 # flow_steps is deliberately not passed: it comes from the restored
 # checkpoint's own num_steps (base.yaml sets actor.flow_steps to 0, meaning
-# "take the checkpoint's value"). Overriding it would score a different
-# denoising chain than the one Stage 1B trained. Profiling stays available but
-# off -- add --profile-online for a short run; it synchronizes at every phase
-# boundary and is not for a 500k-step job.
+# "take the checkpoint's value"). Overriding it would differentiate a
+# different denoising chain than the one Stage 1B trained. actor.execute is
+# not passed either, for the same reason it exists: one setting decides how
+# many actions a chunk contributes here and in imagination. Profiling stays
+# available but off -- add --profile-online for a short run; it synchronizes
+# at every phase boundary and is not for a 500k-step job.
 
 # The earlier run's --out directory, holding world_model.pt and imitation.pt.
 # Read only: this run never writes into it.
-RESUME_FROM=/home/tuannl/logdir/r2dreamer-graph/sim_vla/20260919_140933/peginsertion/dreamer
+RESUME_FROM=/home/tuannl/logdir/r2dreamer-graph/sim_vla/20260919_140921/peginsertion/graph_progress
 
 for stage_file in world_model.pt imitation.pt; do
   if [ ! -f "$RESUME_FROM/$stage_file" ]; then
@@ -165,37 +161,25 @@ echo "[resume] $RESUME_FROM"
 ls -la "$RESUME_FROM"
 
 # A fresh directory per run, naming what distinguishes this one: arm, learning
-# rate, anchor weight and seed. Two submissions cannot collide.
-OUT_DIR=$HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/peginsertion/dreamer_flow_reinforce_lr${ACTOR_LR}_anchor${DEMO_ANCHOR}_seed${SEED}
+# rate and seed. Two submissions cannot collide.
+OUT_DIR=$HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/peginsertion/graph_progress_online_lr${ACTOR_LR}_seed${SEED}
 echo "[out] $OUT_DIR"
 
 python -m sim_vla.training.pipeline \
   --task peginsertion \
-  --experiment dreamer \
+  --experiment graph_progress \
   --resume-from "$RESUME_FROM" \
   --world-steps 0 \
   --imitation-steps 0 \
   --online-steps "$ONLINE_STEPS" \
   --seed "$SEED" \
   --batch-size $BATCH_SIZE \
-  --imagination-batch $IMAGINATION_BATCH \
   --imagination-microbatch $IMAGINATION_MICROBATCH \
-  --imag-horizon $IMAG_HORIZON \
   --train-ratio $TRAIN_RATIO \
   --online-precision $ONLINE_PRECISION \
   --critic-warmup $CRITIC_WARMUP \
-  --actor-objective flow_reinforce \
-  --flow-noise-std "$FLOW_NOISE_STD" \
-  --actor-transition-microbatch "$ACTOR_TRANSITION_MICROBATCH" \
   --actor-lr "$ACTOR_LR" \
-  --demo-anchor "$DEMO_ANCHOR" \
-  --anchor-windows $ANCHOR_WINDOWS \
-  --anchor-window-microbatch $ANCHOR_WINDOW_MICROBATCH \
-  --anchor-rows $ANCHOR_ROWS \
-  --anchor-microbatch $ANCHOR_MICROBATCH \
-  --grad-report-every $GRAD_REPORT_EVERY \
   --num-envs $NUM_ENVS \
-  --eval-sampler stochastic \
   --device cuda \
   --save-checkpoints \
   --out "$OUT_DIR"

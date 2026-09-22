@@ -33,7 +33,7 @@ echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PlaceSphere-v1, arm=dreamer (baseline, no graph, no progress), actor=flow_reinforce"
+echo "sim_vla: PlaceSphere-v1, arm=dreamer (baseline, no graph, no progress), actor=pathwise executed chunk"
 echo "================================="
 
 # Activate conda
@@ -84,7 +84,7 @@ export HF_HOME=/home/tuannl/mnt_data/mshab_transfer_checkpoint
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 
-# As in the PegInsertion flow_reinforce scripts. Optional allocator aid; the
+# As in the PegInsertion online scripts. Optional allocator aid; the
 # real memory controls are the microbatch settings below.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -115,28 +115,26 @@ ONLINE_STEPS=500000
 WORLD_LR=1e-4
 IMITATION_LR=2e-4
 
-# Stage 2: the flow_reinforce actor objective with the settings of
-# slurm_peginsertion_*_online_flow_reinforce.sh, run in this same job right
-# after Stage 1B, on the models it hands over in memory.
+# Stage 2: the online actor-critic, run in this same job right after Stage 1B,
+# on the models it hands over in memory. Every eligible replay state starts one
+# imagined rollout: the actor generates one action chunk there, the first
+# actor.execute of its actions (5, from sim_vla/configs/base.yaml) are stepped
+# through the world model, and the actor maximises that chunk's bootstrapped
+# return while the critic is fitted to the same return at the start state. The
+# environment replans on the same period, so the policy optimised is the policy
+# collecting.
 # Overridable from the submitting environment, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
 ACTOR_LR="${ACTOR_LR:-1e-5}"
-DEMO_ANCHOR="${DEMO_ANCHOR:-0.5}"
-FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.03}"
-ACTOR_TRANSITION_MICROBATCH="${ACTOR_TRANSITION_MICROBATCH:-64}"
 # Also Stage 1A/1B's batch: one shared setting, 16 either way.
 BATCH_SIZE=16
-IMAGINATION_BATCH=128
+# Starts imagined together. An update has no cap on its starts -- it imagines
+# every scored row of the replay batch, about 16 x 65 -- so this is what bounds
+# the memory one update uses.
 IMAGINATION_MICROBATCH=32
-IMAG_HORIZON=15
 TRAIN_RATIO=64
 ONLINE_PRECISION=bfloat16
 CRITIC_WARMUP=0
-ANCHOR_WINDOWS=8
-ANCHOR_WINDOW_MICROBATCH=4
-ANCHOR_ROWS=64
-ANCHOR_MICROBATCH=16
-GRAD_REPORT_EVERY=50
 # Parallel online envs on the GPU backend, as the main trainer runs them.
 NUM_ENVS=128
 
@@ -150,24 +148,12 @@ python -m sim_vla.training.pipeline \
   --online-steps $ONLINE_STEPS \
   --seed "$SEED" \
   --batch-size $BATCH_SIZE \
-  --imagination-batch $IMAGINATION_BATCH \
   --imagination-microbatch $IMAGINATION_MICROBATCH \
-  --imag-horizon $IMAG_HORIZON \
   --train-ratio $TRAIN_RATIO \
   --online-precision $ONLINE_PRECISION \
   --critic-warmup $CRITIC_WARMUP \
-  --actor-objective flow_reinforce \
-  --flow-noise-std "$FLOW_NOISE_STD" \
-  --actor-transition-microbatch "$ACTOR_TRANSITION_MICROBATCH" \
   --actor-lr "$ACTOR_LR" \
-  --demo-anchor "$DEMO_ANCHOR" \
-  --anchor-windows $ANCHOR_WINDOWS \
-  --anchor-window-microbatch $ANCHOR_WINDOW_MICROBATCH \
-  --anchor-rows $ANCHOR_ROWS \
-  --anchor-microbatch $ANCHOR_MICROBATCH \
-  --grad-report-every $GRAD_REPORT_EVERY \
   --num-envs $NUM_ENVS \
-  --eval-sampler stochastic \
   --device cuda \
   --save-checkpoints \
   --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/dreamer

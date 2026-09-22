@@ -1,5 +1,11 @@
 # SmolVLA Stage 2: Dreamer-style policy gradient with an imitation anchor
 
+**Superseded.** This plan was implemented as the `flow_reinforce` objective and
+the online imitation anchor, and both were removed afterwards. Stage 2 now has
+one objective: the pathwise return of an executed action chunk, with no scored
+flow transitions and no online imitation term. See `sim_vla/README.md`. This
+file is kept for the reasoning it records, not as a description of the code.
+
 Implementation handoff for Claude. This is a plan, not an implemented feature.
 
 ## 1. Objective and scope

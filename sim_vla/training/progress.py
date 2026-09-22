@@ -113,14 +113,26 @@ def predict(head: networks.ProgressHead, feat: torch.Tensor) -> torch.Tensor:
 
 
 def shaping_reward(head: networks.ProgressHead, feat: torch.Tensor,
-                   discount: float) -> torch.Tensor:
-    """``gamma * phi(s') - phi(s)`` over an imagined rollout.
+                   discount: float, *, cont: Optional[torch.Tensor] = None
+                   ) -> torch.Tensor:
+    """``gamma * cont * phi(s') - phi(s)`` over an imagined rollout.
 
     Potential-based, so it cannot change which policy is optimal -- only how
     quickly one is found. The sigmoid bounds ``phi``, so ``|F_t| <= 1``.
+
+    ``cont`` is the continuation of each imagined transition, read at the
+    successor like its reward. Including it is what keeps the shaping
+    potential-based when an episode can end: the successor's potential is only
+    reachable if the episode continues into it, and a transition that
+    terminates must not be credited with the potential of a state the agent
+    never occupies. Under ``ignore_terminations`` it is one throughout and
+    this is the plain ``gamma * phi(s') - phi(s)``.
     """
     phi = predict(head, feat)
-    return discount * phi[1:] - phi[:-1]
+    successor = phi[1:]
+    if cont is not None:
+        successor = cont.to(successor.dtype) * successor
+    return discount * successor - phi[:-1]
 
 
 def progress_mask(batch: Mapping[str, torch.Tensor],

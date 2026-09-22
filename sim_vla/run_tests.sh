@@ -44,7 +44,6 @@ STAGES=(
   "9|progress shaping and its graph dependency|$STAGE sim_vla.tests.test_progress"
   "10|imagined timeline, bootstrap gradient, gradient policy|$STAGE sim_vla.tests.test_timeline"
   "11|recurrent inference and one turn of the online loop|$STAGE sim_vla.tests.test_inference"
-  "12|stochastic flow sampler, score-function actor, demo anchor|$STAGE sim_vla.tests.test_flow_reinforce"
 )
 
 # Defaulted from the list rather than written down: LAST was pinned at 9 while

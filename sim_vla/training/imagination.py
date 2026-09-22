@@ -3,8 +3,8 @@
 The loop is the same for both; what differs is the width of the state and
 whether a semantic prior runs::
 
-    baseline  : (h, z)    -> adapter -> action -> (h', z')
-    graph arm : (h, z, g) -> adapter -> action -> (h', z', g')
+    baseline  : (h, z)    -> adapter -> chunk -> (h', z') -> ...
+    graph arm : (h, z, g) -> adapter -> chunk -> (h', z', g') -> ...
 
 **No graph is extracted inside imagination.** There is no scene to extract one
 from -- the states are predicted, not simulated -- so the graph arm's next
@@ -17,58 +17,83 @@ That prior runs inside ``img_step``: with the branch on it returns
 therefore unpacks four values and advances nothing itself, matching
 ``dreamer.py:_imagine``.
 
-There are two rollout functions here, one per actor objective.
+One rollout, one chunk
+----------------------
 
-:func:`imagine` keeps gradients throughout. The ``pathwise`` actor update
-differentiates the imagined return with respect to the actions that produced
-it, so every transition, the reward head and the flow sampler stay in the
-graph; the world model's *parameters* are frozen for that update, which is not
-the same thing as detaching its outputs.
+An imagined rollout is what the online policy does between two replans. From
+each start state the actor is conditioned once and generates one action chunk,
+and the chunk's first ``execute`` actions are stepped through the dynamics in
+order::
 
-:func:`imagine_flow_reinforce` keeps none. The ``flow_reinforce`` objective
-never differentiates through the rollout at all -- its gradient comes from
-recomputing individual flow transitions against fixed recorded samples -- so
-the rollout is collected as data and every tensor in it is detached. That is
-the whole memory difference between the two: ``horizon * flow_steps``
-transformer passes held live, versus none.
+    feat[0]      the start state s_0
+    action[t]    chunk[:, t], clipped and mapped as the environment would run it
+    feat[t + 1]  img_step(s_t, action[t])                        t = 0 .. E-1
+
+That is ``E = execute`` imagined transitions from one sampler call. The online
+policy replans after the same ``E`` actions (see
+:class:`~sim_vla.training.online.LatentPolicy`), so the policy optimised here is
+the policy that is executed. A start need not coincide with a replanning
+boundary of the policy that collected it: every eligible replay state is
+treated as the start of a fresh hypothetical chunk.
+
+The actor update keeps gradients through the sampler, every transition and the
+heads read afterwards. The world model's *parameters* are frozen for that
+update, which is not the same thing as detaching its outputs.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import torch
 
 
-def start_states(world_model, batch, *, limit: int = 0, generator=None
-                 ) -> tuple:
-    """Fresh, detached, filtered imagination starts.
+def eligible_rows(batch: Mapping[str, Any], rows: int, device) -> torch.Tensor:
+    """Flattened ``(batch * time)`` indices an imagined rollout may start from.
 
-    Three things, and the first is the one that was wrong. The posterior must
-    be re-encoded with the *current* world model: reusing the one computed
-    before the update conditions the policy on states the model no longer
-    produces, and wrapping a reshape in ``no_grad`` does not recompute
-    anything.
-
-    Then padding and burn-in positions are dropped -- a repeated final row is
-    not a state the agent was ever in -- and the remainder is subsampled to
-    ``limit``, because imagining from every position of every sequence is a
-    batch the flow sampler cannot afford.
+    Scored rows only: ``loss_mask`` drops burn-in and padding -- a repeated
+    final row is not a state the agent was ever in -- and ``valid``, padding
+    alone, is ANDed in so that holds even for a loader that loosened
+    ``loss_mask``. A terminal state is never a start either: nothing continues
+    from it. Under ``ignore_terminations`` the windows carry no terminal flag,
+    so that excludes nothing further; with terminations honoured it drops
+    exactly the states the environment would not continue from.
     """
-    import torch
+    mask = batch.get("loss_mask")
+    if mask is None:
+        return torch.arange(int(rows), device=device)
+    eligible = mask.bool()
+    if batch.get("valid") is not None:
+        eligible = eligible & batch["valid"].bool()
+    terminal = batch.get("is_terminal")
+    if terminal is not None:
+        eligible = eligible & ~terminal.bool()
+    eligible = eligible.reshape(-1).to(device)
+    if int(eligible.numel()) != int(rows):
+        raise ValueError(
+            f"{int(eligible.numel())} mask entries for {int(rows)} posterior "
+            "rows; the masks and the encoded window disagree about its shape")
+    return torch.nonzero(eligible, as_tuple=False).squeeze(-1)
 
+
+def start_states(world_model, batch, *, post=None) -> tuple:
+    """Every eligible replay position, as detached imagination starts.
+
+    The posterior must be the *current* world model's: reusing one computed
+    before the world-model step conditions the policy on states the model no
+    longer produces. ``post`` is for a caller that has just encoded this batch
+    with the updated model -- the online trainer shares one encoding between
+    the progress head and imagination -- and is computed here otherwise.
+
+    There is no cap. Every eligible position is a start, so their number is a
+    property of the batch (windows x scored rows) rather than a setting, and
+    ``imagination_microbatch`` is what bounds the memory an update uses.
+    """
     with torch.no_grad():
-        post = world_model.observe(batch)["post"]
+        if post is None:
+            post = world_model.observe(batch)["post"]
         flat = flatten_start(post, world_model.graph_enabled)
-        mask = batch.get("loss_mask")
-        if mask is None:
-            keep = torch.arange(flat[0].shape[0], device=flat[0].device)
-        else:
-            keep = torch.nonzero(mask.reshape(-1), as_tuple=False).squeeze(-1)
-        if limit and keep.numel() > int(limit):
-            pick = torch.randperm(keep.numel(), device=keep.device,
-                                  generator=generator)[: int(limit)]
-            keep = keep[pick]
+        keep = eligible_rows(batch, int(flat[0].shape[0]), flat[0].device)
         # Detached explicitly: these seed a rollout the actor differentiates
         # through, and a gradient reaching back into the posterior would train
         # the world model from the actor's objective.
@@ -92,31 +117,34 @@ def flatten_start(post, graph_enabled: bool) -> tuple:
     return flat_stoch, flat_deter, sem.reshape(-1, sem.shape[-1])
 
 
-def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
-            instruction: Optional[torch.Tensor] = None,
-            action_fn: Optional[Callable] = None, coords=None,
-            differentiable: bool = True) -> Dict[str, Any]:
-    """Roll the latent dynamics forward under the actor.
+def imagine_chunk(world_model, actor, start, execute: int, *,
+                  flow_steps: int = 10,
+                  instruction: Optional[torch.Tensor] = None,
+                  action_fn: Optional[Callable] = None, coords=None,
+                  differentiable: bool = True) -> Dict[str, Any]:
+    """One generated chunk per start, its first ``execute`` actions imagined.
 
-    ``action_fn`` overrides how an action is produced from a feature, which is
-    what lets a test drive this with a known policy rather than a flow sampler.
+    ``action_fn`` maps the start feature to a whole ``(batch, chunk, action)``
+    chunk in place of the flow sampler, which is what lets a test drive this
+    with a known policy.
 
-    ``differentiable`` is the gradient policy for the whole rollout, threaded
-    into the flow sampler. It has to be explicit: ``sample_actions`` re-enables
-    grad internally, so an enclosing ``torch.no_grad()`` does not stop an
-    expert graph being built, and the returned tensors then keep it alive.
-    Critic targets and inference pass False; the actor update passes True.
+    ``differentiable`` is threaded into the flow sampler and has to be
+    explicit: ``sample_actions`` re-enables grad internally, so an enclosing
+    ``torch.no_grad()`` does not stop an expert graph being built. The caller
+    that wants no graph at all -- conditioning included -- runs this under
+    ``no_grad`` *and* passes False.
 
-    ``coords`` applies the same transformation the online policy applies: the
+    ``coords`` applies the transformation the online policy applies: the
     sampled action is in normalized coordinates, it is clipped to the
     environment's bounds there (straight-through, so a saturated dimension
     still receives a gradient), and it is mapped into dynamics coordinates
-    before the RSSM consumes it. Without this, imagination steps the dynamics
-    with a value the environment would never accept, in units the world model
-    was not trained on.
+    before the RSSM consumes it.
     """
     from ..models.flow_sampler import sample_actions
 
+    execute = int(execute)
+    if execute < 1:
+        raise ValueError(f"execute={execute} must be at least 1")
     graph_enabled = bool(world_model.graph_enabled)
     if graph_enabled:
         stoch, deter, sem = start
@@ -124,174 +152,58 @@ def imagine(world_model, actor, start, horizon: int, *, flow_steps: int = 10,
         stoch, deter = start
         sem = None
 
-    feats: List[torch.Tensor] = []
-    actions: List[torch.Tensor] = []
+    feat = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
+            else world_model.rssm.get_feat(stoch, deter))
     batch = stoch.shape[0]
+    if action_fn is not None:
+        chunk = action_fn(feat)
+    else:
+        cond = actor.condition(feat, instruction)
+        chunk = sample_actions(
+            actor.velocity_fn(), cond, batch=batch,
+            chunk=actor.chunk_size, dim=actor.action_dim,
+            steps=int(flow_steps),
+            # The actor's device, not the feature's: condition() moves the
+            # feature to where the pretrained weights are, and the noise has
+            # to start there too.
+            device=getattr(actor, "device", feat.device), dtype=feat.dtype,
+            differentiable=differentiable)
+        # Back to the world model's device for img_step.
+        chunk = chunk.to(feat.device)
+    if chunk.dim() != 3 or int(chunk.shape[1]) < execute:
+        raise ValueError(
+            f"a chunk of shape {tuple(chunk.shape)} cannot supply "
+            f"execute={execute} actions per start")
 
-    for _ in range(int(horizon)):
-        feat = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
-                else world_model.rssm.get_feat(stoch, deter))
-        if action_fn is not None:
-            action = action_fn(feat)
-        else:
-            cond = actor.condition(feat, instruction)
-            chunk = sample_actions(
-                actor.velocity_fn(), cond, batch=batch,
-                chunk=actor.chunk_size, dim=actor.action_dim,
-                steps=int(flow_steps),
-                # The actor's device, not the feature's: condition() moves the
-                # feature to where the pretrained weights are, and the noise
-                # has to start there too.
-                device=getattr(actor, "device", feat.device), dtype=feat.dtype,
-                differentiable=differentiable)
-            # Back to the world model's device for the next img_step.
-            chunk = chunk.to(feat.device)
-            # The first action of the chunk is the one this transition uses,
-            # which matches how the policy is executed online: LatentPolicy
-            # replans every ``execute`` steps and this replans every step, so
-            # the two agree exactly at the default execute=1. Anything larger
-            # is rejected before training rather than approximated here.
-            action = chunk[:, 0]
+    feats: List[torch.Tensor] = [feat]
+    actions: List[torch.Tensor] = []
+    for step in range(execute):
         # What the environment would actually run, in the actor's coordinates.
-        executed = coords.executed(action) if coords is not None else action
-        feats.append(feat)
+        executed = (coords.executed(chunk[:, step]) if coords is not None
+                    else chunk[:, step])
         actions.append(executed)
         # The RSSM reads dynamics coordinates. Converting here rather than
         # inside the RSSM keeps rssm.py exactly as the simulator has it.
         stepped = (coords.to_dynamics(executed) if coords is not None
                    else executed)
-        # img_step advances the semantic state itself -- it calls
-        # semantic_prior internally and returns (stoch, deter, sem, sem_logit)
-        # when the branch is on. Unpacking two values and then calling
-        # semantic_prior again would advance g twice per transition, which is
-        # a different rollout than the one the prior was trained for.
+        # img_step advances the semantic state itself; unpacking two values
+        # and calling semantic_prior again would advance g twice.
         result = world_model.rssm.img_step(stoch, deter, stepped, sem)
         if graph_enabled:
             stoch, deter, sem, _sem_logit = result
         else:
             stoch, deter = result
-
-    final = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
-             else world_model.rssm.get_feat(stoch, deter))
-    feats.append(final)
+        feats.append(world_model.rssm.get_feat(stoch, deter, sem)
+                     if graph_enabled
+                     else world_model.rssm.get_feat(stoch, deter))
     return {
-        "feat": torch.stack(feats, 0),            # (horizon + 1, B, D)
-        "action": torch.stack(actions, 0),        # (horizon, B, A)
+        "feat": torch.stack(feats, 0),            # (execute + 1, B, D)
+        "action": torch.stack(actions, 0),        # (execute, B, A)
         # The stack is a *new* node; the objective's graph runs through these.
         # Probing the stack with autograd.grad returns None and says nothing.
         "action_steps": actions,
+        "chunk": chunk,                           # (B, C, A), as sampled
     }
-
-
-def imagine_flow_reinforce(world_model, actor, start, horizon: int, *,
-                           flow_steps: int, sigmas: torch.Tensor,
-                           instruction: Optional[Any] = None, coords=None,
-                           generator=None, store_device=None,
-                           record_means: bool = False) -> Dict[str, Any]:
-    """An imagined rollout recorded as data, with no autograd graph at all.
-
-    This is the collection half of the ``flow_reinforce`` objective and the
-    reason that objective is cheaper than the pathwise one. :func:`imagine`
-    keeps the whole sequential expert chain alive so the return's gradient can
-    be pushed back through it; here nothing is retained. The rollout is
-    generated once under ``no_grad``, every tensor is stored detached, and the
-    actor's gradient comes later from recomputing individual transition means
-    against these fixed samples.
-
-    Two consequences worth stating plainly. The flow states are recorded
-    *before* ``coords.executed`` and ``coords.to_dynamics``: clipping and the
-    coordinate change are deterministic downstream mappings, not Gaussian
-    draws, and scoring them as if they were would attribute the policy a
-    density it does not have. And the prefix cache is dropped at the end of
-    every environment step -- it is the largest thing in the loop and nothing
-    later needs it, because scoring rebuilds the prefix *with* gradients.
-
-    ``record_means`` keeps the collection-time transition means so a later
-    scoring pass can be checked against them. It doubles the record, so it is
-    off unless a consistency check is being run.
-    """
-    from ..models.flow_sampler import sample_flow_path
-
-    graph_enabled = bool(world_model.graph_enabled)
-    if graph_enabled:
-        stoch, deter, sem = start
-    else:
-        stoch, deter = start
-        sem = None
-
-    flow_steps = int(flow_steps)
-    if tuple(sigmas.shape) != (flow_steps,):
-        raise ValueError(
-            f"expected one sigma per flow transition ({flow_steps},), got "
-            f"{tuple(sigmas.shape)}")
-
-    batch = stoch.shape[0]
-    keep = (lambda tensor: tensor.detach().to(store_device).float()
-            if store_device is not None else tensor.detach().float())
-
-    feats: List[torch.Tensor] = []
-    flow_states: List[torch.Tensor] = []
-    flow_means: List[torch.Tensor] = []
-    executed_actions: List[torch.Tensor] = []
-    times: Optional[torch.Tensor] = None
-
-    with torch.no_grad():
-        for _ in range(int(horizon)):
-            feat = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
-                    else world_model.rssm.get_feat(stoch, deter))
-            cond = actor.condition(feat, instruction)
-            path = sample_flow_path(
-                actor.velocity_fn(), cond, batch=batch,
-                chunk=actor.chunk_size, dim=actor.action_dim,
-                steps=flow_steps, sigmas=sigmas,
-                # The actor's device, as in imagine(): condition() moves the
-                # feature to where the pretrained weights live.
-                device=getattr(actor, "device", feat.device),
-                dtype=torch.float32, generator=generator)
-            times = path["times"].detach()
-            flow_states.append(keep(path["states"]))
-            if record_means:
-                flow_means.append(keep(path["means"]))
-            action = path["chunk"][:, 0].to(feat.device)
-            executed = coords.executed(action) if coords is not None else action
-            feats.append(keep(feat))
-            executed_actions.append(keep(executed))
-            stepped = (coords.to_dynamics(executed) if coords is not None
-                       else executed)
-            result = world_model.rssm.img_step(stoch, deter, stepped, sem)
-            if graph_enabled:
-                stoch, deter, sem, _sem_logit = result
-            else:
-                stoch, deter = result
-            # The prefix cache is the biggest object in this loop and scoring
-            # rebuilds its own, with gradients. Holding this one would keep a
-            # no-grad cache per imagined step for no purpose.
-            del cond, path
-
-        final = (world_model.rssm.get_feat(stoch, deter, sem) if graph_enabled
-                 else world_model.rssm.get_feat(stoch, deter))
-        feats.append(keep(final))
-
-    record = {
-        "features": torch.stack(feats, 0),                    # (H+1, B, F)
-        "flow_states": torch.stack(flow_states, 0),           # (H, B, K+1, C, D)
-        "executed_actions": torch.stack(executed_actions, 0),  # (H, B, D)
-        "flow_times": times,                                  # (K,)
-        "flow_sigmas": sigmas.detach().float(),               # (K,)
-        "instruction": instruction,
-        "horizon": int(horizon),
-        "batch": int(batch),
-        "flow_steps": flow_steps,
-    }
-    if record_means:
-        record["flow_means"] = torch.stack(flow_means, 0)
-    for name in ("features", "flow_states", "executed_actions"):
-        if record[name].grad_fn is not None:
-            raise RuntimeError(
-                f"the imagined record's {name!r} carries a graph; collection "
-                "must run entirely under no_grad or the memory this objective "
-                "saves is spent anyway")
-    return record
 
 
 def gradient_chain(objective: torch.Tensor, rollout: Dict[str, Any],
@@ -352,32 +264,38 @@ def imagined_rewards(world_model, feat: torch.Tensor) -> Dict[str, torch.Tensor]
     ``symexp_twohot`` distribution whose ``mode()`` is a method; ``cont`` is a
     ``binary`` one whose ``mode`` is a *property*, so ``.mode()`` there calls a
     Tensor. ``dreamer.py:1280`` reads continuation as ``.mean`` -- the
-    probability of continuing -- and that is what the lambda-return wants
-    anyway, since a hard 0/1 mode would make the bootstrap discontinuous.
+    probability of continuing -- and that is what the return wants anyway,
+    since a hard 0/1 mode would make the bootstrap discontinuous.
     """
     reward = world_model.reward_head(feat).mode()
     cont = world_model.cont_head(feat).mean
     return {"reward": reward.squeeze(-1), "cont": cont.squeeze(-1)}
 
 
-def lambda_return(reward: torch.Tensor, value: torch.Tensor,
-                  cont: torch.Tensor, discount: float, lam: float
-                  ) -> torch.Tensor:
-    """Discounted lambda-return, computed backwards over the horizon.
+def chunk_return(reward: torch.Tensor, cont: torch.Tensor,
+                 bootstrap: torch.Tensor, discount: float) -> torch.Tensor:
+    """The discounted return of an executed chunk, bootstrapped at its end::
 
-    ``cont`` carries the bootstrap: under ``ignore_terminations`` it is one
-    throughout, so the return bootstraps off the value at the horizon rather
-    than being cut short by a terminal the online env never produces.
+        G = r_0 + g c_0 (r_1 + g c_1 ( ... (r_(E-1) + g c_(E-1) V(s_E))))
+
+    ``reward[t]`` and ``cont[t]`` belong to transition ``t`` (read at the
+    successor -- see :mod:`sim_vla.training.actor_critic`) and ``bootstrap``
+    is the value at the chunk's final state. This is the lambda-return at
+    ``lambda = 1``. A continuation of zero at transition ``t`` keeps that
+    transition's own reward -- the action earned it -- and removes every later
+    reward and the bootstrap; continuation products do that on their own.
+    Under ``ignore_terminations`` continuation is one throughout, so the return
+    always bootstraps.
     """
-    horizon = reward.shape[0]
-    # Accumulated into a list and stacked, as dreamer.py:_lambda_return does.
-    # Writing into a preallocated tensor works, but this objective is
-    # differentiated -- unlike dreamer's, which detaches the advantage -- so
-    # the form that leaves no doubt about the graph is the one to use.
-    carry = value[-1]
-    collected = []
-    for step in reversed(range(horizon)):
-        carry = reward[step] + discount * cont[step] * (
-            (1.0 - lam) * value[step + 1] + lam * carry)
-        collected.append(carry)
-    return torch.stack(list(reversed(collected)), 0)
+    if tuple(reward.shape) != tuple(cont.shape):
+        raise ValueError(
+            f"reward {tuple(reward.shape)} and continuation "
+            f"{tuple(cont.shape)} must share (transition, batch)")
+    if tuple(bootstrap.shape) != tuple(reward.shape[1:]):
+        raise ValueError(
+            f"bootstrap {tuple(bootstrap.shape)} must be one value per start, "
+            f"{tuple(reward.shape[1:])}")
+    carry = bootstrap
+    for step in reversed(range(int(reward.shape[0]))):
+        carry = reward[step] + discount * cont[step] * carry
+    return carry

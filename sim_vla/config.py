@@ -25,6 +25,47 @@ from typing import Any, Dict, Mapping, Optional
 
 CONFIG_ROOT = Path(__file__).resolve().parent / "configs"
 
+# Settings the online actor-critic no longer has, and why. A stale config or a
+# copied override would otherwise resolve, run, and be a different experiment
+# from the one its file describes.
+REMOVED_ONLINE = {
+    "actor_objective":
+        "there is one online objective now -- the pathwise return of an "
+        "executed chunk -- so there is nothing to select",
+    "flow_noise_std":
+        "the stochastic flow sampler went with flow_reinforce; collection and "
+        "imagination both use the deterministic sampler",
+    "flow_noise_schedule":
+        "the stochastic flow sampler went with flow_reinforce",
+    "actor_transition_microbatch":
+        "no flow transition is scored any more; imagination_microbatch bounds "
+        "the actor's memory",
+    "imagination_batch":
+        "imagination starts from every eligible replay state, so there is no "
+        "cap to set; imagination_microbatch is the memory control",
+    "imag_horizon":
+        "an imagined rollout is exactly actor.execute transitions of one "
+        "generated chunk",
+    "demo_anchor":
+        "online imitation was removed; Stage 1B is where the policy imitates",
+    "anchor_windows": "online imitation was removed",
+    "anchor_window_microbatch": "online imitation was removed",
+    "anchor_rows": "online imitation was removed",
+    "anchor_microbatch": "online imitation was removed",
+    "anchor_retries": "online imitation was removed",
+    "grad_report_every":
+        "it measured the RL gradient against the imitation anchor's, and "
+        "there is no anchor",
+    "advantage_scale":
+        "the pathwise objective maximises the return itself; no advantage is "
+        "formed or normalized",
+    "eval_sampler":
+        "there is one sampler, so the evaluation already runs the policy "
+        "being trained",
+    "lam":
+        "the executed-chunk return is the lambda = 1 case and is not tunable",
+}
+
 
 def deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
     """``override`` wins per leaf, not per block."""
@@ -92,15 +133,20 @@ def validate(cfg: Mapping[str, Any]) -> None:
             raise SystemExit(f"pretrain.{key} must be positive when set")
 
     online = cfg.get("online") or {}
+    removed = sorted(key for key in REMOVED_ONLINE if key in online)
+    if removed:
+        detail = "\n".join(f"  - online.{key}: {REMOVED_ONLINE[key]}"
+                           for key in removed)
+        raise SystemExit(
+            "these online settings no longer exist and would be read by "
+            "nothing:\n" + detail + "\nRemove them rather than leaving a "
+            "config that describes a different experiment from the one it "
+            "runs.")
     ratio = float(online.get("train_ratio", 64))
     if not math.isfinite(ratio) or ratio < 0:
         raise SystemExit("online.train_ratio must be finite and nonnegative")
-    for key in ("imagination_batch", "imagination_microbatch"):
-        if int(online.get(key, 0)) < 0:
-            raise SystemExit(f"online.{key} must be nonnegative")
-    if (online.get("imag_horizon") is not None
-            and int(online["imag_horizon"]) <= 0):
-        raise SystemExit("online.imag_horizon must be positive")
+    if int(online.get("imagination_microbatch", 0)) < 0:
+        raise SystemExit("online.imagination_microbatch must be nonnegative")
     if online.get("precision", "bfloat16") not in ("float32", "bfloat16"):
         raise SystemExit("online.precision must be float32 or bfloat16")
     if int(online.get("num_envs", 1) or 0) < 1:
@@ -116,66 +162,30 @@ def validate(cfg: Mapping[str, Any]) -> None:
             "envs train between steps, and train_ratio=0 is the legacy "
             "per-collection schedule")
 
-    # The actor objective and everything that only means something under one
-    # of them. Checked here so a bad combination fails in seconds rather than
-    # after Stage 1A and 1B have been restored and a critic warm-up has run.
-    objective = str(online.get("actor_objective", "pathwise"))
-    if objective not in ("pathwise", "flow_reinforce"):
-        raise SystemExit(
-            f"online.actor_objective must be 'pathwise' or 'flow_reinforce', "
-            f"got {objective!r}")
-    noise = online.get("flow_noise_std", 0.0)
-    if objective == "flow_reinforce":
-        if not math.isfinite(float(noise)) or float(noise) <= 0:
-            raise SystemExit(
-                "online.actor_objective=flow_reinforce needs a finite, "
-                f"strictly positive online.flow_noise_std, got {noise!r}. "
-                "A deterministic flow transition has no Gaussian density, so "
-                "there is no log probability to differentiate.")
-        if str(online.get("flow_noise_schedule",
-                          "constant_per_step_scaled_by_sqrt_k")) != \
-                "constant_per_step_scaled_by_sqrt_k":
-            raise SystemExit(
-                "online.flow_noise_schedule must be "
-                "'constant_per_step_scaled_by_sqrt_k'; no other schedule is "
-                "implemented, and silently substituting one would make two "
-                "runs incomparable without saying so.")
-    elif float(noise or 0.0) > 0:
-        raise SystemExit(
-            f"online.flow_noise_std={noise} is set but "
-            f"online.actor_objective={objective!r} never samples stochastically. "
-            "A noise scale that is read and never applied is worse than one "
-            "that is absent; set the objective to flow_reinforce or the scale "
-            "to 0.")
-    for key in ("actor_transition_microbatch", "anchor_rows",
-                "anchor_microbatch", "anchor_retries", "anchor_windows",
-                "anchor_window_microbatch", "grad_report_every",
-                "critic_warmup"):
-        if int(online.get(key, 1)) < 0:
-            raise SystemExit(f"online.{key} must be nonnegative")
-    anchor = float(online.get("demo_anchor", 0.0) or 0.0)
-    if not math.isfinite(anchor) or anchor < 0:
-        raise SystemExit("online.demo_anchor must be finite and nonnegative")
-    if anchor and int(online.get("anchor_rows", 64)) <= 0:
-        raise SystemExit(
-            "online.demo_anchor is nonzero but online.anchor_rows is not "
-            "positive, so the anchor would have no rows to score")
-    if anchor and int(online.get("anchor_windows", 8)) <= 0:
-        raise SystemExit(
-            "online.demo_anchor is nonzero but online.anchor_windows is not "
-            "positive, so no demonstration window would be drawn to take "
-            "rows from")
+    if int(online.get("critic_warmup", 0)) < 0:
+        raise SystemExit("online.critic_warmup must be nonnegative")
     if online.get("actor_lr") is not None and float(online["actor_lr"]) <= 0:
         raise SystemExit("online.actor_lr must be positive when set")
-    if str(online.get("advantage_scale", "return_ema")) != "return_ema":
-        raise SystemExit(
-            "online.advantage_scale must be 'return_ema'; it names what the "
-            "run does rather than selecting between implementations")
-    if str(online.get("eval_sampler", "stochastic")) not in (
-            "stochastic", "deterministic"):
-        raise SystemExit(
-            "online.eval_sampler must be 'stochastic' or 'deterministic'")
+
     actor = cfg.get("actor") or {}
+    # One number decides how many actions a generated chunk contributes, in
+    # the environment and in imagination. chunk_size is checked against the
+    # loaded checkpoint when the actor is built; this is the part that can be
+    # checked from the config alone.
+    execute = actor.get("execute", 1)
+    if int(execute) < 1:
+        raise SystemExit(
+            f"actor.execute={execute!r} must be at least 1: a chunk has to "
+            "contribute at least one executed action")
+    chunk = int(actor.get("chunk_size") or 0)
+    if chunk and int(execute) > chunk:
+        raise SystemExit(
+            f"actor.execute={execute} exceeds actor.chunk_size={chunk}; "
+            "executing more actions than the policy predicts would repeat or "
+            "invent commands")
+    if int(actor.get("flow_steps") or 0) < 0:
+        raise SystemExit("actor.flow_steps must be nonnegative "
+                         "(0 takes the checkpoint's own value)")
     revision = actor.get("revision", "")
     # A commit hash of only decimal digits is a valid hash and an integer in
     # YAML, and PyYAML resolves it to one. It then reaches the hub as a number

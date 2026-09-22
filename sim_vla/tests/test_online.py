@@ -1,4 +1,11 @@
-"""Stage 8: critic targets, actor gradients, and frozen parameters staying so."""
+"""Stage 8: the executed-chunk update -- targets, gradients, frozen parameters.
+
+One rollout per microbatch of starts feeds both losses: the actor maximises
+the chunk's bootstrapped return, the critic regresses the start state onto the
+same return, detached. What these check is the wiring that is invisible in a
+loss curve -- which parameters move, which stay, what the critic is trained
+at, and that grouping the starts changes nothing but memory.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +18,7 @@ from .common import (DummyExpert, fake_batch, obs_shapes, require_torch,
 
 
 def build(graph_enabled):
-    torch = require_torch()
+    require_torch()
     from sim_vla.models.critics import ValueCritic
     from sim_vla.models.world_model import build_world_model
 
@@ -21,6 +28,68 @@ def build(graph_enabled):
                               graph_enabled=graph_enabled)
     critic = ValueCritic(model_cfg, model.feature_dim)
     return model, critic, batch
+
+
+def make_actor(model, chunk=8):
+    torch = require_torch()
+    from sim_vla.models.latent_adapter import LatentAdapter
+
+    class Actor(torch.nn.Module):
+        chunk_size, action_dim = chunk, 8
+
+        def __init__(self):
+            super().__init__()
+            self.adapter = LatentAdapter(model.feature_dim, 16, hidden=32)
+            self.expert = DummyExpert(16, 8)
+            self.expert_linear = self.expert.linear
+
+        def condition(self, feat, instruction=None):
+            return {"state_token": self.adapter(feat),
+                    "instruction": instruction}
+
+        def velocity_fn(self):
+            return self.expert
+
+    return Actor()
+
+
+def ac_config(**overrides):
+    from sim_vla.training.actor_critic import ActorCriticConfig
+
+    settings = dict(execute=2, flow_steps=2, critic_warmup=0,
+                    imagination_microbatch=0)
+    settings.update(overrides)
+    return ActorCriticConfig(**settings)
+
+
+def give_the_heads_an_opinion(model, critic):
+    """Move the reward and value heads off their flat initialization.
+
+    Both are ``symexp_twohot`` heads whose output layer starts at zero, so
+    every state gets the same prediction and the gradient with respect to the
+    feature is exactly zero -- which is why ``critic_warmup`` exists, and why
+    a gradient test taken on a fresh model would pass or fail for the wrong
+    reason.
+    """
+    torch = require_torch()
+    torch.manual_seed(3)
+    for parameter in critic.net.parameters():
+        parameter.data.add_(torch.randn_like(parameter))
+    for parameter in model.reward_head.parameters():
+        parameter.data.add_(torch.randn_like(parameter))
+    return model, critic
+
+
+def trainer_for(graph_enabled=False, opinionated=True, **overrides):
+    from sim_vla.training.actor_critic import ActorCriticTrainer
+    from sim_vla.training.imagination import start_states
+
+    model, critic, batch = build(graph_enabled)
+    if opinionated:
+        give_the_heads_an_opinion(model, critic)
+    actor = make_actor(model)
+    trainer = ActorCriticTrainer(model, actor, critic, ac_config(**overrides))
+    return trainer, start_states(model, batch), model, actor, critic
 
 
 class TestCritic(unittest.TestCase):
@@ -76,64 +145,91 @@ class TestCritic(unittest.TestCase):
         self.assertIsNone(returns.grad)
 
 
-class TestActorUpdate(unittest.TestCase):
-    def make_actor(self, model):
-        torch = require_torch()
-        from sim_vla.models.latent_adapter import LatentAdapter
-
-        class Actor(torch.nn.Module):
-            chunk_size, action_dim = 4, 8
-
-            def __init__(self):
-                super().__init__()
-                self.adapter = LatentAdapter(model.feature_dim, 16, hidden=32)
-                self.expert = DummyExpert(16, 8)
-                self.expert_linear = self.expert.linear
-
-            def condition(self, feat, instruction=None):
-                return {"state_token": self.adapter(feat),
-                        "instruction": instruction}
-
-            def velocity_fn(self):
-                return self.expert
-
-        return Actor()
-
-    def test_actor_loss_reaches_the_adapter(self):
-        torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
-        from sim_vla.training.imagination import flatten_start
+class TestActorObjective(unittest.TestCase):
+    def objective(self, **overrides):
+        from sim_vla.training.actor_critic import executed_chunk_objective
+        from sim_vla.training.imagination import start_states
 
         model, critic, batch = build(False)
-        actor = self.make_actor(model)
-        start = flatten_start(model.observe(batch)["post"], False)
-        out = actor_loss(model, actor, critic, start,
-                         ActorCriticConfig(horizon=2, flow_steps=3))
+        give_the_heads_an_opinion(model, critic)
+        actor = make_actor(model)
+        start = start_states(model, batch)
+        out = executed_chunk_objective(model, actor, critic, start,
+                                       ac_config(**overrides))
+        return out, model, actor, critic
+
+    def test_the_return_reaches_the_adapter(self):
+        require_torch()
+        out, _model, actor, _critic = self.objective()
         out["loss"].backward()
-        grads = [p.grad for p in actor.adapter.parameters() if p.grad is not None]
+        grads = [p.grad for p in actor.adapter.parameters()
+                 if p.grad is not None and float(p.grad.abs().sum()) > 0]
         self.assertTrue(grads, "the return's gradient never reached the actor")
 
-    def test_world_model_and_critic_parameters_are_unchanged(self):
+    def test_the_world_model_and_critic_keep_their_parameters(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig, actor_loss
-        from sim_vla.training.imagination import flatten_start
-
-        model, critic, batch = build(False)
-        actor = self.make_actor(model)
+        out, model, actor, critic = self.objective()
         before = [p.detach().clone() for p in model.parameters()]
-        start = flatten_start(model.observe(batch)["post"], False)
-        out = actor_loss(model, actor, critic, start,
-                         ActorCriticConfig(horizon=2, flow_steps=3))
         out["loss"].backward()
-        opt = torch.optim.SGD(
-            [p for p in actor.parameters() if p.requires_grad], lr=0.1)
-        opt.step()
+        for name, parameter in model.named_parameters():
+            self.assertIsNone(parameter.grad,
+                              f"world model parameter {name} accumulated a "
+                              "gradient during the actor update")
+        for name, parameter in critic.named_parameters():
+            self.assertIsNone(parameter.grad,
+                              f"critic parameter {name} accumulated a "
+                              "gradient during the actor update")
+        torch.optim.SGD([p for p in actor.parameters() if p.requires_grad],
+                        lr=0.1).step()
         for old, new in zip(before, model.parameters()):
             self.assertTrue(torch.equal(old, new.detach()),
                             "the actor update changed the world model")
 
-    def test_freeze_restores_requires_grad(self):
+    def test_the_progress_head_is_read_but_not_trained(self):
         torch = require_torch()
+        from sim_vla.training.actor_critic import executed_chunk_objective
+        from sim_vla.training.imagination import start_states
+        from sim_vla.training.progress import build_progress
+
+        model, critic, batch = build(True)
+        give_the_heads_an_opinion(model, critic)
+        _cfg, model_cfg = small_model_config(True)
+        actor = make_actor(model)
+        head = build_progress(model_cfg, model.feature_dim,
+                              graph_enabled=True, progress_enabled=True)
+        out = executed_chunk_objective(
+            model, actor, critic, start_states(model, batch),
+            ac_config(progress_beta=0.25), progress_head=head)
+        self.assertIsNotNone(out["shaping"])
+        # The shaped stream is what the return was built from, and it differs
+        # from the environment stream it is reported beside.
+        self.assertFalse(torch.allclose(out["shaped_reward"], out["reward"]))
+        out["loss"].backward()
+        for name, parameter in head.named_parameters():
+            self.assertIsNone(parameter.grad,
+                              f"the actor update trained progress head {name}")
+
+    def test_warmup_builds_no_graph_at_all(self):
+        """Including the conditioning: the adapter must not be run with grad
+        during the warm-up, or its activations are kept for nothing."""
+        require_torch()
+        from sim_vla.training.actor_critic import executed_chunk_objective
+        from sim_vla.training.imagination import start_states
+
+        model, critic, batch = build(False)
+        give_the_heads_an_opinion(model, critic)
+        actor = make_actor(model)
+        out = executed_chunk_objective(model, actor, critic,
+                                       start_states(model, batch), ac_config(),
+                                       differentiable=False)
+        for key in ("loss", "returns", "feat", "action"):
+            self.assertIsNone(out[key].grad_fn,
+                              f"{key} kept a graph while the actor was warming "
+                              "up")
+        self.assertFalse(out["loss"].requires_grad)
+
+    def test_freeze_restores_requires_grad(self):
+        require_torch()
         from sim_vla.training.actor_critic import freeze_parameters
 
         model, critic, _ = build(False)
@@ -141,133 +237,126 @@ class TestActorUpdate(unittest.TestCase):
             self.assertFalse(any(p.requires_grad for p in model.parameters()))
         self.assertTrue(any(p.requires_grad for p in model.parameters()))
 
-    def test_critic_warmup_holds_the_actor_still(self):
+
+class TestCriticTarget(unittest.TestCase):
+    """What the critic is trained at, and on what."""
+
+    def test_it_regresses_the_start_state_on_a_detached_return(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import (ActorCriticConfig,
-                                                   ActorCriticTrainer)
-        from sim_vla.training.imagination import flatten_start
+        from sim_vla.training.actor_critic import ActorCriticTrainer
+        from sim_vla.training.imagination import start_states
 
         model, critic, batch = build(False)
-        actor = self.make_actor(model)
-        trainer = ActorCriticTrainer(
-            model, actor, critic,
-            ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=2))
-        start = flatten_start(model.observe(batch)["post"], False)
+        give_the_heads_an_opinion(model, critic)
+        actor = make_actor(model)
+        trainer = ActorCriticTrainer(model, actor, critic, ac_config())
+        start = start_states(model, batch)
+        seen = {}
+        original = critic.loss
+
+        def record(feat, returns, mask=None):
+            seen["feat"] = feat.detach().clone()
+            seen["returns_requires_grad"] = bool(returns.requires_grad)
+            seen["feat_requires_grad"] = bool(feat.requires_grad)
+            return original(feat, returns, mask)
+
+        critic.loss = record
+        trainer.update(start)
+        critic.loss = original
+
+        self.assertFalse(seen["returns_requires_grad"],
+                         "the critic was trained on a live return")
+        self.assertFalse(seen["feat_requires_grad"],
+                         "the critic's input carried the actor's graph")
+        # The start states themselves, not a later state of the chunk.
+        from sim_vla.training.imagination import imagine_chunk
+
+        with torch.no_grad():
+            expected = imagine_chunk(model, actor, start, trainer.config.execute,
+                                     flow_steps=trainer.config.flow_steps,
+                                     differentiable=False)["feat"][0]
+        self.assertEqual(tuple(seen["feat"].shape), tuple(expected.shape))
+        torch.testing.assert_close(seen["feat"], expected)
+
+
+class TestUpdateMechanics(unittest.TestCase):
+    def test_critic_warmup_holds_the_actor_still(self):
+        torch = require_torch()
+        trainer, start, _model, actor, _critic = trainer_for(critic_warmup=2)
         before = [p.detach().clone() for p in actor.adapter.parameters()]
         metrics = trainer.update(start)
-        self.assertNotEqual(metrics["critic_loss"], metrics["critic_loss"] + 1)
+        self.assertTrue(np.isnan(metrics["actor_loss"]))
+        self.assertTrue(np.isfinite(metrics["critic_loss"]))
+        self.assertEqual(trainer.actor_steps, 0)
         for old, new in zip(before, actor.adapter.parameters()):
             self.assertTrue(torch.equal(old, new.detach()),
                             "the actor moved during critic warm-up")
 
-
-class TestPostWarmupUpdates(unittest.TestCase):
-    """Several full updates with no warm-up left, which is where the
-    in-place/version error appeared: the critic optimizer used to step before
-    the actor's outstanding backward pass had run."""
-
     def test_repeated_updates_after_warmup(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import (ActorCriticConfig,
-                                                   ActorCriticTrainer)
-        from sim_vla.training.imagination import flatten_start
-
-        model, critic, batch = build(False)
-        actor = TestActorUpdate().make_actor(model)
-        trainer = ActorCriticTrainer(
-            model, actor, critic,
-            ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0,
-                              imagination_microbatch=5))
-        # Detached: the same start seeds three updates, and a live graph would
-        # be freed by the first backward.
-        start = tuple(t.detach() for t in
-                      flatten_start(model.observe(batch)["post"], False))
+        trainer, start, model, _actor, _critic = trainer_for(
+            imagination_microbatch=5)
         before = [p.detach().clone() for p in model.parameters()]
-
         for step in range(3):
             metrics = trainer.update(start)
             self.assertFalse(np.isnan(metrics["actor_loss"]),
                              f"actor did not update at step {step}")
-            self.assertTrue(np.isfinite(metrics["actor_grad_norm"]))
-            # How many parameters received a gradient, not only its norm: a
-            # single zero cannot distinguish an absent gradient from an
-            # unmeasured one.
+            self.assertGreater(metrics["actor_grad_norm"], 0.0,
+                               f"no actor gradient at step {step}")
             self.assertEqual(metrics["actor_params_with_grad"],
                              metrics["actor_params_trainable"],
                              f"step {step}: only "
                              f"{metrics['actor_params_with_grad']} of "
                              f"{metrics['actor_params_trainable']} actor "
                              "parameters received a gradient")
-            if metrics["actor_grad_norm"] == 0.0:
-                # Every parameter has a .grad (asserted above) and their norm
-                # is zero, while autograd.grad on the same objective is not.
-                # Compute both on one objective to locate the discrepancy.
-                from sim_vla.training.actor_critic import actor_loss
-                from sim_vla.training.imagination import gradient_chain
-
-                out = actor_loss(model, actor, critic, start, trainer.config)
-                params = [p for p in actor.parameters() if p.requires_grad]
-                direct = torch.autograd.grad(out["loss"], params,
-                                             retain_graph=True,
-                                             allow_unused=True)
-                direct_norm = float(torch.sqrt(sum(
-                    (g ** 2).sum() for g in direct if g is not None)))
-                # Inspect the live graph before backward consumes it. This is
-                # only a failure diagnostic, but it must not replace the real
-                # zero-gradient assertion with "backward through graph a
-                # second time".
-                chain = gradient_chain(out["loss"], out, actor)
-                for parameter in params:
-                    parameter.grad = None
-                out["loss"].backward()
-                backward_norm = float(torch.sqrt(sum(
-                    (p.grad ** 2).sum() for p in params
-                    if p.grad is not None)))
-                self.fail(
-                    f"actor gradient was zero at step {step}. "
-                    f"autograd.grad norm={direct_norm:.3e}, "
-                    f".grad norm after backward={backward_norm:.3e}, "
-                    f"unused={sum(1 for g in direct if g is None)}/"
-                    f"{len(params)}; chain={chain}")
             self.assertTrue(np.isfinite(metrics["critic_loss"]))
-
+        self.assertEqual(trainer.actor_steps, 3)
         # The world model is frozen throughout the actor optimisation.
         for old, new in zip(before, model.parameters()):
             self.assertTrue(torch.equal(old, new.detach()),
                             "an actor/critic update changed the world model")
 
-    def test_bootstrap_uses_the_slow_target(self):
+    def test_the_bootstrap_comes_from_the_slow_target(self):
         require_torch()
         import inspect
 
         from sim_vla.training import actor_critic
 
-        source = inspect.getsource(actor_critic.actor_loss)
+        source = inspect.getsource(actor_critic.executed_chunk_objective)
         code = chr(10).join(line.split("#", 1)[0]
                             for line in source.splitlines())
         self.assertIn("target_value(", code,
                       "the bootstrap must come from the slow target critic")
 
+    def test_execute_beyond_the_chunk_is_refused(self):
+        require_torch()
+        from sim_vla.training.actor_critic import ActorCriticTrainer
+
+        model, critic, _batch = build(False)
+        actor = make_actor(model, chunk=4)
+        with self.assertRaises(ValueError):
+            ActorCriticTrainer(model, actor, critic, ac_config(execute=5))
+
 
 class TestMicrobatchUpdates(unittest.TestCase):
     def test_graph_progress_bfloat16_keeps_actor_gradients(self):
         torch = require_torch()
-        from sim_vla.training.actor_critic import ActorCriticConfig, ActorCriticTrainer
+        from sim_vla.training.actor_critic import ActorCriticTrainer
         from sim_vla.training.imagination import start_states
         from sim_vla.training.progress import build_progress
 
         torch.manual_seed(4)
         model, critic, batch = build(True)
+        give_the_heads_an_opinion(model, critic)
         _, model_cfg = small_model_config(True)
-        actor = TestActorUpdate().make_actor(model)
+        actor = make_actor(model)
         head = build_progress(model_cfg, model.feature_dim,
                               graph_enabled=True, progress_enabled=True)
         trainer = ActorCriticTrainer(
             model, actor, critic,
-            ActorCriticConfig(horizon=2, flow_steps=2, critic_warmup=0,
-                              imagination_microbatch=2, precision="bfloat16"),
+            ac_config(imagination_microbatch=2, precision="bfloat16"),
             progress_head=head)
-        starts = start_states(model, batch, limit=5)
+        starts = start_states(model, batch)
         head_before = [p.detach().clone() for p in head.parameters()]
         for _ in range(2):
             metrics = trainer.update(starts, progress_beta=0.05)
@@ -283,7 +372,8 @@ class TestMicrobatchUpdates(unittest.TestCase):
         torch = require_torch()
         import copy
         from unittest.mock import patch
-        from sim_vla.training.actor_critic import ActorCriticConfig, ActorCriticTrainer
+
+        from sim_vla.training.actor_critic import ActorCriticTrainer
 
         class Critic(torch.nn.Module):
             def __init__(self):
@@ -291,7 +381,7 @@ class TestMicrobatchUpdates(unittest.TestCase):
                 self.net = torch.nn.Linear(1, 1)
                 self.target_updates = 0
 
-            def loss(self, feat, returns):
+            def loss(self, feat, returns, mask=None):
                 return (self.net(feat).squeeze(-1) - returns).square().mean()
 
             def update_target(self):
@@ -301,60 +391,121 @@ class TestMicrobatchUpdates(unittest.TestCase):
         actor = torch.nn.Linear(1, 1)
         critic = Critic()
         start = (torch.arange(1., 6.).reshape(5, 1),)
-        shaping = torch.arange(5.).reshape(1, 5)
         trainers = []
         reports = []
         for size in (0, 2):
             trainer = ActorCriticTrainer(
-                torch.nn.Linear(1, 1), copy.deepcopy(actor), copy.deepcopy(critic),
-                ActorCriticConfig(critic_warmup=0, imagination_microbatch=size,
-                                  grad_clip=1e6, progress_beta=0.2))
+                torch.nn.Linear(1, 1), copy.deepcopy(actor),
+                copy.deepcopy(critic),
+                ac_config(imagination_microbatch=size, grad_clip=1e6))
             pending = []
             seen = []
 
             def objective(wm, policy, value, seeds, config, *,
-                          differentiable=True, progress_reward=None, **kwargs):
-                # The next forward must not coexist with the previous graph.
+                          differentiable=True, **kwargs):
+                # The next rollout must not coexist with the previous graph.
                 self.assertFalse(pending)
+                self.assertTrue(differentiable)
                 feat = seeds[0]
-                returns = feat.square().squeeze(-1).unsqueeze(0)
-                loss = policy(feat).square().mean()
-                if differentiable:
-                    seen.append(feat.shape[0])
-                    self.assertTrue(torch.is_grad_enabled())
-                    loss = loss + (policy(feat).squeeze(-1)
-                                   * progress_reward.squeeze(0)).mean()
-                    pending.append(True)
-                    loss.register_hook(lambda grad: (pending.clear(), grad)[1])
-                else:
-                    self.assertFalse(torch.is_grad_enabled())
+                seen.append(feat.shape[0])
+                returns = policy(feat).squeeze(-1) * feat.squeeze(-1)
+                loss = -returns.mean()
+                pending.append(True)
+                loss.register_hook(lambda grad: (pending.clear(), grad)[1])
+                one = torch.ones_like(returns)
                 return {"loss": loss, "returns": returns,
-                        "feat": torch.stack([feat, feat]), "reward": returns,
-                        "shaping": progress_reward}
+                        "feat": torch.stack([feat, feat]),
+                        "reward": one, "cont": one, "bootstrap": one,
+                        "shaping": None}
 
-            with patch("sim_vla.training.actor_critic.actor_loss", objective):
-                reports.append(trainer.update(start, progress_reward=shaping))
+            with patch("sim_vla.training.actor_critic."
+                       "executed_chunk_objective", objective):
+                reports.append(trainer.update(start))
             self.assertFalse(pending)
             self.assertEqual(seen, [5] if size == 0 else [2, 2, 1])
             self.assertEqual(trainer.critic.target_updates, 1)
             self.assertEqual(trainer.step, 1)
             trainers.append(trainer)
 
-        for key in ("actor_loss", "critic_loss", "actor_grad_norm", "shaping_reward"):
+        for key in ("actor_loss", "critic_loss", "actor_grad_norm", "return"):
             self.assertAlmostEqual(reports[0][key], reports[1][key], places=4)
         for name in ("actor_opt", "critic_opt"):
             left = getattr(trainers[0], name).state_dict()["state"]
             right = getattr(trainers[1], name).state_dict()["state"]
             for key in left:
-                # Adam's moments verify accumulated gradients, not only weights:
-                # a first Adam step can hide a wrong gradient scale.
+                # Adam's moments verify accumulated gradients, not only
+                # weights: a first Adam step can hide a wrong gradient scale.
                 for field in ("step", "exp_avg", "exp_avg_sq"):
-                    torch.testing.assert_close(left[key][field], right[key][field])
+                    torch.testing.assert_close(left[key][field],
+                                               right[key][field])
                 self.assertEqual(float(right[key]["step"]), 1.0)
         for name in ("actor", "critic"):
             for a, b in zip(getattr(trainers[0], name).parameters(),
                             getattr(trainers[1], name).parameters()):
                 torch.testing.assert_close(a, b)
+
+
+class TestImaginationStarts(unittest.TestCase):
+    """Every eligible replay position, re-encoded after the world-model step."""
+
+    def test_starts_follow_the_current_parameters(self):
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        first = start_states(model, batch)
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.add_(torch.randn_like(parameter) * 0.1)
+        second = start_states(model, batch)
+        self.assertFalse(torch.allclose(first[0], second[0]),
+                         "starts did not change after the model did")
+
+    def test_every_eligible_position_is_a_start(self):
+        require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        starts = start_states(model, batch)
+        self.assertFalse(starts[0].requires_grad, "starts must be detached")
+        self.assertEqual(int(starts[0].shape[0]),
+                         int(batch["loss_mask"].sum()),
+                         "the starts were capped or padded rows slipped in")
+
+    def test_padding_and_burn_in_are_excluded(self):
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        batch["loss_mask"] = torch.zeros_like(batch["loss_mask"])
+        batch["loss_mask"][:, 1] = True
+        starts = start_states(model, batch)
+        self.assertEqual(starts[0].shape[0], batch["loss_mask"].shape[0])
+
+    def test_terminal_states_are_never_starts(self):
+        """Nothing continues from a terminal state, so no chunk starts there."""
+        torch = require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        eligible = int(batch["loss_mask"].sum())
+        batch["is_terminal"] = torch.zeros_like(batch["loss_mask"])
+        batch["is_terminal"][0, 2] = True
+        starts = start_states(model, batch)
+        self.assertEqual(int(starts[0].shape[0]), eligible - 1)
+
+    def test_a_supplied_posterior_is_reused_rather_than_re_encoded(self):
+        require_torch()
+        from sim_vla.training.imagination import start_states
+
+        model, _critic, batch = build(False)
+        post = model.observe(batch)["post"]
+        calls = []
+        original = model.observe
+        model.observe = lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+        start_states(model, batch, post=post)
+        model.observe = original
+        self.assertEqual(calls, [], "the batch was encoded a second time")
 
 
 class TestUpdateRatio(unittest.TestCase):
@@ -387,6 +538,7 @@ class TestOnlineSettings(unittest.TestCase):
     def test_model_defaults_and_cli_overrides_reach_both_trainers(self):
         require_torch()
         from unittest.mock import patch
+
         from sim_vla.config import load_config
         from sim_vla.models.model_config import load_model_config
         from sim_vla.training import pipeline
@@ -398,11 +550,12 @@ class TestOnlineSettings(unittest.TestCase):
             cfg, model, total_steps=500_000, flow_steps=7)
         self.assertEqual(online.batch_size, 16)
         self.assertEqual(online.train_ratio, 64)
-        self.assertEqual(online.imagination_batch, 256)
         self.assertEqual(ac.imagination_microbatch, 16)
-        self.assertEqual(ac.horizon, model.imag_horizon)
+        # One setting decides the executed chunk, and the discount still comes
+        # from the root model's horizon.
+        self.assertEqual(ac.execute, int(cfg["actor"]["execute"]))
+        self.assertEqual(ac.execute, 5)
         self.assertEqual(ac.discount, 1 - 1 / model.horizon)
-        self.assertEqual(ac.lam, model.lamb)
         self.assertEqual(ac.flow_steps, 7)
         self.assertEqual(online.precision, "bfloat16")
         self.assertEqual(ac.precision, online.precision)
@@ -414,29 +567,27 @@ class TestOnlineSettings(unittest.TestCase):
             pipeline.main([
                 "--task", "peginsertion", "--experiment", "graph_progress",
                 "--device", "cpu", "--batch-size", "16", "--train-ratio", "32",
-                "--online-precision", "float32", "--imagination-batch", "128",
-                "--imagination-microbatch", "7", "--imag-horizon", "9",
+                "--online-precision", "float32",
+                "--imagination-microbatch", "7", "--critic-warmup", "3",
                 "--num-envs", "128", "--reconfiguration-freq", "1"])
         cfg = run.call_args.args[0]
         self.assertEqual(cfg["online"]["num_envs"], 128)
         self.assertEqual(cfg["online"]["reconfiguration_freq"], 1)
-        # Left unset, one env and ManiSkill's own reconfiguration default.
         defaults = load_config("peginsertion", "dreamer")["online"]
         self.assertEqual(defaults["num_envs"], 1)
         self.assertIsNone(defaults["reconfiguration_freq"])
         online, ac = pipeline.online_configs(
             cfg, model, total_steps=12, flow_steps=6)
         self.assertEqual(online.train_ratio, 32)
-        self.assertEqual(online.batch_size, 16)
-        self.assertEqual(online.imagination_batch, 128)
         self.assertEqual(ac.imagination_microbatch, 7)
-        self.assertEqual(ac.horizon, 9)
+        self.assertEqual(ac.critic_warmup, 3)
         self.assertEqual(ac.precision, "float32")
         self.assertEqual(ac.flow_steps, 6)
 
     def test_stage_one_learning_rates_reach_both_stages(self):
         require_torch()
         from unittest.mock import patch
+
         from sim_vla.config import load_config
         from sim_vla.models.model_config import load_model_config
         from sim_vla.training import pipeline
@@ -446,8 +597,6 @@ class TestOnlineSettings(unittest.TestCase):
 
         cfg = load_config("peginsertion", "graph_progress")
         model = load_model_config(cfg)
-        # Unset: the preset's lr, which configs/model/_base_.yaml shares with
-        # the main trainer, and ImitationConfig's own.
         self.assertEqual(world_lr(cfg, model), float(model.lr))
         self.assertEqual(float(model.lr), 4e-5)
         self.assertEqual(imitation_lr(cfg), 1e-4)
@@ -472,49 +621,151 @@ class TestOnlineSettings(unittest.TestCase):
         from sim_vla.config import load_config
 
         for settings in ({"train_ratio": -1}, {"imagination_microbatch": -1},
-                         {"imagination_batch": -1}, {"imag_horizon": 0},
                          {"precision": "float16"}, {"num_envs": 0},
-                         {"reconfiguration_freq": -1},
+                         {"reconfiguration_freq": -1}, {"critic_warmup": -1},
+                         {"actor_lr": 0},
                          {"num_envs": 4, "train_ratio": 0}):
             with self.subTest(settings=settings), self.assertRaises(SystemExit):
                 load_config("peginsertion", "dreamer", {"online": settings})
 
+    def test_an_execute_longer_than_the_chunk_is_refused(self):
+        require_torch()
+        from sim_vla.config import load_config
 
-class TestImaginationStarts(unittest.TestCase):
-    """Starts are re-encoded after the world-model step, not reused."""
+        with self.assertRaises(SystemExit):
+            load_config("peginsertion", "dreamer",
+                        {"actor": {"execute": 0}})
+        with self.assertRaises(SystemExit):
+            load_config("peginsertion", "dreamer",
+                        {"actor": {"chunk_size": 4, "execute": 5}})
 
-    def test_starts_follow_the_current_parameters(self):
+
+class TestRemovedSettingsCannotRunSilently(unittest.TestCase):
+    """A stale config or launch script must fail, not run a different
+    experiment under the old names."""
+
+    def test_removed_online_settings_are_refused_by_name(self):
+        require_torch()
+        from sim_vla.config import REMOVED_ONLINE, load_config
+
+        for key in REMOVED_ONLINE:
+            with self.subTest(setting=key), self.assertRaises(SystemExit) as caught:
+                load_config("peginsertion", "dreamer",
+                            {"online": {key: 1}})
+            self.assertIn(key, str(caught.exception))
+
+    def test_removed_flags_say_what_replaced_them(self):
+        require_torch()
+        from sim_vla.training.pipeline import REMOVED_FLAGS, parse_args
+
+        for flag in REMOVED_FLAGS:
+            with self.subTest(flag=flag):
+                for argv in ([flag, "1"], [f"{flag}=1"]):
+                    with self.assertRaises(SystemExit) as caught:
+                        parse_args(["--task", "peginsertion"] + argv)
+                    message = str(caught.exception)
+                    self.assertIn(flag, message)
+                    self.assertIn("removed", message)
+
+    def test_the_surviving_flags_still_parse(self):
+        require_torch()
+        from sim_vla.training.pipeline import parse_args
+
+        args = parse_args(["--task", "peginsertion", "--imagination-microbatch",
+                           "8", "--critic-warmup", "5", "--actor-lr", "1e-5",
+                           "--profile-online", "--num-envs", "4",
+                           "--train-ratio", "64"])
+        self.assertEqual(args.imagination_microbatch, 8)
+        self.assertEqual(args.critic_warmup, 5)
+        self.assertTrue(args.profile_online)
+
+
+class TestSeeding(unittest.TestCase):
+    """One seed, applied before anything is constructed, on both paths."""
+
+    def test_seed_flag_reaches_the_resolved_config(self):
+        require_torch()
+        from sim_vla.training.pipeline import parse_args
+
+        args = parse_args(["--task", "peginsertion", "--seed", "11"])
+        self.assertEqual(args.seed, 11)
+        self.assertIsNone(parse_args(["--task", "peginsertion"]).seed)
+
+    def test_seed_override_lands_in_data_seed(self):
+        from sim_vla.config import load_config, validate
+
+        cfg = load_config("peginsertion", "dreamer",
+                          overrides={"data": {"seed": 11}})
+        validate(cfg)
+        self.assertEqual(int(cfg["data"]["seed"]), 11)
+
+    def test_seed_everything_fixes_module_initialisation(self):
+        """The property the resume path needs: construction is seeded too."""
         torch = require_torch()
-        from sim_vla.training.imagination import start_states
+        from sim_vla.training.pretrain_world_model import seed_everything
 
-        model, _critic, batch = build(False)
-        first = start_states(model, batch, limit=0)
-        with torch.no_grad():
-            for parameter in model.parameters():
-                parameter.add_(torch.randn_like(parameter) * 0.1)
-        second = start_states(model, batch, limit=0)
-        self.assertFalse(torch.allclose(first[0], second[0]),
-                         "starts did not change after the model did")
+        def adapter_weights(seed):
+            from sim_vla.models.latent_adapter import LatentAdapter
 
-    def test_starts_are_detached_and_limited(self):
+            seed_everything(seed)
+            return [p.detach().clone()
+                    for p in LatentAdapter(16, 16, hidden=32).parameters()]
+
+        first, again = adapter_weights(0), adapter_weights(0)
+        self.assertTrue(all(torch.equal(a, b) for a, b in zip(first, again)),
+                        "seed 0 did not reproduce module initialisation")
+        other = adapter_weights(7)
+        self.assertFalse(all(torch.equal(a, b) for a, b in zip(first, other)),
+                         "two different seeds initialised identically")
+
+    def test_seed_everything_covers_python_numpy_and_torch(self):
         torch = require_torch()
-        from sim_vla.training.imagination import start_states
+        import random
 
-        model, _critic, batch = build(False)
-        full = start_states(model, batch, limit=0)
-        self.assertFalse(full[0].requires_grad, "starts must be detached")
-        limited = start_states(model, batch, limit=3)
-        self.assertEqual(limited[0].shape[0], 3)
+        from sim_vla.training.pretrain_world_model import seed_everything
 
-    def test_padding_and_burn_in_are_excluded(self):
-        torch = require_torch()
-        from sim_vla.training.imagination import start_states
+        def draws(seed):
+            seed_everything(seed)
+            return (random.random(), float(np.random.rand()),
+                    float(torch.rand(1)))
 
-        model, _critic, batch = build(False)
-        batch["loss_mask"] = torch.zeros_like(batch["loss_mask"])
-        batch["loss_mask"][:, 1] = True
-        starts = start_states(model, batch, limit=0)
-        self.assertEqual(starts[0].shape[0], batch["loss_mask"].shape[0])
+        self.assertEqual(draws(0), draws(0),
+                         "seed 0 was not applied to all three generators")
+        self.assertNotEqual(draws(0), draws(3))
+
+
+class TestProfiling(unittest.TestCase):
+    def test_profiling_off_adds_no_metrics(self):
+        require_torch()
+        trainer, start, _m, _a, _c = trainer_for(profile=False)
+        metrics = trainer.update(start)
+        self.assertFalse([k for k in metrics if k.startswith("profile_")])
+
+    def test_profiling_on_reports_every_phase(self):
+        require_torch()
+        trainer, start, _m, _a, _c = trainer_for(profile=True)
+        metrics = trainer.update(start)
+        for phase in ("imagine", "actor_backward", "critic_backward", "step"):
+            self.assertIn(f"profile_{phase}_s", metrics, phase)
+            self.assertGreaterEqual(metrics[f"profile_{phase}_s"], 0.0)
+
+    def test_the_actor_phase_is_absent_during_warmup(self):
+        require_torch()
+        trainer, start, _m, _a, _c = trainer_for(profile=True, critic_warmup=5)
+        metrics = trainer.update(start)
+        self.assertIn("profile_imagine_s", metrics)
+        self.assertNotIn("profile_actor_backward_s", metrics)
+
+    def test_table_renders_without_cuda(self):
+        require_torch()
+        from sim_vla.training.profiling import Phases
+
+        phases = Phases(device="cpu", enabled=True)
+        with phases("imagine"):
+            pass
+        text = phases.table("smoke")
+        self.assertIn("imagine", text)
+        self.assertIn("CUDA not in use", text)
 
 
 if __name__ == "__main__":
