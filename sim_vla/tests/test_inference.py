@@ -595,7 +595,9 @@ class TestParallelLoop(unittest.TestCase):
         # Nothing trains until the first round is in the replay, and then the
         # updates that round is owed run at once.
         self.assertEqual(trained[0]["env_steps"], 16.0)
-        self.assertEqual(trained[0]["updates"], 2.0)
+        # Every update is reported, including the first of the initial backlog.
+        self.assertEqual(trained[0]["updates"], 1.0)
+        self.assertEqual([m["updates"] for m in trained], [1.0, 2.0, 3.0, 4.0])
         # After that, updates follow individual vector steps, not rounds.
         self.assertIn(24.0, [m["env_steps"] for m in trained])
         self.assertEqual(trained[-1]["train_ratio_actual"], 2.0)

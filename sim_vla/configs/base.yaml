@@ -89,7 +89,7 @@ online:
   # backend, steps every env in lockstep and trains between steps. The update
   # budget is env_steps * train_ratio / (batch_size * sequence_length) either
   # way, so this changes collection speed, not how much training a run gets.
-  num_envs: 1
+  num_envs: 16
   # Resets between scene rebuilds. null keeps ManiSkill's default, which is
   # per task: PegInsertionSide rebuilds its peg and hole on every reset at one
   # env and never at more, so a parallel run trains on num_envs fixed shapes
@@ -116,7 +116,7 @@ actor:
   # same number of actions from one chunk, so the policy being optimised is
   # the policy being run. Must not exceed chunk_size.
   execute: 5
-  flow_steps: 0            # euler steps; 0 takes the checkpoint's num_steps
+  flow_steps: 1            # one Euler step for collection and imagination
   # One MLP-generated state token beside the tokenized instruction. There is
   # no context-token block.
   state_tokens: 1

@@ -12,6 +12,10 @@ world-model loss against a number that means gradient steps for the first third
 of the chart and environment steps for the last. ``define_metric`` binds each
 prefix to its own step instead, which is what makes the curves readable.
 
+Online training also has an update axis (``online_train/*``), because replay
+catch-up can perform many updates at the same environment step. In-update
+progress uses its own event axis (``online_progress/*``).
+
 **Logging never decides whether training runs.** A missing wandb package, a
 failed login or an unreachable host is reported and then ignored: a 48-hour
 training job should not die because a metrics sink is down. What is *not*
@@ -92,6 +96,7 @@ class RunLogger:
                  settings: Optional[WandbSettings] = None):
         self._run = run
         self.settings = settings or WandbSettings()
+        self._progress_event = 0
 
     @property
     def active(self) -> bool:
@@ -119,6 +124,17 @@ class RunLogger:
             payload[key if "/" in key else f"{stage}/{key}"] = float(value)
         if not payload:
             return
+        if stage == "online":
+            # Preserve environment-budget charts, but also show every update
+            # in a catch-up period where env_steps does not advance.
+            if "updates" in metrics and "world_loss" in metrics:
+                payload.update({f"online_train/{key}": float(value)
+                                for key, value in metrics.items()
+                                if "/" not in key
+                                and isinstance(value, (int, float, bool))})
+            if any(key.startswith("online_progress/") for key in payload):
+                self._progress_event += 1
+                payload["online_progress/event"] = float(self._progress_event)
         try:
             self._run.log(payload)
         except Exception as exc:                           # noqa: BLE001
@@ -204,6 +220,10 @@ def start_run(cfg: Dict[str, Any], *,
         # namespace, so it needs the online x-axis named explicitly.
         run.define_metric(
             "episode/*", step_metric=f"online/{STEP_METRICS['online']}")
+        run.define_metric("online_train/updates")
+        run.define_metric("online_train/*", step_metric="online_train/updates")
+        run.define_metric("online_progress/event")
+        run.define_metric("online_progress/*", step_metric="online_progress/event")
     except Exception as exc:                               # noqa: BLE001
         print(f"[wandb] define_metric failed ({type(exc).__name__}: {exc}); "
               "charts will use the global step instead", flush=True)
@@ -211,4 +231,7 @@ def start_run(cfg: Dict[str, Any], *,
     where = getattr(run, "url", "") or f"mode={settings.mode}"
     print(f"[wandb] {settings.project} / {settings.name or run.id} -> {where}",
           flush=True)
+    print("[wandb] online losses: online_train/* vs updates; "
+          "live backlog: online_progress/*; episode results: episode/* "
+          "vs environment steps", flush=True)
     return RunLogger(run, settings)

@@ -46,6 +46,7 @@ from ..data.replay import OnlineEpisode, OnlineReplay, mixed_batch
 from ..runtime.checkpoint import CheckpointMeta, save
 from .actor_critic import ActorCriticConfig, ActorCriticTrainer
 from .imagination import start_states
+from .online_logging import train_updates
 from .precision import autocast
 from .progress import PROGRESS_LR
 
@@ -378,8 +379,10 @@ class OnlineTrainer:
         return to_model_batch(batch, self.device, normalizer=self.normalizer,
                               coords=self.coords)
 
-    def update(self) -> Dict[str, float]:
+    def update(self, *, on_progress: Optional[Callable] = None) -> Dict[str, float]:
         """One world-model step, then one actor-critic step on fresh states."""
+        if on_progress is not None:
+            on_progress("replay")
         batch = self.to_torch(mixed_batch(
             self.demo_sampler, self.replay, self.config.batch_size,
             self.config.sequence_length, self.config.burn_in,
@@ -388,8 +391,12 @@ class OnlineTrainer:
             min_replay=int(self.config.min_replay)))
 
         self.world_opt.zero_grad(set_to_none=True)
+        if on_progress is not None:
+            on_progress("world_forward")
         with autocast(self.device, self.config.precision):
             total, _losses, _aux = self.world_model.loss(batch)
+        if on_progress is not None:
+            on_progress("world_backward")
         total.backward()
         torch.nn.utils.clip_grad_norm_(self.world_model.parameters(), 100.0)
         self.world_opt.step()
@@ -404,15 +411,20 @@ class OnlineTrainer:
         # want the same posterior of the same batch under the same model;
         # encoding twice paid for a second forward pass and gave the two
         # different latent samples.
+        if on_progress is not None:
+            on_progress("posterior")
         with torch.no_grad(), autocast(self.device, self.config.precision):
             post = self.world_model.observe(batch)["post"]
         with autocast(self.device, self.config.precision):
+            if on_progress is not None:
+                on_progress("progress_head")
             metrics |= self.update_progress(batch, post)
             start = start_states(self.world_model, batch, post=post)
         metrics["imagination_starts"] = float(start[0].shape[0])
         self.updates += 1
         if self.updates % max(int(self.config.actor_every), 1) == 0:
-            metrics |= self.ac.update(start, progress_beta=self.beta())
+            metrics |= self.ac.update(start, progress_beta=self.beta(),
+                                      on_progress=on_progress)
         return metrics
 
     def beta(self) -> Optional[float]:
@@ -589,9 +601,13 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
             collected.append(episode)
             seed += 1
 
+        # Episode outcomes should be visible before a potentially long batch
+        # of replay updates, just as in the parallel collector.
+        episode = episode_metrics(collected)
+        if on_metrics is not None:
+            on_metrics({"env_steps": float(trainer.env_steps), **episode})
         updates_due = config.updates_due(trainer.env_steps, trainer.updates)
-        for _ in range(updates_due):
-            last = trainer.update()
+        last = train_updates(trainer, updates_due, on_metrics)
         last["env_steps"] = float(trainer.env_steps)
         last["updates"] = float(trainer.updates)
         last["replay_episodes"] = float(len(trainer.replay))
@@ -600,10 +616,7 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
             / max(trainer.env_steps, 1))
         # From the rollouts just collected, not a separate evaluation: these
         # are the training-time curves the original pipeline reports.
-        episode = episode_metrics(collected)
         last |= episode
-        if on_metrics is not None:
-            on_metrics(dict(last))
         print(f"[online] env_steps {trainer.env_steps} "
               f"updates {trainer.updates} "
               f"success_once={episode.get('episode/success_once', 0.0):.2f} "
@@ -693,21 +706,7 @@ def _run_parallel(trainer: OnlineTrainer, policy: LatentPolicy, env,
         due = config.updates_due(trainer.env_steps, trainer.updates)
         if due <= 0:
             return
-        last: Dict[str, float] = {}
-        for _ in range(due):
-            last = trainer.update()
-        last["env_steps"] = float(trainer.env_steps)
-        last["updates"] = float(trainer.updates)
-        last["replay_episodes"] = float(len(trainer.replay))
-        last["train_ratio_actual"] = (
-            trainer.updates * config.batch_size * config.sequence_length
-            / max(trainer.env_steps, 1))
-        if on_metrics is not None:
-            on_metrics(dict(last))
-        print(f"[online] env_steps {trainer.env_steps} "
-              f"updates {trainer.updates} "
-              + " ".join(f"{k}={v:.3f}" for k, v in sorted(last.items())[:5]),
-              flush=True)
+        train_updates(trainer, due, on_metrics)
 
     def checkpoint() -> None:
         nonlocal next_checkpoint

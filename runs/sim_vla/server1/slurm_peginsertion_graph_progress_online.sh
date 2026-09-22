@@ -132,14 +132,11 @@ CRITIC_WARMUP=150
 # Parallel online envs on the GPU backend, as the main trainer runs them.
 # Updates happen between vector steps at the same train_ratio, so the update
 # budget is unchanged; only collection gets faster.
-NUM_ENVS=128
+NUM_ENVS=16
 
-# flow_steps is deliberately not passed: it comes from the restored
-# checkpoint's own num_steps (base.yaml sets actor.flow_steps to 0, meaning
-# "take the checkpoint's value"). Overriding it would differentiate a
-# different denoising chain than the one Stage 1B trained. actor.execute is
-# not passed either, for the same reason it exists: one setting decides how
-# many actions a chunk contributes here and in imagination. Profiling stays
+# base.yaml sets actor.flow_steps to 1 for both collection and imagination.
+# actor.execute also comes from that shared config, so both paths use the
+# same number of actions from each generated chunk. Profiling stays
 # available but off -- add --profile-online for a short run; it synchronizes
 # at every phase boundary and is not for a 500k-step job.
 

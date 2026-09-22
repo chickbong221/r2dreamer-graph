@@ -40,7 +40,7 @@ STAGES=(
   "5|flow-matching imitation, chunk masking, overfit|$STAGE sim_vla.tests.test_imitation"
   "6|simulator integration: env, replay, final observation|$STAGE sim_vla.tests.test_env"
   "7|flow sampler gradients and latent imagination|$STAGE sim_vla.tests.test_imagination"
-  "8|critics, actor update, checkpoint write and resume|$STAGE sim_vla.tests.test_online sim_vla.tests.test_checkpoint"
+  "8|critics, actor update, logging, checkpoint write and resume|$STAGE sim_vla.tests.test_online sim_vla.tests.test_online_logging sim_vla.tests.test_checkpoint"
   "9|progress shaping and its graph dependency|$STAGE sim_vla.tests.test_progress"
   "10|imagined timeline, bootstrap gradient, gradient policy|$STAGE sim_vla.tests.test_timeline"
   "11|recurrent inference and one turn of the online loop|$STAGE sim_vla.tests.test_inference"

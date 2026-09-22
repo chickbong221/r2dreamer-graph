@@ -318,6 +318,36 @@ and `eval_sampler` went with the score-function objective and the online
 anchor. A config or a launch script that still sets one is refused by name,
 with what replaced it, rather than quietly running a different experiment.
 
+#### Online progress and W&B
+
+Collection can be followed by a long replay-update backlog. For example, 128
+environments completing 150 steps produce 19,200 transitions; at train ratio
+64 and replay batch 16 x 64, the first round owes 1,200 training updates.
+Environment steps remain fixed while those updates run.
+
+The console announces the backlog before training. It reports the first
+update's phases, then phase/microbatch progress at roughly 15-second intervals
+at phase boundaries, plus completed-update summaries and an estimated backlog
+completion time. A single blocked operation cannot emit another phase report
+until it returns; these messages are not a background liveness probe or
+synchronized GPU timings. Detailed timing still uses `--profile-online`.
+
+Losses are sent to W&B after **every completed update**, without waiting for
+the backlog to finish:
+
+- `online_train/*`: losses, gradient norms, update duration and other training
+  metrics against `online_train/updates`.
+- `online_progress/*`: remaining updates, ETA and in-update microbatch progress
+  against a monotonically increasing event counter. Phase IDs are 0 completed,
+  1 replay sampling, 2 world forward, 3 world backward, 4 posterior encoding,
+  5 progress-head fitting, 6 imagination, 7 actor backward, 8 critic backward,
+  and 9 actor/critic optimizer steps.
+- Existing `online/*` and `episode/*` charts retain the environment-step axis
+  for comparisons across runs.
+
+These reports do not change the number of optimizer updates or the collection
+schedule. Updating code does not modify a training process already running.
+
 #### Profiling
 
 `--profile-online` reports per-phase wall time and CUDA peak memory --

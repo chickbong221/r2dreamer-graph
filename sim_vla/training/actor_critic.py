@@ -78,7 +78,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 
@@ -235,7 +235,8 @@ class ActorCriticTrainer:
         self.phases: Optional[Phases] = None
 
     def update(self, start, *, instruction=None,
-               progress_beta: Optional[float] = None) -> Dict[str, float]:
+               progress_beta: Optional[float] = None,
+               on_progress: Optional[Callable] = None) -> Dict[str, float]:
         """One critic step and -- after warm-up -- one actor step, from one
         rollout per microbatch of starts."""
         count = int(start[0].shape[0])
@@ -271,6 +272,11 @@ class ActorCriticTrainer:
             stop = min(offset + microbatch, count)
             small_start = tuple(s[offset:stop] for s in start)
             weight = (stop - offset) / count
+            details = dict(microbatch=offset // microbatch + 1,
+                           microbatches=(count + microbatch - 1) // microbatch,
+                           imagination_starts=count, actor_training=not warming)
+            if on_progress is not None:
+                on_progress("imagine", **details)
             with phases("imagine"), autocast(device, self.config.precision):
                 out = executed_chunk_objective(
                     self.world_model, self.actor, self.critic, small_start,
@@ -278,8 +284,12 @@ class ActorCriticTrainer:
                     progress_head=self.progress_head, coords=self.coords,
                     differentiable=not warming)
             if not warming:
+                if on_progress is not None:
+                    on_progress("actor_backward", **details)
                 with phases("actor_backward"):
                     (out["loss"] * weight).backward()
+            if on_progress is not None:
+                on_progress("critic_backward", **details)
             with phases("critic_backward"):
                 with autocast(device, self.config.precision):
                     closs = self.critic.loss(out["feat"][0].detach(),
@@ -303,6 +313,8 @@ class ActorCriticTrainer:
         if shaped:
             metrics["shaping_reward"] = float(shaping_total)
             metrics["progress_beta"] = float(self.config.progress_beta)
+        if on_progress is not None:
+            on_progress("optimizer")
         with phases("step"):
             if warming:
                 # A random critic gives the actor a gradient toward noise, so

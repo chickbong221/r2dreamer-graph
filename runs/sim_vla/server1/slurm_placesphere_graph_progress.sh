@@ -95,7 +95,7 @@ ACTOR_LR="${ACTOR_LR:-6e-5}"
 # imagines every scored row of the replay batch -- so this bounds its memory.
 IMAGINATION_MICROBATCH=32
 CRITIC_WARMUP=150
-NUM_ENVS=128
+NUM_ENVS=16
 
 python -m sim_vla.training.pipeline \
   --task placesphere \
