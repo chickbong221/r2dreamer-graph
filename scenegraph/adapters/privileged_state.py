@@ -298,6 +298,15 @@ def end_frame_cache() -> None:
     _FRAME_CACHE = None
 
 
+def frame_cache_active() -> bool:
+    """Whether a caller has already opened this frame's cache.
+
+    A per-env builder that opens its own would replace the shared one, so the
+    next env would pull the whole rigid-body buffer off the GPU again.
+    """
+    return _FRAME_CACHE is not None
+
+
 def frame_cached(namespace: str, key: Any, read):
     """Read once during the current vector graph step, never across steps.
 

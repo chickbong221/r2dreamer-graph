@@ -39,6 +39,11 @@ DEFAULT_CONFIGS_DIR = "scenegraph/configs"
 WARMUP_START_FRACTION = 0.2
 WARMUP_END_FRACTION = 0.6
 
+# The head's own optimizer, in both stages that train it. It is fitted on
+# detached features, so neither number reaches the world model.
+PROGRESS_LR = 3e-4
+PROGRESS_GRAD_CLIP = 1.0
+
 
 @dataclass
 class ProgressConfig:
@@ -109,6 +114,39 @@ def shaping_reward(head: ProgressHead, feat: torch.Tensor, discount: float
     """
     phi = head.potential(feat)
     return discount * phi[1:] - phi[:-1]
+
+
+def fit_progress(head: ProgressHead, optimizer, potential, feat: torch.Tensor,
+                 batch, *, grad_clip: float = PROGRESS_GRAD_CLIP
+                 ) -> Dict[str, float]:
+    """One regression step of the head onto the observed-graph potential.
+
+    The one objective the head has, whichever stage calls it: Stage 1A fits
+    it on demonstrations so its first predictions already mean something, and
+    Stage 2 keeps it tracking a world model that is still moving.
+
+    The targets come from the *recorded* graph labels, not from the decoder's
+    predictions, so the head is regressed onto something the dataset actually
+    contains. ``feat`` is detached here: this trains the head and nothing
+    else, which is why it has its own optimizer.
+
+    Rows whose potential is invalid -- a role that matched no node, a relation
+    the frame never observed -- are masked rather than counted as zero
+    progress. A schedule role that never resolves would otherwise teach the
+    head that the task never advances.
+    """
+    phi, phi_valid = potential.targets(batch)
+    mask = batch["loss_mask"].bool() & phi_valid
+    if not bool(mask.any()):
+        return {"progress_valid": 0.0}
+    loss = head.loss(feat.detach(), phi, mask)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(head.parameters(), float(grad_clip))
+    optimizer.step()
+    return {"progress_loss": float(loss.detach()),
+            "progress_valid": float(mask.float().mean()),
+            "progress_target_mean": float(phi[mask].mean())}
 
 
 def build_progress(config, feature_dim: int, *, graph_enabled: bool,

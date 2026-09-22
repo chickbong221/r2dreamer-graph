@@ -157,8 +157,14 @@ def check_identity(stored: Mapping[str, Any], wanted: CheckpointMeta) -> None:
 
 def load(path: str | Path, wanted: CheckpointMeta, modules: Mapping[str, Any],
          optimizers: Optional[Mapping[str, Any]] = None,
-         *, strict: bool = True) -> CheckpointMeta:
-    """Restore a checkpoint into this run, or refuse it."""
+         *, strict: bool = True,
+         explain: Optional[Mapping[str, str]] = None) -> CheckpointMeta:
+    """Restore a checkpoint into this run, or refuse it.
+
+    ``explain`` says, per module name, why that module being absent matters
+    and what to do instead; it replaces the generic ``strict=False`` advice,
+    which is the wrong fix for a module the run cannot do without.
+    """
     payload = torch.load(str(path), map_location="cpu", weights_only=False)
     stored = dict(payload.get("meta") or {})
     check_compatible(stored, wanted)
@@ -170,10 +176,12 @@ def load(path: str | Path, wanted: CheckpointMeta, modules: Mapping[str, Any],
         # A strict restore that skipped a requested module left it at its
         # random initialisation and reported success. If a partial restore is
         # what the caller wants, they say so with strict=False.
+        notes = " ".join(explain[name] for name in absent
+                         if explain and name in explain)
         raise SystemExit(
             f"refusing to load this checkpoint: it has no weights for "
             f"{absent}; it stores {sorted(payload.get('modules') or {})}. "
-            "Pass strict=False to accept a partial restore.")
+            + (notes or "Pass strict=False to accept a partial restore."))
     for name, module in modules.items():
         if module is None or name not in payload["modules"]:
             continue

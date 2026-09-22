@@ -38,7 +38,7 @@ from . import progress as progress_module
 from . import train_imitation
 from .actor_critic import ActorCriticConfig
 from .online import OnlineConfig, run_online
-from .progress import ProgressConfig, build_progress
+from .progress import ProgressConfig
 from .wandb_logger import RunLogger, start_run
 
 
@@ -181,6 +181,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
                              "path": str(stage_a.path or "")}
     logger.summary({"feature_dim": int(stage_a.model.feature_dim),
                     "world_steps": int(world_steps)})
+    if stage_a.lr is not None:
+        logger.summary({"world_lr": float(stage_a.lr)})
 
     try:
         # ---------------------------------------------------------- stage 1B
@@ -204,6 +206,7 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
                 on_metrics=lambda m: logger.log(m, stage="imitation"))
             report["imitation"] = {"losses": stage_b.losses,
                                    "path": str(stage_b.path or "")}
+            logger.summary({"imitation_lr": train_imitation.imitation_lr(cfg)})
             # After any save, before online training. Stage 2 builds its own
             # actor optimizer; keeping this one alive holds a second set of
             # Adam moments for every trainable parameter, on the device, for
@@ -243,33 +246,40 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             enabled=enabled,
             beta=float(cfg["model"]["progress"]["beta"]),
             warmup_start=warmup_start, warmup_end=warmup_end)
-        progress_head = build_progress(
-            stage_a.model_cfg, int(stage_a.model.feature_dim),
-            graph_enabled=bool(cfg["model"]["graph"]["enabled"]),
-            progress_enabled=enabled)
-        potential = None
+        # Fitted in Stage 1A on the demonstrations, or restored from the
+        # world model's file beside the weights it was fitted to -- never
+        # built fresh here, where its first shaping rewards would be noise.
+        progress_head, potential = stage_a.progress_head, stage_a.potential
+        if enabled and (progress_head is None or potential is None):
+            raise SystemExit(
+                "the graph_progress arm reached Stage 2 without the progress "
+                "head Stage 1A fits; shaping from an untrained head is what "
+                "pretraining it exists to prevent")
         if progress_head is not None:
-            progress_head = progress_head.to(device)
-            potential = progress_module.build_potential(
-                cfg, stage_a.data.metadata, device=device)
-            print(f"[pipeline] progress: {potential.describe()} "
-                  f"beta={progress_cfg.beta} warmup="
+            print(f"[pipeline] progress: head from stage 1A, "
+                  f"{potential.describe()} beta={progress_cfg.beta} warmup="
                   f"{warmup_start}->{warmup_end} env steps", flush=True)
             report["progress"] = potential.describe() | {
                 "beta": progress_cfg.beta,
-                "warmup": [warmup_start, warmup_end]}
+                "warmup": [warmup_start, warmup_end],
+                "head": "pretrained in stage 1A"}
             # In the summary rather than only the log: which schedule the arm
             # was shaped against, and how strongly, is what distinguishes this
             # run from the plain graph arm.
             logger.summary({f"progress_{key}": value
                             for key, value in report["progress"].items()})
 
+        online_env = cfg.get("online") or {}
+        reconfiguration = online_env.get("reconfiguration_freq")
         env = SimVlaEnv(
             stage_a.data.metadata,
             graph_enabled=bool(cfg["model"]["graph"]["enabled"]),
             max_steps=int(cfg["eval"]["max_steps"]),
             seed=int(cfg["data"]["seed"]),
-            record_graphs=bool(cfg["diagnostics"]["record_graphs"])).build()
+            record_graphs=bool(cfg["diagnostics"]["record_graphs"]),
+            num_envs=int(online_env.get("num_envs", 1) or 1),
+            reconfiguration_freq=(None if reconfiguration is None
+                                  else int(reconfiguration))).build()
 
         online_cfg, ac_cfg = online_configs(
             cfg, stage_a.model_cfg, total_steps=online_steps,
@@ -278,6 +288,12 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         print(f"[pipeline] stage 2: online, {online_steps} env steps",
               flush=True)
         settings = {
+            # What the env resolved to, not what was asked: ManiSkill picks the
+            # reconfiguration frequency itself when none is given, and for
+            # PegInsertionSide that choice depends on the env count.
+            "num_envs": env.num_envs,
+            "sim_backend": env.sim_backend,
+            "reconfiguration_freq": env.live_reconfiguration_freq,
             "replay_batch": online_cfg.batch_size,
             "sequence_length": online_cfg.sequence_length,
             "train_ratio": online_cfg.train_ratio,
@@ -345,6 +361,11 @@ def parse_args(argv=None):
                         help="0 stops after the world model")
     parser.add_argument("--online-steps", type=int, default=0,
                         help="environment steps; 0 stops after imitation")
+    parser.add_argument("--world-lr", type=float, default=None,
+                        help="Stage 1A learning rate; unset keeps the model "
+                             "preset's (4e-5)")
+    parser.add_argument("--imitation-lr", type=float, default=None,
+                        help="Stage 1B learning rate; unset keeps 1e-4")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--model-config", default=str(DEFAULT_MODEL))
     parser.add_argument("--batch-size", type=int, default=None)
@@ -411,6 +432,14 @@ def parse_args(argv=None):
     parser.add_argument("--eval-sampler",
                         choices=("stochastic", "deterministic"), default=None,
                         help="which sampler the reported evaluation uses")
+    parser.add_argument("--num-envs", type=int, default=None,
+                        help="parallel online envs, stepped in lockstep with "
+                             "updates between steps; more than 1 runs "
+                             "ManiSkill's GPU backend")
+    parser.add_argument("--reconfiguration-freq", type=int, default=None,
+                        help="resets between scene rebuilds; unset keeps "
+                             "ManiSkill's default, which for PegInsertionSide "
+                             "is every reset at 1 env and never at more")
     parser.add_argument("--out", default="")
     parser.add_argument(
         "--resume-from", default="",
@@ -458,11 +487,17 @@ def main(argv=None) -> int:
                        ("grad_report_every", args.grad_report_every),
                        ("profile", True if args.profile_online else None),
                        ("actor_lr", args.actor_lr),
-                       ("eval_sampler", args.eval_sampler)):
+                       ("eval_sampler", args.eval_sampler),
+                       ("num_envs", args.num_envs),
+                       ("reconfiguration_freq", args.reconfiguration_freq)):
         if value is not None:
             online_overrides[key] = value
+    pretrain_overrides = {key: value for key, value in (
+        ("world_lr", args.world_lr), ("imitation_lr", args.imitation_lr))
+        if value is not None}
     cfg = load_config(args.task, args.experiment,
-                      overrides={"data": overrides, "online": online_overrides})
+                      overrides={"data": overrides, "online": online_overrides,
+                                 "pretrain": pretrain_overrides})
     model_yaml = Path(args.model_config)
     if not model_yaml.is_file():
         raise SystemExit(f"model config does not exist: {model_yaml}")

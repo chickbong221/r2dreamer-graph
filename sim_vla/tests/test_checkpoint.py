@@ -91,6 +91,39 @@ class TestCheckpoint(unittest.TestCase):
             load(path, meta(), {"world_model": self.module(),
                                 "actor": self.module()}, strict=False)
 
+    def test_a_world_model_from_before_progress_pretraining_is_refused(self):
+        """The refusal says why, instead of suggesting strict=False -- which
+        would start shaping from a random head."""
+        require_torch()
+        from sim_vla.runtime.checkpoint import load, save
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "world_model.pt"
+            save(path, meta(), {"world_model": self.module()})
+            with self.assertRaises(SystemExit) as caught:
+                load(path, meta(), {"world_model": self.module(),
+                                    "progress": self.module()},
+                     explain={"progress": "Re-run Stage 1A."})
+            message = str(caught.exception)
+            self.assertIn("Re-run Stage 1A.", message)
+            self.assertNotIn("strict=False", message)
+
+    def test_the_progress_head_travels_with_its_world_model(self):
+        torch = require_torch()
+        from sim_vla.runtime.checkpoint import load, save
+
+        world, head = self.module(), self.module()
+        head.weight.data.fill_(0.5)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "world_model.pt"
+            save(path, meta(), {"world_model": world, "progress": head})
+            restored = self.module()
+            load(path, meta(), {"world_model": self.module(),
+                                "progress": restored})
+            self.assertTrue(torch.equal(restored.weight, head.weight))
+            # The other arms ask for no head, and a file with one still loads.
+            load(path, meta(), {"world_model": self.module(), "progress": None})
+
     def test_normalization_identity_must_match(self):
         require_torch()
         from sim_vla.runtime.checkpoint import load, save

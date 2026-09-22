@@ -415,8 +415,15 @@ class TestOnlineSettings(unittest.TestCase):
                 "--task", "peginsertion", "--experiment", "graph_progress",
                 "--device", "cpu", "--batch-size", "16", "--train-ratio", "32",
                 "--online-precision", "float32", "--imagination-batch", "128",
-                "--imagination-microbatch", "7", "--imag-horizon", "9"])
+                "--imagination-microbatch", "7", "--imag-horizon", "9",
+                "--num-envs", "128", "--reconfiguration-freq", "1"])
         cfg = run.call_args.args[0]
+        self.assertEqual(cfg["online"]["num_envs"], 128)
+        self.assertEqual(cfg["online"]["reconfiguration_freq"], 1)
+        # Left unset, one env and ManiSkill's own reconfiguration default.
+        defaults = load_config("peginsertion", "dreamer")["online"]
+        self.assertEqual(defaults["num_envs"], 1)
+        self.assertIsNone(defaults["reconfiguration_freq"])
         online, ac = pipeline.online_configs(
             cfg, model, total_steps=12, flow_steps=6)
         self.assertEqual(online.train_ratio, 32)
@@ -427,13 +434,48 @@ class TestOnlineSettings(unittest.TestCase):
         self.assertEqual(ac.precision, "float32")
         self.assertEqual(ac.flow_steps, 6)
 
+    def test_stage_one_learning_rates_reach_both_stages(self):
+        require_torch()
+        from unittest.mock import patch
+        from sim_vla.config import load_config
+        from sim_vla.models.model_config import load_model_config
+        from sim_vla.training import pipeline
+        from sim_vla.training.pretrain_world_model import world_lr
+        from sim_vla.training.train_imitation import imitation_lr
+        from sim_vla.training.wandb_logger import RunLogger
+
+        cfg = load_config("peginsertion", "graph_progress")
+        model = load_model_config(cfg)
+        # Unset: the preset's lr, which configs/model/_base_.yaml shares with
+        # the main trainer, and ImitationConfig's own.
+        self.assertEqual(world_lr(cfg, model), float(model.lr))
+        self.assertEqual(float(model.lr), 4e-5)
+        self.assertEqual(imitation_lr(cfg), 1e-4)
+
+        with patch.object(pipeline, "run", return_value={}) as run, \
+                patch.object(pipeline, "start_run", return_value=RunLogger()):
+            pipeline.main([
+                "--task", "peginsertion", "--experiment", "graph_progress",
+                "--device", "cpu", "--world-lr", "8e-5",
+                "--imitation-lr", "1.5e-4"])
+        cfg = run.call_args.args[0]
+        self.assertEqual(world_lr(cfg, model), 8e-5)
+        self.assertEqual(imitation_lr(cfg), 1.5e-4)
+
+        for settings in ({"world_lr": 0}, {"imitation_lr": -1e-4}):
+            with self.subTest(settings=settings), \
+                    self.assertRaises(SystemExit):
+                load_config("peginsertion", "dreamer", {"pretrain": settings})
+
     def test_invalid_online_settings_fail_before_loading_models(self):
         require_torch()
         from sim_vla.config import load_config
 
         for settings in ({"train_ratio": -1}, {"imagination_microbatch": -1},
                          {"imagination_batch": -1}, {"imag_horizon": 0},
-                         {"precision": "float16"}):
+                         {"precision": "float16"}, {"num_envs": 0},
+                         {"reconfiguration_freq": -1},
+                         {"num_envs": 4, "train_ratio": 0}):
             with self.subTest(settings=settings), self.assertRaises(SystemExit):
                 load_config("peginsertion", "dreamer", {"online": settings})
 

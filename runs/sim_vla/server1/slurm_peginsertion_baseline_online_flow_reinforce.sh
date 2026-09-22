@@ -118,14 +118,14 @@ ONLINE_STEPS="${ONLINE_STEPS:-500000}"
 ACTOR_LR="${ACTOR_LR:-1e-5}"
 DEMO_ANCHOR="${DEMO_ANCHOR:-0.5}"
 FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.03}"
-ACTOR_TRANSITION_MICROBATCH="${ACTOR_TRANSITION_MICROBATCH:-32}"
+ACTOR_TRANSITION_MICROBATCH="${ACTOR_TRANSITION_MICROBATCH:-64}"
 
 # Fixed for this experiment, and identical in both arms: these are the
 # estimator and its budgets, not the state, so a difference here would not be
 # a difference between the arms being compared.
 BATCH_SIZE=16
 IMAGINATION_BATCH=128
-IMAGINATION_MICROBATCH=16
+IMAGINATION_MICROBATCH=32
 IMAG_HORIZON=15
 TRAIN_RATIO=64
 ONLINE_PRECISION=bfloat16
@@ -135,6 +135,10 @@ ANCHOR_WINDOW_MICROBATCH=4
 ANCHOR_ROWS=64
 ANCHOR_MICROBATCH=16
 GRAD_REPORT_EVERY=50
+# Parallel online envs on the GPU backend, as the main trainer runs them.
+# Updates happen between vector steps at the same train_ratio, so the update
+# budget is unchanged; only collection gets faster.
+NUM_ENVS=128
 
 # flow_steps is deliberately not passed: it comes from the restored
 # checkpoint's own num_steps (base.yaml sets actor.flow_steps to 0, meaning
@@ -190,6 +194,7 @@ python -m sim_vla.training.pipeline \
   --anchor-rows $ANCHOR_ROWS \
   --anchor-microbatch $ANCHOR_MICROBATCH \
   --grad-report-every $GRAD_REPORT_EVERY \
+  --num-envs $NUM_ENVS \
   --eval-sampler stochastic \
   --device cuda \
   --save-checkpoints \

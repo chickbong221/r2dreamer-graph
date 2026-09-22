@@ -84,6 +84,13 @@ def load_config(task: str, experiment: str,
 
 
 def validate(cfg: Mapping[str, Any]) -> None:
+    pretrain = cfg.get("pretrain") or {}
+    for key in ("world_lr", "imitation_lr"):
+        value = pretrain.get(key)
+        if value is not None and not (math.isfinite(float(value))
+                                      and float(value) > 0):
+            raise SystemExit(f"pretrain.{key} must be positive when set")
+
     online = cfg.get("online") or {}
     ratio = float(online.get("train_ratio", 64))
     if not math.isfinite(ratio) or ratio < 0:
@@ -96,6 +103,18 @@ def validate(cfg: Mapping[str, Any]) -> None:
         raise SystemExit("online.imag_horizon must be positive")
     if online.get("precision", "bfloat16") not in ("float32", "bfloat16"):
         raise SystemExit("online.precision must be float32 or bfloat16")
+    if int(online.get("num_envs", 1) or 0) < 1:
+        raise SystemExit("online.num_envs must be at least 1")
+    if (online.get("reconfiguration_freq") is not None
+            and int(online["reconfiguration_freq"]) < 0):
+        raise SystemExit("online.reconfiguration_freq must be nonnegative "
+                         "when set")
+    if int(online.get("num_envs", 1)) > 1 and float(online.get(
+            "train_ratio", 64)) == 0:
+        raise SystemExit(
+            "online.num_envs > 1 needs a nonzero online.train_ratio: parallel "
+            "envs train between steps, and train_ratio=0 is the legacy "
+            "per-collection schedule")
 
     # The actor objective and everything that only means something under one
     # of them. Checked here so a bad combination fails in seconds rather than

@@ -345,6 +345,12 @@ class Stage1B:
     path: Optional[Path] = None
 
 
+def imitation_lr(cfg: Dict[str, Any]) -> float:
+    """Stage 1B's learning rate: ``pretrain.imitation_lr``, else the default."""
+    value = (cfg.get("pretrain") or {}).get("imitation_lr")
+    return float(ImitationConfig.lr) if value is None else float(value)
+
+
 def action_width(cfg: Dict[str, Any], sampler) -> int:
     """The task's action width, from the window contract.
 
@@ -434,7 +440,8 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
         chunk_size=int(actor.chunk_size),
         flow_steps=int(actor.flow_steps),
         batch_size=int(cfg["data"]["batch_size"]),
-        steps=int(steps))
+        steps=int(steps), lr=imitation_lr(cfg))
+    print(f"[imitation] lr {imitation.lr:g}", flush=True)
 
     # Action-only lookahead so the last eligible rows of a window are
     # supervised on a whole chunk instead of a truncated one. Better

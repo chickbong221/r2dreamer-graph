@@ -100,15 +100,21 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # is only valid at equal steps. beta itself is not overridden here: it comes
 # from sim_vla/configs/base.yaml (0.05) via configs/experiments/
 # graph_progress.yaml turning progress.enabled on.
-WORLD_STEPS=100000
-IMITATION_STEPS=50000
+WORLD_STEPS=30000
+IMITATION_STEPS=25000
 ONLINE_STEPS=500000
+# 2x Stage 1A's default (4e-5) and 1.5x Stage 1B's (1e-4), for the shorter
+# budgets above.
+WORLD_LR=8e-5
+IMITATION_LR=1.5e-4
 
 python -m sim_vla.training.pipeline \
   --task peginsertion \
   --experiment graph_progress \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
+  --world-lr $WORLD_LR \
+  --imitation-lr $IMITATION_LR \
   --online-steps $ONLINE_STEPS \
   --device cuda \
   --save-checkpoints \

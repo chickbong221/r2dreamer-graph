@@ -450,6 +450,55 @@ class GraphCameraTest(unittest.TestCase):
         self.assertEqual(source.cameras, [HEAD])
 
 
+class FrameCacheOwnershipTest(unittest.TestCase):
+    """One source per parallel env shares the caller's frame cache.
+
+    Opening its own would replace the shared snapshot, and closing it would
+    leave the next env's builder reading live poses.
+    """
+
+    def _source(self):
+        from scenegraph.adapters.privileged_state import frame_cache_active
+
+        source = FigureGraphSource(
+            _Env(), env_id="PegInsertionSide-v1", cameras=[HEAD])
+        seen = []
+
+        class Builder:
+            def step(self, *_args, **_kwargs):
+                seen.append(frame_cache_active())
+                return _graph(), None, None, None
+
+        source.builder = Builder()
+        source.entities = {"actor:peg": object()}   # skip the scene lookup
+        return source, seen
+
+    def test_alone_it_opens_and_closes_its_own(self):
+        from scenegraph.adapters.privileged_state import frame_cache_active
+
+        source, seen = self._source()
+        source.step(_default_obs())
+        self.assertEqual(seen, [True])
+        self.assertFalse(frame_cache_active())
+
+    def test_inside_a_shared_frame_it_leaves_the_cache_to_the_caller(self):
+        from scenegraph.adapters.privileged_state import (
+            begin_frame_cache, end_frame_cache, frame_cache_active)
+
+        first, seen_first = self._source()
+        second, seen_second = self._source()
+        begin_frame_cache()
+        try:
+            first.step(_default_obs())
+            self.assertTrue(frame_cache_active(),
+                            "one env's source closed the shared frame cache")
+            second.step(_default_obs())
+        finally:
+            end_frame_cache()
+        self.assertEqual(seen_first + seen_second, [True, True])
+        self.assertFalse(frame_cache_active())
+
+
 # --------------------------------------------------------------------------- #
 # The capture session
 # --------------------------------------------------------------------------- #

@@ -17,6 +17,12 @@ No graph is built and no whitelist is read: this figure is about pixels.
         --config-section env --seed 0 --max-frames 60 \
         --out data/paper_figures
 
+``--random-policy`` rolls uniform random actions instead of the checkpoint, in
+the same env: ``--ckpt-dir`` is still read for its config, but the weights are
+never loaded. The action sampler is seeded with ``--seed``, so the same command
+gives the same episode, and the default name gains a ``_random`` suffix so it
+sits beside the checkpoint's episode rather than colliding with it.
+
 Why the episode is rolled out twice
 -----------------------------------
 The released checkpoints consume *depth* from the two Fetch cameras, and the
@@ -121,6 +127,18 @@ def record_policy_episode(venv, policy, *, seed: int, steps: int) -> RecordedEpi
             episode.truncated_at = index + 1
             break
     return episode
+
+
+def seeded_random_policy(venv, seed: int):
+    """Uniform random actions, drawn from a sampler seeded with ``seed``.
+
+    An unseeded gym space draws from OS entropy, so two runs of the same command
+    would roll different episodes under the same name.
+    """
+    from scenegraph.adapters.policy_loader import _random_policy
+
+    venv.action_space.seed(int(seed))
+    return _random_policy(venv)
 
 
 def preflight(frames: Dict[str, np.ndarray], human: Optional[np.ndarray], *,
@@ -250,7 +268,8 @@ def run(args) -> int:
             "config; pass --max-episode-steps")
     env_id = str(section.get("env_id", ""))
     plan_fp = resolve_path(section["task_plan_fp"])
-    name = args.name or f"{env_id}_{plan_fp.stem}_seed{int(args.seed):04d}"
+    name = args.name or (f"{env_id}_{plan_fp.stem}_seed{int(args.seed):04d}"
+                         + ("_random" if args.random_policy else ""))
     roles = {"head": args.head_camera, "wrist": args.wrist_camera}
 
     root = Path(args.out)
@@ -264,14 +283,17 @@ def run(args) -> int:
             f"--max-frames {args.max_frames} exports no difference at all; a "
             "consecutive-frame difference needs at least two frames")
 
-    print(f"checkpoint={ckpt_dir / POLICY_NAME}", flush=True)
+    print(f"checkpoint={ckpt_dir / POLICY_NAME}"
+          + (" (config only; --random-policy)" if args.random_policy else ""),
+          flush=True)
     print(f"algo={algo} env_id={env_id} section={args.config_section} "
           f"horizon={horizon} seed={args.seed} frames={args.max_frames}",
           flush=True)
 
     # ------------------------------------------------- pass one: the policy
-    print("\n[pass 1/2] rolling the checkpoint at policy resolution "
-          f"{tuple(args.policy_sensor_size)}", flush=True)
+    print(f"\n[pass 1/2] rolling "
+          f"{'random actions' if args.random_policy else 'the checkpoint'} "
+          f"at policy resolution {tuple(args.policy_sensor_size)}", flush=True)
     venv, plan_fp = make_mshab_env(
         section, num_envs=1, max_episode_steps=horizon,
         sensor_size=tuple(args.policy_sensor_size))
@@ -279,9 +301,15 @@ def run(args) -> int:
     try:
         from scenegraph.adapters.policy_loader import load_policy
 
+        # Reset here either way: the replay resets twice before its first
+        # action because this pass does, and the two have to agree.
         sample_obs, _ = venv.reset(seed=int(args.seed))
-        policy = load_policy(str(ckpt_dir), venv, sample_obs, args.device)
-        if policy.kind == "random" and not args.allow_random:
+        if args.random_policy:
+            policy = seeded_random_policy(venv, int(args.seed))
+        else:
+            policy = load_policy(str(ckpt_dir), venv, sample_obs, args.device)
+        if (policy.kind == "random" and not args.random_policy
+                and not args.allow_random):
             raise SystemExit(
                 "the checkpoint did not load and policy_loader fell back to "
                 "random actions; frames captioned with this checkpoint have to "
@@ -352,7 +380,9 @@ def run(args) -> int:
     path = writer.commit({
         "env_id": env_id,
         "title": args.title or figure_title(env_id),
-        "checkpoint": str(ckpt_dir / POLICY_NAME),
+        # A random episode names no checkpoint: nothing in it came from one.
+        "policy": policy.kind,
+        "checkpoint": None if policy.kind == "random" else str(ckpt_dir / POLICY_NAME),
         "config": str(ckpt_dir / CONFIG_NAME),
         "algo": algo,
         "config_section": args.config_section,
@@ -471,6 +501,10 @@ def parse_args(argv=None):
                    help="write diff_vis dark-on-white instead of light-on-black")
 
     p.add_argument("--device", default="cuda")
+    p.add_argument("--random-policy", action="store_true",
+                   help="roll uniform random actions seeded by --seed instead "
+                        "of the checkpoint; --ckpt-dir is still read for the "
+                        "env config, and the default name gains '_random'")
     p.add_argument("--allow-random", action="store_true",
                    help="proceed even if the checkpoint failed to load and the "
                         "actions are random")

@@ -25,7 +25,7 @@ from scenegraph.figures.diff_writer import (
 from scenegraph.tools.render_mshab_paper_frames import (
     DEFAULT_HEAD_CAMERA, DEFAULT_WRIST_CAMERA, PAPER_HUMAN_SIZE,
     PAPER_SENSOR_SIZE, POLICY_SENSOR_SIZE, RecordedEpisode, parse_args,
-    preflight, replay_and_export,
+    preflight, replay_and_export, seeded_random_policy,
 )
 
 HEAD, WRIST = DEFAULT_HEAD_CAMERA, DEFAULT_WRIST_CAMERA
@@ -482,6 +482,51 @@ class TestCli(unittest.TestCase):
         args = parse_args(["--ckpt-dir", "ckpt", "--sensor-size", "800", "800"])
         self.assertEqual(tuple(args.sensor_size), (800, 800))
         self.assertEqual(tuple(args.policy_sensor_size), POLICY_SENSOR_SIZE)
+
+    def test_the_checkpoint_is_the_default_policy(self):
+        self.assertFalse(parse_args(["--ckpt-dir", "ckpt"]).random_policy)
+        self.assertTrue(parse_args(["--ckpt-dir", "ckpt",
+                                    "--random-policy"]).random_policy)
+
+
+# --------------------------------------------------------------------------- #
+# The random policy
+# --------------------------------------------------------------------------- #
+class StubActionSpace:
+    """Just the two methods a gym Box is asked for, drawing from its own RNG."""
+
+    def __init__(self, shape=(1, 13)):
+        self.shape = shape
+        self.rng = np.random.default_rng()
+
+    def seed(self, seed):
+        self.rng = np.random.default_rng(seed)
+
+    def sample(self):
+        return self.rng.uniform(-1.0, 1.0, size=self.shape).astype(np.float32)
+
+
+class TestRandomPolicy(unittest.TestCase):
+    def _roll(self, seed, steps=5):
+        venv = SimpleNamespace(action_space=StubActionSpace())
+        policy = seeded_random_policy(venv, seed)
+        return policy, [policy.act({}) for _ in range(steps)]
+
+    def test_it_says_it_is_random(self):
+        """The manifest's ``checkpoint`` is nulled on this kind."""
+        policy, _ = self._roll(0)
+        self.assertEqual(policy.kind, "random")
+
+    def test_the_same_seed_rolls_the_same_actions(self):
+        _, first = self._roll(3)
+        _, second = self._roll(3)
+        for a, b in zip(first, second):
+            self.assertTrue(np.array_equal(a, b))
+
+    def test_a_different_seed_rolls_different_actions(self):
+        _, first = self._roll(3)
+        _, second = self._roll(4)
+        self.assertFalse(np.array_equal(first[0], second[0]))
 
 
 if __name__ == "__main__":

@@ -17,8 +17,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..adapters.privileged_state import (
-    begin_frame_cache, end_frame_cache, invalidate_scene_caches,
-    per_env_segmentation_id_map, set_merged_view_aliasing,
+    begin_frame_cache, end_frame_cache, frame_cache_active,
+    invalidate_scene_caches, per_env_segmentation_id_map,
+    set_merged_view_aliasing,
 )
 from ..configs.loader import load_config
 from ..core.entity_identity import stable_node_id
@@ -111,7 +112,12 @@ class FigureGraphSource:
         segmentation = {
             cam: extract_camera_obs(obs, cam, self.env_idx)[1] for cam in cameras
         }
-        begin_frame_cache(getattr(self.env.unwrapped, "scene", None))
+        # One source per env shares a vector env's frame: the caller opens the
+        # cache once for all of them, as graph_obs does, and this one only
+        # opens its own when it is alone.
+        owns_cache = not frame_cache_active()
+        if owns_cache:
+            begin_frame_cache(getattr(self.env.unwrapped, "scene", None))
         try:
             graph, _masks, _cam, _rgb = self.builder.step(
                 {}, self._frame,
@@ -124,7 +130,8 @@ class FigureGraphSource:
                 need_masks=False,
             )
         finally:
-            end_frame_cache()
+            if owns_cache:
+                end_frame_cache()
         if not self.entities:
             self.entities = self._resolve_entities()
         self._boundary = False

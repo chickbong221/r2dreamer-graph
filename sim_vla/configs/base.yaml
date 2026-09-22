@@ -56,6 +56,14 @@ data:
   normalization: mean_std
   seed: 0
 
+pretrain:
+  # Stage 1A's learning rate. null keeps the model preset's lr
+  # (configs/model/_base_.yaml, 4e-5). That file is the main trainer's too, so
+  # a sim_vla-only change is made here, not there.
+  world_lr: null
+  # Stage 1B's learning rate. null keeps ImitationConfig's 1e-4.
+  imitation_lr: null
+
 online:
   # Same unit as the original trainer: replay timesteps / environment step.
   train_ratio: 64
@@ -133,6 +141,17 @@ online:
   # estimator is not the pathwise one and does not inherit its tuning; pilot
   # lower values first.
   actor_lr: null
+  # Parallel online envs, like the main trainer's env_num. 1 is the single CPU
+  # env the demonstrations were collected in; more than 1 runs ManiSkill's GPU
+  # backend, steps every env in lockstep and trains between steps. The update
+  # budget is env_steps * train_ratio / (batch_size * sequence_length) either
+  # way, so this changes collection speed, not how much training a run gets.
+  num_envs: 1
+  # Resets between scene rebuilds. null keeps ManiSkill's default, which is
+  # per task: PegInsertionSide rebuilds its peg and hole on every reset at one
+  # env and never at more, so a parallel run trains on num_envs fixed shapes
+  # unless this is set (1 rebuilds every round, and a GPU rebuild is slow).
+  reconfiguration_freq: null
   # Recorded rather than chosen: the advantage is divided once by the Dreamer
   # return EMA's spread, floored at 1, exactly as dreamer.py does it.
   advantage_scale: return_ema

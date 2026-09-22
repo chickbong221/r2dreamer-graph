@@ -113,6 +113,131 @@ class TestReplay(unittest.TestCase):
         self.assertEqual(out["action"].shape[0], 8)          # demos only
 
 
+class TestParallelEnv(unittest.TestCase):
+    """reset_all/step_all against a stand-in for a batched ManiSkill env.
+
+    The live env is faked the way test_sim_vla_alignment fakes it, so this
+    runs without the simulator: what it checks is the row bookkeeping, which
+    is ours, not the physics.
+    """
+
+    N = 3
+
+    def metadata(self):
+        return {"env_id": "PegInsertionSide-v1",
+                "camera_keys": {"base_camera": "image_base"},
+                "proprio_fields": [["agent", "qpos"]],
+                "image_size": [4, 4],
+                "controller": {"control_mode": "pd_joint_pos",
+                               "action_dim": 2}}
+
+    def live(self):
+        from types import SimpleNamespace
+
+        torch = require_torch()
+        n = self.N
+
+        class Live:
+            unwrapped = SimpleNamespace(reconfiguration_freq=0)
+
+            def __init__(self):
+                self.seeds, self.actions, self.t = [], [], 0
+
+            def raw(self):
+                # Row i is filled with i + t, so a row that lands in the
+                # wrong slot, or a stale frame, is visible by value.
+                rows = torch.arange(n).view(n, 1, 1, 1) + self.t
+                return {"sensor_data": {"base_camera": {
+                            "rgb": rows.expand(n, 4, 4, 3).to(torch.uint8)}},
+                        "agent": {"qpos": (torch.arange(n, dtype=torch.float32)
+                                           .view(n, 1).expand(n, 3) + self.t)}}
+
+            def reset(self, seed=None):
+                self.seeds.append(seed)
+                self.t = 0
+                return self.raw(), {}
+
+            def step(self, actions):
+                self.actions.append(np.asarray(actions))
+                self.t += 1
+                return (self.raw(), torch.arange(n, dtype=torch.float32),
+                        torch.zeros(n, dtype=torch.bool),
+                        torch.full((n,), self.t >= 2),
+                        {"success": torch.tensor([True] + [False] * (n - 1))})
+
+            def close(self):
+                pass
+
+        return Live()
+
+    def env(self, num_envs=None):
+        from sim_vla.envs.maniskill import SimVlaEnv
+
+        env = SimVlaEnv(self.metadata(), graph_enabled=False, max_steps=5,
+                        num_envs=self.N if num_envs is None else num_envs)
+        env._env = self.live()
+        return env
+
+    def test_rows_stay_with_their_env(self):
+        env = self.env()
+        obs = env.reset_all([4, 5, 6])
+        self.assertEqual(env._env.seeds, [[4, 5, 6]])
+        self.assertEqual(obs["image_base"].shape, (self.N, 4, 4, 3))
+        self.assertEqual(obs["image_base"].dtype, np.uint8)
+        for index in range(self.N):
+            self.assertTrue((obs["image_base"][index] == index).all())
+            np.testing.assert_array_equal(obs["proprio"][index],
+                                          np.full(3, index, np.float32))
+        self.assertTrue(obs["is_first"].all())
+
+        out = env.step_all(np.zeros((self.N, 2), np.float32))
+        np.testing.assert_array_equal(out["reward"], [0.0, 1.0, 2.0])
+        np.testing.assert_array_equal(out["success"], [True, False, False])
+        self.assertFalse(out["is_terminal"].any())
+        self.assertFalse(out["is_last"].any())
+        self.assertFalse(out["obs"]["is_first"].any())
+        self.assertTrue((out["obs"]["image_base"][2] == 3).all())
+        # ManiSkill's truncation ends every env together at t=2.
+        self.assertTrue(env.step_all(np.zeros((self.N, 2)))["is_last"].all())
+
+    def test_the_horizon_ends_episodes_without_a_truncation(self):
+        env = self.env()
+        env.max_steps = 1
+        env.reset_all()
+        self.assertEqual(env._env.seeds, [0])     # the env's own seed, spread
+        self.assertTrue(env.step_all(np.zeros((self.N, 2)))["is_last"].all())
+
+    def test_one_env_row_is_what_the_single_interface_returns(self):
+        env = self.env(num_envs=1)
+        raw = env._env.raw()
+        single = env._observation(raw)
+        batched = env._observations(raw)
+        self.assertEqual(sorted(single), sorted(batched))
+        for key, value in single.items():
+            np.testing.assert_array_equal(batched[key][0], value)
+
+    def test_misuse_is_refused(self):
+        env = self.env()
+        with self.assertRaises(RuntimeError):
+            env.reset(0)
+        with self.assertRaises(RuntimeError):
+            env.step(np.zeros(2))
+        with self.assertRaises(ValueError):
+            env.reset_all([1, 2])
+        env.reset_all()
+        with self.assertRaises(ValueError):
+            env.step_all(np.zeros((self.N - 1, 2)))
+
+    def test_backend_follows_the_env_count(self):
+        from sim_vla.envs.maniskill import SimVlaEnv
+
+        self.assertEqual(self.env(num_envs=1).sim_backend, "cpu")
+        self.assertEqual(self.env().sim_backend, "gpu")
+        self.assertEqual(self.env().live_reconfiguration_freq, 0)
+        with self.assertRaises(ValueError):
+            SimVlaEnv(self.metadata(), graph_enabled=False, num_envs=0)
+
+
 class TestOnlineEnv(unittest.TestCase):
     def build(self, graph_enabled):
         require("mani_skill")

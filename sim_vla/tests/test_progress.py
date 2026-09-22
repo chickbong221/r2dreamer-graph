@@ -351,5 +351,109 @@ class TestShapingReachesTheActor(unittest.TestCase):
                 "update; it is fitted on observed targets, not on the return")
 
 
+class FakePotential:
+    """Stands in for SchedulePotential: a fixed ramp, valid where asked."""
+
+    def __init__(self, valid=True):
+        self.valid = valid
+
+    def targets(self, batch):
+        torch = require_torch()
+        mask = batch["loss_mask"]
+        steps = mask.shape[1]
+        phi = torch.linspace(0.0, 1.0, steps).expand(mask.shape[0], steps)
+        return phi.clone(), torch.full(mask.shape, bool(self.valid))
+
+
+class TestProgressPretraining(unittest.TestCase):
+    """Stage 1A fits the head on demonstrations, and only the head."""
+
+    def arm(self):
+        from .common import fake_batch, obs_shapes
+        from sim_vla.models.world_model import build_world_model
+
+        cfg, model_cfg = small_model_config(True)
+        cfg["model"]["progress"]["enabled"] = True
+        batch = fake_batch(graph_enabled=True)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=True)
+        return cfg, model_cfg, model, batch
+
+    def test_the_head_learns_and_the_world_model_does_not_notice(self):
+        """Same seed, same batch, with and without the head: the world model
+        comes out identical, so the graph_progress arm's world model is the
+        graph arm's."""
+        import copy
+
+        torch = require_torch()
+        from sim_vla.training.pretrain_world_model import (
+            build_progress_head, train_step)
+        from sim_vla.training.progress import PROGRESS_LR
+
+        cfg, model_cfg, model, batch = self.arm()
+        plain = copy.deepcopy(model)
+        head = build_progress_head(cfg, model_cfg, model, device="cpu")
+        before = [p.detach().clone() for p in head.parameters()]
+        head_opt = torch.optim.AdamW(head.parameters(), lr=PROGRESS_LR)
+
+        torch.manual_seed(5)
+        _total, last = train_step(
+            model, torch.optim.AdamW(model.parameters(), lr=1e-3), batch,
+            progress=(head, head_opt, FakePotential()))
+        torch.manual_seed(5)
+        _total, plain_last = train_step(
+            plain, torch.optim.AdamW(plain.parameters(), lr=1e-3), batch)
+
+        self.assertIn("progress_loss", last)
+        self.assertNotIn("progress_loss", plain_last)
+        self.assertTrue(any(not torch.equal(old, new.detach())
+                            for old, new in zip(before, head.parameters())),
+                        "the progress head did not train")
+        for (name, trained), (_, alone) in zip(model.named_parameters(),
+                                               plain.named_parameters()):
+            self.assertTrue(torch.equal(trained, alone),
+                            f"fitting the head moved the world model: {name}")
+
+    def test_an_unscorable_batch_takes_no_head_step(self):
+        torch = require_torch()
+        from sim_vla.training.pretrain_world_model import (
+            build_progress_head, train_step)
+
+        cfg, model_cfg, model, batch = self.arm()
+        head = build_progress_head(cfg, model_cfg, model, device="cpu")
+        before = [p.detach().clone() for p in head.parameters()]
+        _total, last = train_step(
+            model, torch.optim.AdamW(model.parameters(), lr=1e-3), batch,
+            progress=(head, torch.optim.AdamW(head.parameters(), lr=1.0),
+                      FakePotential(valid=False)))
+        self.assertEqual(last["progress_valid"], 0.0)
+        for old, new in zip(before, head.parameters()):
+            self.assertTrue(torch.equal(old, new.detach()))
+
+    def test_building_the_head_leaves_the_random_stream_alone(self):
+        torch = require_torch()
+        from sim_vla.training.pretrain_world_model import build_progress_head
+
+        cfg, model_cfg, model, _batch = self.arm()
+        torch.manual_seed(11)
+        expected = torch.rand(4)
+        torch.manual_seed(11)
+        first = build_progress_head(cfg, model_cfg, model, device="cpu")
+        self.assertTrue(torch.equal(torch.rand(4), expected))
+        # And the head's own weights depend on the run's seed alone.
+        second = build_progress_head(cfg, model_cfg, model, device="cpu")
+        for a, b in zip(first.parameters(), second.parameters()):
+            self.assertTrue(torch.equal(a, b))
+
+    def test_other_arms_fit_no_head(self):
+        require_torch()
+        from sim_vla.training.pretrain_world_model import build_progress_head
+
+        cfg, model_cfg, model, _batch = self.arm()
+        cfg["model"]["progress"]["enabled"] = False
+        self.assertIsNone(
+            build_progress_head(cfg, model_cfg, model, device="cpu"))
+
+
 if __name__ == "__main__":
     unittest.main()

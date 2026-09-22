@@ -5,6 +5,13 @@ heads are trained alongside reconstruction, the recurrent state is rebuilt with
 burn-in, and the graph arm additionally trains the semantic prior that
 imagination depends on.
 
+The graph_progress arm also fits its progress head here, on the same
+demonstration batches, so the head Stage 2 shapes the actor with has already
+learned the schedule rather than starting from random weights. It regresses on
+detached features with its own optimizer, exactly as Stage 2 keeps training
+it, so it never moves the world model: that arm's world model is the graph
+arm's, trained on the same draws.
+
 The two arms get separate world models and are never initialised from each
 other. ``sim_vla/runtime/checkpoint.py`` enforces that for the checkpoints that
 do get written: a graph-trained world model reloaded as a baseline is not a
@@ -62,6 +69,68 @@ class Stage1A:
     coords: Any = None
     losses: Dict[str, float] = field(default_factory=dict)
     path: Optional[Path] = None      # where it was written, or None
+    # The graph_progress arm's head, fitted here, and the schedule potential
+    # it was fitted to. None for every other arm.
+    progress_head: Any = None
+    potential: Any = None
+    # The learning rate this run trained with; None when it was restored.
+    lr: Optional[float] = None
+
+
+def world_lr(cfg: Dict[str, Any], model_cfg) -> float:
+    """Stage 1A's learning rate: ``pretrain.world_lr``, else the preset's.
+
+    The preset's ``lr`` lives in ``configs/model/_base_.yaml``, which the main
+    trainer reads too, so a sim_vla-only change goes through the sim_vla config
+    instead of editing that file.
+    """
+    value = (cfg.get("pretrain") or {}).get("world_lr")
+    return float(model_cfg.lr) if value is None else float(value)
+
+
+def build_progress_head(cfg: Dict[str, Any], model_cfg, model, *,
+                        device: str):
+    """The graph_progress arm's head, or None for any other arm.
+
+    Initialised under a forked random state. Drawing its weights from the
+    global stream would shift every later draw of a latent sample, and the
+    arm's world model would stop matching the graph arm's for a
+    reason that has nothing to do with progress.
+    """
+    from .progress import build_progress
+
+    arm = dict(cfg.get("model") or {})
+    if not bool((arm.get("progress") or {}).get("enabled")):
+        return None
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(int(cfg["data"]["seed"]))
+        head = build_progress(
+            model_cfg, int(model.feature_dim),
+            graph_enabled=bool((arm.get("graph") or {}).get("enabled")),
+            progress_enabled=True)
+    return head.to(device)
+
+
+def train_step(model, optimizer, batch: Dict[str, torch.Tensor], *,
+               progress=None) -> tuple:
+    """One world-model step, then one progress-head step on its features.
+
+    ``progress`` is ``(head, optimizer, potential)`` or None. The head reads
+    the posterior features the world-model loss already computed, detached,
+    so it costs no second encoder pass and sends nothing back.
+    """
+    from .progress import fit_progress
+
+    total, losses, aux = model.loss(batch)
+    optimizer.zero_grad(set_to_none=True)
+    total.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 100.0)
+    optimizer.step()
+    last = {name: float(value.detach()) for name, value in losses.items()}
+    if progress is not None:
+        head, head_opt, potential = progress
+        last |= fit_progress(head, head_opt, potential, aux["feat"], batch)
+    return total, last
 
 
 def observation_shapes(batch: Dict[str, torch.Tensor]) -> Dict[str, tuple]:
@@ -141,11 +210,26 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
     """
     from ..models.action_space import ActionBounds, ActionCoordinates
 
+    from .progress import PROGRESS_LR, build_potential
+
     data, sampler, model, model_cfg = build(
         cfg, device=device, model_yaml=model_yaml)
     try:
-        optimizer = torch.optim.AdamW(model.parameters(),
-                                      lr=float(model_cfg.lr))
+        lr = world_lr(cfg, model_cfg)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+        print(f"[world_model] lr {lr:g}", flush=True)
+
+        progress_head = build_progress_head(cfg, model_cfg, model,
+                                            device=device)
+        potential = progress_opt = None
+        if progress_head is not None:
+            potential = build_potential(cfg, data.metadata, device=device)
+            progress_opt = torch.optim.AdamW(progress_head.parameters(),
+                                             lr=PROGRESS_LR)
+            print(f"[world_model] progress head fitted alongside: "
+                  f"{potential.describe()}", flush=True)
+        progress = (None if progress_head is None
+                    else (progress_head, progress_opt, potential))
 
         from ..models.action_space import FieldScaler
 
@@ -180,13 +264,8 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
             batch = to_model_batch(
                 sampler.batch(int(cfg["data"]["batch_size"])), device,
                 normalizer=normalizer, coords=coords)
-            total, losses, _aux = model.loss(batch)
-            optimizer.zero_grad(set_to_none=True)
-            total.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 100.0)
-            optimizer.step()
-            last = {name: float(value.detach())
-                    for name, value in losses.items()}
+            total, last = train_step(model, optimizer, batch,
+                                     progress=progress)
             # One cadence for both sinks. A 500k-step run logging every step
             # spends real time inside the metrics client and produces a chart
             # too dense to read; log_every is already the knob for that.
@@ -194,9 +273,12 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
                 if on_metrics is not None:
                     on_metrics({"step": float(step), "total": float(total),
                                 **last})
+                shown = sorted((k, v) for k, v in last.items()
+                               if not k.startswith("progress_"))[:5]
+                if "progress_loss" in last:
+                    shown.append(("progress_loss", last["progress_loss"]))
                 print(f"[world_model] step {step} total {float(total):.4f} "
-                      + " ".join(f"{k}={v:.3f}"
-                                 for k, v in sorted(last.items())[:5]),
+                      + " ".join(f"{k}={v:.3f}" for k, v in shown),
                       flush=True)
 
         meta = CheckpointMeta(
@@ -220,8 +302,12 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
             if out is None:
                 raise ValueError(
                     "save_checkpoint=True needs an output path; pass out=...")
-            path = save(Path(out), meta, {"world_model": model},
-                        {"world_model": optimizer})
+            # The head goes in the world model's file: it was fitted to this
+            # model's features, and restoring it beside any other would pair
+            # it with a representation it has never read.
+            path = save(Path(out), meta,
+                        {"world_model": model, "progress": progress_head},
+                        {"world_model": optimizer, "progress": progress_opt})
     except BaseException:
         # Ownership transfers to the caller only when this returns.
         data.close()
@@ -230,7 +316,8 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
     # data stays open on purpose -- see Stage1A.
     return Stage1A(model=model, data=data, sampler=sampler,
                    model_cfg=model_cfg, normalizer=normalizer, meta=meta,
-                   coords=coords, losses=last, path=path)
+                   coords=coords, losses=last, path=path,
+                   progress_head=progress_head, potential=potential, lr=lr)
 
 
 def resume(cfg: Dict[str, Any], *, device: str, path: Path,
@@ -296,16 +383,32 @@ def resume(cfg: Dict[str, Any], *, device: str, path: Path,
                                     else {"mode": "none"}),
             config=cfg, step=0,
         )
-        stored = load(path, meta, {"world_model": model})
+        progress_head = build_progress_head(cfg, model_cfg, model,
+                                            device=device)
+        stored = load(
+            path, meta, {"world_model": model, "progress": progress_head},
+            explain={"progress": (
+                "This world model was written before Stage 1A fitted the "
+                "progress head, so restoring it would start Stage 2's shaping "
+                "from a random head. Re-run Stage 1A for this arm (drop "
+                "--resume-from, or point it at a newer run).")})
+        potential = None
+        if progress_head is not None:
+            from .progress import build_potential
+
+            potential = build_potential(cfg, data.metadata, device=device)
         print(f"[world_model] restored {path} (trained {stored.step} steps, "
-              f"graph_enabled={stored.graph_enabled})", flush=True)
+              f"graph_enabled={stored.graph_enabled}"
+              + (", progress head" if progress_head is not None else "")
+              + ")", flush=True)
     except BaseException:
         data.close()
         raise
 
     return Stage1A(model=model, data=data, sampler=sampler,
                    model_cfg=model_cfg, normalizer=normalizer, meta=meta,
-                   coords=coords, losses={}, path=path)
+                   coords=coords, losses={}, path=path,
+                   progress_head=progress_head, potential=potential)
 
 
 def parse_args(argv=None):
