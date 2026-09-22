@@ -1,7 +1,0 @@
- 3 
- Fig. 1. Real-robot snapshots illustrating the diversity of our task suite. (A) Dynamic Push-T; (B) Agile Bowling; (C) Pouring. (D) Dynamic Unscrewing with a dexterous hand; (E) Dual-arm Folding; (F) Orange Juicing - Placing, (G) Orange Juicing - Removal; and (H) Box folding are shown side-by-side in the same panel. During policy rollouts (for all tasks except Dynamic Push-T), a human operator assigns a terminal success reward of +1 and ends the episode when the task is successfully completed; otherwise, the reward remains 0, and episodes terminate by timeout (or early stop for safety) with reward 0.  We use a unified policy-gradient objective across both iterative offline and online phases to fine-tune the diffusion sampler’s short-horizon denoising schedule (11). This alignment yields 
-A B
-C D
-E F
-G
- H
