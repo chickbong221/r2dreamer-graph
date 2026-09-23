@@ -9,6 +9,11 @@ What is reported is the environment's own verdict -- success and return -- and
 never a shaped reward. A progress-shaped arm that scored better only on its own
 shaping would be visible here as a run whose shaped return rose while its
 environment return did not.
+
+Nothing terminates, so an episode can succeed and then undo it -- drop the
+object, knock it off. ``success_rate`` counts success at any step and
+``success_at_end_rate`` success still held at the last one, the same split as
+the online ``episode/success_once`` and ``episode/success_at_end``.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ class EpisodeResult:
     steps_to_success: Optional[int]
     env_return: float
     clipped_actions: int
+    success_at_end: bool = False
 
 
 def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
@@ -48,7 +54,7 @@ def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
         if callable(reset_policy):
             reset_policy()
         obs = env.reset(seed)
-        total, clipped, first_success = 0.0, 0, None
+        total, clipped, first_success, holding = 0.0, 0, None, False
         step = 0
         for step in range(1, int(max_steps) + 1):
             action = np.asarray(policy(obs), dtype=np.float32)
@@ -64,6 +70,7 @@ def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
             out = env.step(action)
             total += float(out["reward"])
             obs = out["obs"]
+            holding = bool(out["success"])
             if out["success"] and first_success is None:
                 first_success = step
             if out["is_last"]:
@@ -71,12 +78,14 @@ def evaluate_policy(env, policy: Callable, *, episodes: int = 20,
         results.append(EpisodeResult(
             seed=seed, success=first_success is not None, steps=step,
             steps_to_success=first_success, env_return=total,
-            clipped_actions=clipped))
+            clipped_actions=clipped, success_at_end=holding))
 
     successes = [r for r in results if r.success]
     return {
         "episodes": len(results),
         "success_rate": len(successes) / max(len(results), 1),
+        "success_at_end_rate": (sum(r.success_at_end for r in results)
+                                / max(len(results), 1)),
         "env_return_mean": float(np.mean([r.env_return for r in results])),
         "steps_to_success_median": (
             float(np.median([r.steps_to_success for r in successes]))

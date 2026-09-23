@@ -698,12 +698,31 @@ class TestOnlineSettings(unittest.TestCase):
             pipeline.main([
                 "--task", "peginsertion", "--experiment", "graph_progress",
                 "--device", "cpu", "--world-lr", "8e-5",
-                "--imitation-lr", "1.5e-4"])
+                "--imitation-lr", "1.5e-4", "--world-warmup-steps", "1000",
+                "--world-final-lr", "1e-5", "--imitation-warmup-steps", "500",
+                "--imitation-final-lr", "2.5e-6"])
         cfg = run.call_args.args[0]
         self.assertEqual(world_lr(cfg, model), 8e-5)
         self.assertEqual(imitation_lr(cfg), 1.5e-4)
+        from sim_vla.training.pretrain_world_model import world_schedule
+        from sim_vla.training.train_imitation import imitation_decay
 
-        for settings in ({"world_lr": 0}, {"imitation_lr": -1e-4}):
+        schedule = world_schedule(cfg, model, 30_000)
+        self.assertEqual((schedule.peak, schedule.warmup, schedule.final,
+                          schedule.total), (8e-5, 1000, 1e-5, 30_000))
+        self.assertEqual(imitation_decay(cfg),
+                         {"warmup_steps": 500, "final_lr": 2.5e-6})
+        # Unset, both stages keep the constant rate they always had.
+        default = load_config("peginsertion", "dreamer")
+        self.assertIsNone(world_schedule(default, model, 10).final)
+        self.assertEqual(world_schedule(default, model, 10).warmup, 0)
+        self.assertEqual(imitation_decay(default),
+                         {"warmup_steps": 0, "final_lr": None})
+
+        for settings in ({"world_lr": 0}, {"imitation_lr": -1e-4},
+                         {"world_final_lr": 0}, {"imitation_warmup_steps": -1},
+                         {"imitation_lr": 1e-4, "imitation_final_lr": 2e-4},
+                         {"world_lr": 1e-4, "world_final_lr": 1e-3}):
             with self.subTest(settings=settings), \
                     self.assertRaises(SystemExit):
                 load_config("peginsertion", "dreamer", {"pretrain": settings})

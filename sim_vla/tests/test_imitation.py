@@ -213,6 +213,95 @@ class TestImitationUpdate(unittest.TestCase):
                              ImitationConfig(chunk_size=7), device="cpu")
         self.assertIn("chunk", str(caught.exception))
 
+    def updates(self, trainer, batch, count):
+        # update() takes a sampler's numpy batch; the fixture is already
+        # tensors, so the conversion is the one thing stepped over.
+        trainer.to_torch = lambda given: given
+        return [trainer.update(batch) for _ in range(count)]
+
+    def test_each_update_runs_at_its_scheduled_rate(self):
+        from sim_vla.training.lr_schedule import LRSchedule
+
+        trainer, _model, _actor, batch = self.build()
+        trainer.schedule = LRSchedule(peak=1e-3, total=6, warmup=2,
+                                      final=1e-5)
+        rates = [row["lr"] for row in self.updates(trainer, batch, 6)]
+        for step, rate in enumerate(rates):
+            self.assertAlmostEqual(rate, trainer.schedule.at(step))
+        self.assertAlmostEqual(rates[0], 5e-4)
+        self.assertAlmostEqual(rates[-1], 1e-5)
+        self.assertAlmostEqual(trainer.optimizer.param_groups[0]["lr"], 1e-5)
+
+    def test_the_config_builds_the_schedule_and_its_default_is_constant(self):
+        require_torch()
+        from sim_vla.models.world_model import build_world_model
+        from sim_vla.training.train_imitation import (ImitationConfig,
+                                                      ImitationTrainer)
+
+        _cfg, model_cfg = small_model_config(False)
+        batch = fake_batch(graph_enabled=False)
+        model = build_world_model(model_cfg, obs_shapes(batch), 8,
+                                  graph_enabled=False)
+        actor = tiny_actor(model.feature_dim)
+        scheduled = ImitationTrainer(
+            model, actor, None,
+            ImitationConfig(chunk_size=actor.chunk_size, lr=1e-4, steps=30,
+                            warmup_steps=5, final_lr=2.5e-6), device="cpu")
+        self.assertEqual((scheduled.schedule.total, scheduled.schedule.warmup,
+                          scheduled.schedule.final), (30, 5, 2.5e-6))
+        trainer, _model, _actor, batch = self.build()
+        rates = [row["lr"] for row in self.updates(trainer, batch, 3)]
+        self.assertEqual(rates, [1e-4] * 3)
+
+
+class TestLRSchedule(unittest.TestCase):
+    """Linear warmup, then cosine decay to the final rate at the last step."""
+
+    def schedule(self, **kwargs):
+        from sim_vla.training.lr_schedule import LRSchedule
+
+        return LRSchedule(**({"peak": 1e-4, "total": 30_000} | kwargs))
+
+    def test_no_warmup_and_no_final_rate_is_the_old_constant_rate(self):
+        constant = self.schedule()
+        self.assertEqual({constant.at(step) for step in (0, 1, 15_000, 29_999)},
+                         {1e-4})
+
+    def test_warmup_ramps_linearly_to_the_peak(self):
+        warm = self.schedule(warmup=1000, final=2.5e-6)
+        self.assertAlmostEqual(warm.at(0), 1e-7)
+        self.assertAlmostEqual(warm.at(499), 5e-5)
+        self.assertAlmostEqual(warm.at(999), 1e-4)
+        self.assertAlmostEqual(warm.at(1000), 1e-4)
+
+    def test_cosine_decay_ends_on_the_final_rate_at_the_last_step(self):
+        decay = self.schedule(warmup=1000, final=2.5e-6)
+        self.assertAlmostEqual(decay.at(29_999), 2.5e-6)
+        # Halfway through the decay, halfway between peak and final.
+        middle = 1000 + (30_000 - 1000 - 1) // 2
+        self.assertAlmostEqual(decay.at(middle), (1e-4 + 2.5e-6) / 2,
+                               delta=1e-8)
+        rates = [decay.at(step) for step in range(1000, 30_000, 97)]
+        self.assertTrue(all(a >= b for a, b in zip(rates, rates[1:])),
+                        "the rate rose during the decay")
+        # Past the last step it holds rather than coming back up.
+        self.assertAlmostEqual(decay.at(40_000), 2.5e-6)
+
+    def test_apply_sets_every_parameter_group(self):
+        from types import SimpleNamespace
+
+        optimizer = SimpleNamespace(param_groups=[{"lr": 1.0}, {"lr": 1.0}])
+        rate = self.schedule(warmup=10).apply(optimizer, 4)
+        self.assertAlmostEqual(rate, 5e-5)
+        self.assertEqual([g["lr"] for g in optimizer.param_groups],
+                         [rate, rate])
+
+    def test_nonsense_is_refused(self):
+        for kwargs in ({"final": 2e-4}, {"final": 0.0}, {"warmup": -1},
+                       {"peak": 0.0}, {"final": float("nan")}):
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                self.schedule(**kwargs)
+
 
 class TestActionWidth(unittest.TestCase):
     """Stage 1B's entry point, against the canonical window keys."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import tempfile
 import types
 import unittest
@@ -514,6 +515,41 @@ class TestNoWriteControlPaths(unittest.TestCase):
                       log_every=0)
         self.assertIn("normalization", str(caught.exception))
 
+    def test_the_rate_follows_the_warmup_and_decay_it_was_given(self):
+        from sim_vla.training.lr_schedule import LRSchedule
+
+        stage = self.inject()
+        real_step = stage.train_step
+        used = []
+
+        def spy(model, optimizer, batch, **kwargs):
+            # What the optimizer steps with, not only what is logged.
+            used.append(optimizer.param_groups[0]["lr"])
+            return real_step(model, optimizer, batch, **kwargs)
+
+        stage.train_step = spy
+        self.addCleanup(lambda: setattr(stage, "train_step", real_step))
+        cfg = self.cfg()
+        cfg["pretrain"] = {"world_warmup_steps": 2, "world_final_lr": 1e-4}
+        logged = []
+        stage.run(cfg, steps=6, device="cpu", out=self.root / "w.pt",
+                  log_every=1, on_metrics=logged.append)
+        # The injected preset's lr, 1e-3, is the peak.
+        expected = LRSchedule(peak=1e-3, total=6, warmup=2, final=1e-4)
+        self.assertEqual(len(used), 6)
+        for step, rate in enumerate(used):
+            self.assertAlmostEqual(rate, expected.at(step))
+        self.assertEqual([row["lr"] for row in logged], used)
+        self.assertAlmostEqual(used[1], 1e-3)
+        self.assertAlmostEqual(used[-1], 1e-4)
+
+    def test_without_a_schedule_the_rate_stays_constant(self):
+        stage = self.inject()
+        logged = []
+        stage.run(self.cfg(), steps=4, device="cpu", out=self.root / "w.pt",
+                  log_every=1, on_metrics=logged.append)
+        self.assertEqual([row["lr"] for row in logged], [1e-3] * 4)
+
 
 class TestJointProgressCheckpoint(unittest.TestCase):
     """The real Stage 1A ``run`` and ``resume`` for graph_progress, with a
@@ -836,6 +872,170 @@ class TestStagesHandOverInMemory(unittest.TestCase):
                       "Stage 1B did not receive Stage 1A's own model")
         self.assertFalse(received["save_a"])
         self.assertFalse(received["save_b"])
+
+
+class TestImitationRateCheckedEarly(unittest.TestCase):
+    """Stage 1B's schedule is built after Stage 1A; a bad one must not wait."""
+
+    def test_a_final_rate_above_the_peak_stops_the_run_before_stage_1a(self):
+        require_torch()
+        from unittest import mock
+
+        from sim_vla.training import pipeline, pretrain_world_model
+
+        started = []
+        with mock.patch.object(pretrain_world_model, "run",
+                               lambda *a, **k: started.append(True)), \
+                self.assertRaises(SystemExit) as caught:
+            # Above ImitationConfig's default peak of 1e-4, which the config
+            # check cannot see because the peak is not written down.
+            pipeline.run({"pretrain": {"imitation_final_lr": 1e-3}},
+                         world_steps=1, imitation_steps=5, online_steps=0,
+                         device="cpu", root=Path("."))
+        self.assertEqual(started, [])
+        self.assertIn("Stage 1B", str(caught.exception))
+
+
+class TestImitationEvaluation(unittest.TestCase):
+    """Without Stage 2, Stage 1B's own policy is evaluated in the simulator."""
+
+    RESULT = {"episodes": 20, "success_rate": 0.5, "success_at_end_rate": 0.25,
+              "env_return_mean": 3.0, "steps_to_success_median": None,
+              "per_episode": [{"seed": 900000, "success": True}]}
+
+    class Logger:
+        def __init__(self):
+            self.logged, self.summaries = [], {}
+
+        def log(self, metrics, *, stage):
+            self.logged.append((stage, dict(metrics)))
+
+        def summary(self, values):
+            self.summaries.update(values)
+
+    def run_pipeline(self, cfg, *, online_steps=0, root=Path("."),
+                     save_checkpoints=False, **patches):
+        require_torch()
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from sim_vla.training import pipeline, pretrain_world_model
+        from sim_vla.training import train_imitation
+
+        stage_a = pretrain_world_model.Stage1A(
+            model=SimpleNamespace(feature_dim=64),
+            data=SimpleNamespace(close=lambda: None, metadata={}),
+            sampler=SimpleNamespace(), model_cfg=SimpleNamespace(),
+            normalizer=SimpleNamespace(), meta=meta(), losses={})
+        actor = SimpleNamespace()
+        # On the instance, so a run stopped by an exception can still be read.
+        calls = self.calls = []
+
+        def fake_eval(cfg, stage, policy_actor, *, episodes, device):
+            calls.append({"stage_a": stage, "actor": policy_actor,
+                          "episodes": episodes})
+            return dict(self.RESULT, episodes=episodes)
+
+        logger = self.Logger()
+        with mock.patch.object(pretrain_world_model, "run",
+                               lambda *a, **k: stage_a), \
+                mock.patch.object(
+                    train_imitation, "run",
+                    lambda *a, **k: train_imitation.Stage1B(
+                        actor=actor, adapter=None, loaded=None, trainer=None,
+                        losses={})), \
+                mock.patch.object(pipeline, "evaluate_imitation", fake_eval), \
+                contextlib.ExitStack() as stack:
+            for name, value in patches.items():
+                stack.enter_context(mock.patch.object(pipeline, name, value))
+            report = pipeline.run(cfg, world_steps=1, imitation_steps=7,
+                                  online_steps=online_steps, device="cpu",
+                                  root=root, save_checkpoints=save_checkpoints,
+                                  logger=logger)
+        return report, calls, stage_a, actor, logger
+
+    def test_the_trained_policy_is_evaluated_and_logged(self):
+        report, calls, stage_a, actor, logger = self.run_pipeline(
+            {"eval": {"episodes": 20}})
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["actor"], actor)
+        self.assertIs(calls[0]["stage_a"], stage_a)
+        self.assertEqual(calls[0]["episodes"], 20)
+        # Numbers only in the report; per-episode rows go to the file.
+        self.assertEqual(report["imitation_eval"]["success_rate"], 0.5)
+        self.assertNotIn("per_episode", report["imitation_eval"])
+        self.assertNotIn("steps_to_success_median", report["imitation_eval"])
+        stage, metrics = logger.logged[-1]
+        self.assertEqual(stage, "imitation")
+        self.assertEqual(metrics["step"], 7.0)
+        self.assertEqual(metrics["eval_success_at_end_rate"], 0.25)
+        self.assertEqual(logger.summaries["imitation_eval_success_rate"], 0.5)
+
+    def test_the_per_episode_results_are_written_beside_the_checkpoints(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            self.run_pipeline({"eval": {"episodes": 20}}, root=root,
+                              save_checkpoints=True)
+            written = json.loads((root / "imitation_eval.json").read_text())
+        self.assertEqual(written["per_episode"], self.RESULT["per_episode"])
+        self.assertEqual(written["success_at_end_rate"], 0.25)
+
+    def test_nothing_is_written_without_save_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            self.run_pipeline({"eval": {"episodes": 20}}, root=root)
+            self.assertFalse(root.exists())
+
+    def test_zero_episodes_skips_it(self):
+        for cfg in ({"eval": {"episodes": 0}}, {}):
+            with self.subTest(cfg=cfg):
+                report, calls, *_ = self.run_pipeline(cfg)
+                self.assertEqual(calls, [])
+                self.assertNotIn("imitation_eval", report)
+
+    def test_a_run_that_goes_on_to_stage_two_is_not_evaluated_here(self):
+        class Stop(Exception):
+            pass
+
+        def stop(*args, **kwargs):
+            raise Stop
+
+        # Stage 2 starts by shrinking the chunk; stopping there shows the
+        # evaluation was never reached on the way.
+        with self.assertRaises(Stop):
+            self.run_pipeline({"eval": {"episodes": 20},
+                               "data": {"ignore_terminations": True}},
+                              online_steps=10, shrink_online_chunk=stop)
+        self.assertEqual(self.calls, [])
+
+    def test_the_flag_reaches_the_config_and_a_negative_count_is_refused(self):
+        require_torch()
+        from unittest import mock
+
+        from sim_vla.config import load_config
+        from sim_vla.training import pipeline
+        from sim_vla.training.wandb_logger import RunLogger
+
+        self.assertEqual(load_config("stackcube", "dreamer")["eval"]["episodes"],
+                         20)
+        with mock.patch.object(pipeline, "run", return_value={}) as run, \
+                mock.patch.object(pipeline, "start_run",
+                                  return_value=RunLogger()):
+            pipeline.main(["--task", "stackcube", "--experiment", "dreamer",
+                           "--device", "cpu", "--eval-episodes", "5"])
+        self.assertEqual(run.call_args.args[0]["eval"]["episodes"], 5)
+        with self.assertRaises(SystemExit):
+            load_config("stackcube", "dreamer", {"eval": {"episodes": -1}})
+
+    def test_stackcube_resolves_to_its_own_env_and_dataset(self):
+        from sim_vla.config import load_config
+
+        cfg = load_config("stackcube", "graph_progress")
+        self.assertEqual(cfg["task"]["env_id"], "StackCube-v1")
+        self.assertTrue(str(cfg["task"]["dataset"]).endswith(
+            "StackCube-v1/demos.h5"))
 
 
 if __name__ == "__main__":

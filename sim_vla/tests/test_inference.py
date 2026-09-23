@@ -341,6 +341,45 @@ class TestRecurrentInference(unittest.TestCase):
                 err_msg=f"step {index}: the evaluation altered the command")
 
 
+class TestEvaluationSuccess(unittest.TestCase):
+    """Reaching success and still holding it at the end are counted apart.
+
+    Nothing terminates, so a policy can succeed and then undo it; the two
+    rates are the evaluation's version of success_once and success_at_end.
+    """
+
+    def test_success_at_end_is_reported_beside_success_once(self):
+        from sim_vla.evaluation.policy import evaluate_policy
+
+        # The success flag at each of three steps, one row per episode.
+        scripts = [[False, True, True],      # reached and held
+                   [False, True, False],     # reached, then lost
+                   [False, False, False]]    # never reached
+
+        class Scripted:
+            def __init__(self):
+                self.episode, self.t = -1, 0
+
+            def reset(self, seed=None):
+                self.episode, self.t = self.episode + 1, 0
+                return {}
+
+            def step(self, action):
+                flag = scripts[self.episode][self.t]
+                self.t += 1
+                return {"obs": {}, "reward": 0.0, "success": flag,
+                        "is_last": self.t >= 3}
+
+        report = evaluate_policy(Scripted(),
+                                 lambda obs: np.zeros(2, np.float32),
+                                 episodes=3, max_steps=3)
+        self.assertAlmostEqual(report["success_rate"], 2 / 3)
+        self.assertAlmostEqual(report["success_at_end_rate"], 1 / 3)
+        self.assertEqual([row["success_at_end"]
+                          for row in report["per_episode"]],
+                         [True, False, False])
+
+
 class TestBatchedInference(unittest.TestCase):
     """reset(batch=n): one row per env, each with its own state and a_(t-1)."""
 

@@ -119,7 +119,8 @@ class TestProgressAvailability(unittest.TestCase):
     def test_the_shipped_tasks_have_everything_the_arm_needs(self):
         from sim_vla.training.progress import availability
 
-        for env_id in ("PickCube-v1", "PlaceSphere-v1", "PegInsertionSide-v1"):
+        for env_id in ("PickCube-v1", "PlaceSphere-v1", "PegInsertionSide-v1",
+                       "StackCube-v1"):
             with self.subTest(env_id=env_id):
                 missing = availability(self.cfg(env_id),
                                        self.metadata(env_id))

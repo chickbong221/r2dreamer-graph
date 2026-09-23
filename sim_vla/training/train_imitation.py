@@ -56,6 +56,7 @@ from ..data.batch import to_model_batch
 
 from ..models.flow_sampler import flow_matching_loss
 from ..runtime.checkpoint import CheckpointMeta, load, save
+from .lr_schedule import LRSchedule
 
 # The canonical key a window exposes for the action taken *at* each row.
 TARGET_KEY = "action_target"
@@ -179,6 +180,10 @@ class ImitationConfig:
     batch_size: int = 16
     log_every: int = 100
     grad_clip: float = 1.0
+    # lr is the peak: linear warmup over warmup_steps, then cosine decay to
+    # final_lr at the last of `steps`. None holds it constant after warmup.
+    warmup_steps: int = 0
+    final_lr: Optional[float] = None
 
 
 class ImitationTrainer:
@@ -211,6 +216,10 @@ class ImitationTrainer:
                 "nothing in the actor is trainable; the adapter and the action "
                 "expert are supposed to be")
         self.optimizer = torch.optim.AdamW(trainable, lr=config.lr)
+        self.schedule = LRSchedule(
+            peak=float(config.lr), total=int(config.steps),
+            warmup=int(config.warmup_steps),
+            final=None if config.final_lr is None else float(config.final_lr))
         self.step = 0
 
     def to_torch(self, batch: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
@@ -253,9 +262,12 @@ class ImitationTrainer:
     def update(self, batch: Dict[str, np.ndarray]) -> Dict[str, float]:
         tensors = self.to_torch(batch)
         loss, metrics = self.loss(tensors)
+        # By step count, so a skipped batch still moves the schedule on and
+        # the last step is the one that reaches final_lr.
+        lr = self.schedule.apply(self.optimizer, self.step)
         if metrics.get("skipped"):
             self.step += 1
-            return {"loss": float(loss.detach()), "grad_norm": 0.0,
+            return {"loss": float(loss.detach()), "grad_norm": 0.0, "lr": lr,
                     **{k: float(v) for k, v in metrics.items()}}
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -265,7 +277,7 @@ class ImitationTrainer:
         self.optimizer.step()
         self.step += 1
         return {"loss": float(loss.detach()), "grad_norm": float(clipped),
-                **{k: float(v) for k, v in metrics.items()}}
+                "lr": lr, **{k: float(v) for k, v in metrics.items()}}
 
     def fit(self, sampler, steps: Optional[int] = None,
             on_metrics: Optional[Callable[[Dict[str, float]], None]] = None,
@@ -315,6 +327,15 @@ def imitation_lr(cfg: Dict[str, Any]) -> float:
     """Stage 1B's learning rate: ``pretrain.imitation_lr``, else the default."""
     value = (cfg.get("pretrain") or {}).get("imitation_lr")
     return float(ImitationConfig.lr) if value is None else float(value)
+
+
+def imitation_decay(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Stage 1B's warmup and decay: ``pretrain.imitation_warmup_steps`` and
+    ``imitation_final_lr``, as :class:`ImitationConfig` fields."""
+    pretrain = cfg.get("pretrain") or {}
+    final = pretrain.get("imitation_final_lr")
+    return {"warmup_steps": int(pretrain.get("imitation_warmup_steps") or 0),
+            "final_lr": None if final is None else float(final)}
 
 
 def action_width(cfg: Dict[str, Any], sampler) -> int:
@@ -406,8 +427,7 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
         chunk_size=int(actor.chunk_size),
         flow_steps=int(actor.flow_steps),
         batch_size=int(cfg["data"]["batch_size"]),
-        steps=int(steps), lr=imitation_lr(cfg))
-    print(f"[imitation] lr {imitation.lr:g}", flush=True)
+        steps=int(steps), lr=imitation_lr(cfg), **imitation_decay(cfg))
 
     # Action-only lookahead so the last eligible rows of a window are
     # supervised on a whole chunk instead of a truncated one. Better
@@ -423,6 +443,7 @@ def run(cfg: Dict[str, Any], world_model, sampler, *, steps: int,
     trainer = ImitationTrainer(world_model, actor, sampler, imitation,
                                device=device, normalizer=normalizer,
                                coords=coords)
+    print(f"[imitation] lr {trainer.schedule.describe()}", flush=True)
     last = trainer.fit(sampler, steps=int(steps), on_metrics=on_metrics)
 
     path: Optional[Path] = None

@@ -120,11 +120,24 @@ def load_config(task: str, experiment: str,
 
 def validate(cfg: Mapping[str, Any]) -> None:
     pretrain = cfg.get("pretrain") or {}
-    for key in ("world_lr", "imitation_lr"):
+    for key in ("world_lr", "imitation_lr", "world_final_lr",
+                "imitation_final_lr"):
         value = pretrain.get(key)
         if value is not None and not (math.isfinite(float(value))
                                       and float(value) > 0):
             raise SystemExit(f"pretrain.{key} must be positive when set")
+    for key in ("world_warmup_steps", "imitation_warmup_steps"):
+        if int(pretrain.get(key) or 0) < 0:
+            raise SystemExit(f"pretrain.{key} must be nonnegative")
+    # Where the peak is written down, a final rate above it is refused here;
+    # otherwise the stage's schedule refuses it when the stage starts.
+    for stage in ("world", "imitation"):
+        peak, final = (pretrain.get(f"{stage}_lr"),
+                       pretrain.get(f"{stage}_final_lr"))
+        if peak is not None and final is not None and float(final) > float(peak):
+            raise SystemExit(
+                f"pretrain.{stage}_final_lr={final} is above pretrain."
+                f"{stage}_lr={peak}; the decay ends at the final rate")
 
     online = cfg.get("online") or {}
     removed = sorted(key for key in REMOVED_ONLINE if key in online)
@@ -181,6 +194,10 @@ def validate(cfg: Mapping[str, Any]) -> None:
         if value is not None and not (math.isfinite(float(value))
                                       and float(value) > 0):
             raise SystemExit(f"online.{key} must be positive when set")
+
+    if int((cfg.get("eval") or {}).get("episodes", 0) or 0) < 0:
+        raise SystemExit("eval.episodes must be nonnegative (0 skips the "
+                         "evaluation after Stage 1B)")
 
     actor = cfg.get("actor") or {}
     # One number decides how many actions a generated chunk contributes, in

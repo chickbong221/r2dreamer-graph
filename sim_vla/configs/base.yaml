@@ -63,6 +63,12 @@ pretrain:
   world_lr: null
   # Stage 1B's learning rate. null keeps ImitationConfig's 1e-4.
   imitation_lr: null
+  # Each rate above is a peak: linear warmup over *_warmup_steps, then cosine
+  # decay to *_final_lr at the stage's last step. 0 and null keep it constant.
+  world_warmup_steps: 0
+  world_final_lr: null
+  imitation_warmup_steps: 0
+  imitation_final_lr: null
 
 online:
   # Same unit as the original trainer: replay timesteps / environment step.

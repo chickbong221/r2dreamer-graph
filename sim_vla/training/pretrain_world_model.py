@@ -51,6 +51,7 @@ from ..data.sequences import SequenceSampler
 from ..models.model_config import DEFAULT_MODEL, load_model_config
 from ..models.world_model import build_world_model
 from ..runtime.checkpoint import CheckpointMeta, load, save
+from .lr_schedule import LRSchedule
 
 
 @dataclass
@@ -91,6 +92,16 @@ def world_lr(cfg: Dict[str, Any], model_cfg) -> float:
     """
     value = (cfg.get("pretrain") or {}).get("world_lr")
     return float(model_cfg.lr) if value is None else float(value)
+
+
+def world_schedule(cfg: Dict[str, Any], model_cfg, steps: int) -> LRSchedule:
+    """Stage 1A's rate per step: :func:`world_lr` at its peak, with the warmup
+    and decay ``pretrain.world_warmup_steps`` and ``world_final_lr`` set."""
+    pretrain = cfg.get("pretrain") or {}
+    final = pretrain.get("world_final_lr")
+    return LRSchedule(peak=world_lr(cfg, model_cfg), total=int(steps),
+                      warmup=int(pretrain.get("world_warmup_steps") or 0),
+                      final=None if final is None else float(final))
 
 
 def build_progress_head(cfg: Dict[str, Any], model_cfg, model, *,
@@ -254,7 +265,8 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
     data, sampler, model, model_cfg = build(
         cfg, device=device, model_yaml=model_yaml)
     try:
-        lr = world_lr(cfg, model_cfg)
+        schedule = world_schedule(cfg, model_cfg, steps)
+        lr = schedule.peak
         # Built before the optimizer, because it is in it. Its initialisation
         # forks the random state, so building it first shifts no other draw.
         progress_head = build_progress_head(cfg, model_cfg, model,
@@ -267,7 +279,7 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
         # world model and -- for graph_progress only -- its head.
         optimizer = torch.optim.AdamW(stage_parameters(model, progress_head),
                                       lr=lr)
-        print(f"[world_model] lr {lr:g}", flush=True)
+        print(f"[world_model] lr {schedule.describe()}", flush=True)
         if progress_head is not None:
             print(f"[world_model] progress head trained jointly "
                   f"(loss_scales.progress_model={weight:g}): "
@@ -305,6 +317,7 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
 
         last: Dict[str, float] = {}
         for step in range(int(steps)):
+            current = schedule.apply(optimizer, step)
             batch = to_model_batch(
                 sampler.batch(int(cfg["data"]["batch_size"])), device,
                 normalizer=normalizer, coords=coords)
@@ -316,7 +329,7 @@ def run(cfg: Dict[str, Any], *, steps: int, device: str,
             if log_every and step % int(log_every) == 0:
                 if on_metrics is not None:
                     on_metrics({"step": float(step), "total": float(total),
-                                **last})
+                                "lr": current, **last})
                 shown = sorted((k, v) for k, v in last.items()
                                if not k.startswith("progress_"))[:5]
                 if "progress_model" in last:

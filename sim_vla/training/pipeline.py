@@ -6,7 +6,8 @@
 Stage 1A trains the world model, Stage 1B trains the adapter and action expert
 against *that* model, and Stage 2 continues with both. Nothing is written to
 disk and nothing is reloaded from it: each stage receives the previous stage's
-Python objects.
+Python objects. Without Stage 2 (``--online-steps 0``) the imitation policy is
+evaluated in the simulator for ``eval.episodes`` episodes instead.
 
 **Checkpoints are off by default.** ``--save-checkpoints`` turns them on for a
 run long enough that losing it would matter, and it is the only thing that
@@ -38,6 +39,7 @@ from . import progress as progress_module
 from . import train_imitation
 from . import actor_critic
 from .actor_critic import ActorCriticConfig
+from .lr_schedule import LRSchedule
 from .online import OnlineConfig, run_online
 from .progress import ProgressConfig
 from .wandb_logger import RunLogger, start_run
@@ -136,6 +138,36 @@ def shrink_online_chunk(cfg, actor) -> Dict[str, Any]:
             "shrink_difference": difference}
 
 
+def evaluate_imitation(cfg, stage_a, actor, *, episodes: int,
+                       device: str) -> Dict[str, Any]:
+    """Stage 1B's policy in the simulator, on seeds no demonstration used.
+
+    One CPU env, the backend the demonstrations were collected on, driven by
+    the same :class:`LatentPolicy` Stage 2 collects with.
+    """
+    from ..envs.maniskill import SimVlaEnv
+    from ..evaluation.policy import evaluate_policy
+    from .online import LatentPolicy
+
+    max_steps = int(cfg["eval"]["max_steps"])
+    env = SimVlaEnv(
+        stage_a.data.metadata,
+        graph_enabled=bool(cfg["model"]["graph"]["enabled"]),
+        max_steps=max_steps, seed=int(cfg["data"]["seed"]),
+        record_graphs=bool(cfg["diagnostics"]["record_graphs"])).build()
+    try:
+        policy = LatentPolicy(
+            stage_a.model, actor, device=device,
+            normalizer=stage_a.normalizer, coords=stage_a.coords,
+            instruction=str(cfg["task"].get("instruction") or "") or None,
+            execute=int((cfg.get("actor") or {}).get("execute") or 1))
+        return evaluate_policy(env, policy, episodes=int(episodes),
+                               seed_start=int(cfg["eval"]["seeds_start"]),
+                               max_steps=max_steps)
+    finally:
+        env.close()
+
+
 def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         online_steps: int, device: str, root: Path,
         save_checkpoints: bool = False,
@@ -162,6 +194,16 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
     except Exception:                                      # noqa: BLE001
         metadata = {}
     progress_module.preflight(cfg, metadata)
+    if int(imitation_steps) > 0:
+        # Stage 1B builds its schedule only after Stage 1A has run; a rate it
+        # would refuse is refused now instead.
+        decay = train_imitation.imitation_decay(cfg)
+        try:
+            LRSchedule(peak=train_imitation.imitation_lr(cfg),
+                       total=int(imitation_steps),
+                       warmup=decay["warmup_steps"], final=decay["final_lr"])
+        except ValueError as exc:
+            raise SystemExit(f"Stage 1B learning rate: {exc}") from exc
 
     # One termination convention across the dataset, the replay, the env and
     # the continuation head. SimVlaEnv reports is_terminal=False always, which
@@ -253,6 +295,34 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         # ----------------------------------------------------------- stage 2
         if int(online_steps) <= 0:
             print("[pipeline] stage 2 skipped (--online-steps 0)", flush=True)
+            # Only without Stage 2, which reports its own episodes; its
+            # simulator setup stays exactly as it was. After the checkpoints,
+            # so a failure in the simulator cannot cost the weights.
+            episodes = int((cfg.get("eval") or {}).get("episodes") or 0)
+            if episodes > 0:
+                print(f"[pipeline] imitation eval: {episodes} episodes in "
+                      "the simulator", flush=True)
+                result = evaluate_imitation(cfg, stage_a, stage_b.actor,
+                                            episodes=episodes, device=device)
+                numbers = {key: value for key, value in result.items()
+                           if isinstance(value, (int, float, bool))}
+                print("[pipeline] imitation eval: " + " ".join(
+                    f"{key}={value:g}" for key, value in numbers.items()),
+                    flush=True)
+                report["imitation_eval"] = numbers
+                step = 0 if reuse_imitation is not None else int(imitation_steps)
+                logger.log({"step": float(step)} | {
+                    f"eval_{key}": value for key, value in numbers.items()},
+                    stage="imitation")
+                logger.summary({f"imitation_eval_{key}": value
+                                for key, value in numbers.items()})
+                if save_checkpoints:
+                    root.mkdir(parents=True, exist_ok=True)
+                    written = root / "imitation_eval.json"
+                    written.write_text(json.dumps(result, indent=2,
+                                                  default=str),
+                                       encoding="utf-8")
+                    print(f"[pipeline] wrote {written}", flush=True)
             return report
 
         # Before the env is built, so a refusal costs seconds.
@@ -436,11 +506,30 @@ def parse_args(argv=None):
                         help="0 stops after the world model")
     parser.add_argument("--online-steps", type=int, default=0,
                         help="environment steps; 0 stops after imitation")
+    parser.add_argument("--eval-episodes", type=int, default=None,
+                        help="simulator episodes the imitation policy is "
+                             "evaluated on after Stage 1B, when there is no "
+                             "Stage 2; unset keeps eval.episodes (20), 0 "
+                             "skips it")
     parser.add_argument("--world-lr", type=float, default=None,
                         help="Stage 1A learning rate; unset keeps the model "
                              "preset's (4e-5)")
     parser.add_argument("--imitation-lr", type=float, default=None,
                         help="Stage 1B learning rate; unset keeps 1e-4")
+    parser.add_argument("--world-warmup-steps", type=int, default=None,
+                        help="Stage 1A steps of linear warmup up to "
+                             "--world-lr; unset keeps 0")
+    parser.add_argument("--world-final-lr", type=float, default=None,
+                        help="Stage 1A rate at its last step, reached by "
+                             "cosine decay from --world-lr; unset keeps the "
+                             "rate constant")
+    parser.add_argument("--imitation-warmup-steps", type=int, default=None,
+                        help="Stage 1B steps of linear warmup up to "
+                             "--imitation-lr; unset keeps 0")
+    parser.add_argument("--imitation-final-lr", type=float, default=None,
+                        help="Stage 1B rate at its last step, reached by "
+                             "cosine decay from --imitation-lr; unset keeps "
+                             "the rate constant")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--model-config", default=str(DEFAULT_MODEL))
     parser.add_argument("--batch-size", type=int, default=None)
@@ -560,11 +649,18 @@ def main(argv=None) -> int:
         if value is not None:
             online_overrides[key] = value
     pretrain_overrides = {key: value for key, value in (
-        ("world_lr", args.world_lr), ("imitation_lr", args.imitation_lr))
+        ("world_lr", args.world_lr), ("imitation_lr", args.imitation_lr),
+        ("world_warmup_steps", args.world_warmup_steps),
+        ("world_final_lr", args.world_final_lr),
+        ("imitation_warmup_steps", args.imitation_warmup_steps),
+        ("imitation_final_lr", args.imitation_final_lr))
         if value is not None}
+    eval_overrides = ({} if args.eval_episodes is None
+                      else {"episodes": args.eval_episodes})
     cfg = load_config(args.task, args.experiment,
                       overrides={"data": overrides, "online": online_overrides,
-                                 "pretrain": pretrain_overrides})
+                                 "pretrain": pretrain_overrides,
+                                 "eval": eval_overrides})
     model_yaml = Path(args.model_config)
     if not model_yaml.is_file():
         raise SystemExit(f"model config does not exist: {model_yaml}")

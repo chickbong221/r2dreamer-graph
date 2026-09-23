@@ -303,6 +303,22 @@ and `--online-precision float32` disables autocast. Startup logs and the run
 summary record the resolved online settings, including the objective and the
 executed chunk length.
 
+Without Stage 2 (`--online-steps 0`), the pipeline evaluates the imitation
+policy after Stage 1B for `eval.episodes` (20; `--eval-episodes`, 0 skips) in
+one CPU env on seeds from `eval.seeds_start`, and logs `imitation/eval_*` and
+`imitation_eval_*`: `success_rate` counts success at any step,
+`success_at_end_rate` success still held at the last one. With
+`--save-checkpoints` the per-episode results go to `imitation_eval.json` beside
+`world_model.pt` and `imitation.pt`, which are written before the evaluation
+starts. `runs/sim_vla/imitation/` holds the imitation-only launch scripts and
+the collection script for their datasets.
+
+`--world-lr` and `--imitation-lr` are peaks when a schedule is set:
+`--world-warmup-steps` / `--imitation-warmup-steps` ramp up to them linearly,
+and `--world-final-lr` / `--imitation-final-lr` are reached by cosine decay at
+each stage's last step. Unset, the rate stays constant, as before. The rate
+each step ran at is logged as `world/lr` and `imitation/lr`.
+
 `runs/sim_vla/server1/*_online.sh` restore their own `world_model.pt` and
 `imitation.pt` and start a fresh online phase. They do not restore an
 interrupted online replay, critic, optimizer or step counter, and
