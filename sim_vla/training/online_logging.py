@@ -8,7 +8,7 @@ import time
 PHASES = {
     "replay": 1, "world_forward": 2, "world_backward": 3,
     "posterior": 4, "progress_head": 5, "imagine": 6,
-    "actor_backward": 7, "critic_backward": 8, "optimizer": 9,
+    "actor_backward": 7, "critic_backward": 8, "optimizer": 9, "anchor": 10,
 }
 
 

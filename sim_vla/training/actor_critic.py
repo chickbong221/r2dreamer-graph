@@ -19,8 +19,9 @@ the slow critic at its end.
 
 **Actor.** Maximise ``mean(G)``, pathwise: the gradient runs back through the
 bootstrap value, the reward and continuation heads, every imagined transition
-and every flow integration step, into the adapter and the action expert. There
-is no online imitation term; Stage 1B is where the policy imitates.
+and every flow integration step, into the adapter and the action expert. With
+``demo_anchor`` set, Stage 1B's flow-matching loss on fresh demonstration rows
+is weighted into the same gradient before the one actor step.
 
 **Critic.** Regress ``V(s_0)`` onto the detached ``G``, with the critic's own
 distributional loss. The start state is the only training point: the states
@@ -132,6 +133,17 @@ class ActorCriticConfig:
     # time synchronizes at every phase boundary, so this is for a profiling
     # run, not for training.
     profile: bool = False
+    # Flow-matching imitation on demonstrations, weighted into the actor's
+    # gradient after warm-up. Zero disables it; nonzero needs a demonstration
+    # sampler. Windows are encoded by the world model (the expensive half);
+    # rows are the eligible positions kept from them, conditioned in groups.
+    demo_anchor: float = 0.0
+    anchor_windows: int = 8
+    anchor_rows: int = 64
+    anchor_microbatch: int = 16
+    # Actor steps between separate RL and anchor gradient measurements; 0
+    # never measures. Without it a dominating anchor looks like a balanced one.
+    grad_report_every: int = 50
 
     def __post_init__(self):
         if int(self.execute) < 1:
@@ -142,6 +154,10 @@ class ActorCriticConfig:
             raise ValueError("imagination_microbatch must be nonnegative")
         if int(self.critic_warmup) < 0:
             raise ValueError("critic_warmup must be nonnegative")
+        if not float(self.demo_anchor) >= 0:
+            raise ValueError(f"demo_anchor={self.demo_anchor} must be >= 0")
+        if int(self.anchor_windows) < 1 or int(self.anchor_rows) < 1:
+            raise ValueError("anchor_windows and anchor_rows must be >= 1")
 
 
 def executed_chunk_objective(world_model, actor, critic, start,
@@ -210,7 +226,8 @@ class ActorCriticTrainer:
     """One optimizer for the policy, one for the critic, one warm-up."""
 
     def __init__(self, world_model, actor, critic, config: ActorCriticConfig,
-                 *, coords=None, progress_head=None, device=None):
+                 *, coords=None, progress_head=None, device=None,
+                 demo_sampler=None, to_model_batch=None):
         self.world_model = world_model
         self.actor = actor
         self.critic = critic
@@ -224,6 +241,16 @@ class ActorCriticTrainer:
             raise ValueError(
                 f"execute={config.execute} but the actor generates {chunk} "
                 "actions per chunk; executing more would invent commands")
+        # Checked here rather than at the first actor step, which comes after
+        # the whole critic warm-up: a weight that is never applied is worse
+        # than an absent one.
+        self.demo_sampler = demo_sampler
+        self.to_model_batch = to_model_batch
+        if float(config.demo_anchor) and (demo_sampler is None
+                                          or to_model_batch is None):
+            raise ValueError(
+                f"demo_anchor={config.demo_anchor} needs a demonstration "
+                "sampler and a batch converter; pass both or set it to 0")
         self.actor_opt = torch.optim.AdamW(
             [p for p in actor.parameters() if p.requires_grad],
             lr=config.actor_lr)
@@ -313,6 +340,14 @@ class ActorCriticTrainer:
         if shaped:
             metrics["shaping_reward"] = float(shaping_total)
             metrics["progress_beta"] = float(self.config.progress_beta)
+        if not warming and float(self.config.demo_anchor):
+            # Summed into the same .grad as the RL term, clipped with it and
+            # consumed by the one actor step below.
+            if on_progress is not None:
+                on_progress("anchor")
+            with phases("anchor"):
+                metrics |= self._anchored_backward(trainable, device,
+                                                   instruction)
         if on_progress is not None:
             on_progress("optimizer")
         with phases("step"):
@@ -347,3 +382,108 @@ class ActorCriticTrainer:
         metrics["actor_steps"] = float(self.actor_steps)
         metrics |= phases.metrics()
         return metrics
+
+    @staticmethod
+    def _gradient_norm(params) -> float:
+        with torch.no_grad():
+            populated = [p.grad for p in params if p.grad is not None]
+            if not populated:
+                return 0.0
+            return float(torch.sqrt(
+                sum((g.detach().float() ** 2).sum() for g in populated)))
+
+    def _anchored_backward(self, trainable, device, instruction=None
+                           ) -> Dict[str, float]:
+        """Add the weighted anchor gradient, every so often measuring it alone.
+
+        The anchor has to be *measured* apart from the RL term: subtracting
+        the RL gradient from the sum reads an anchor rounded away in float32
+        as an anchor of zero. So on a reporting step the RL gradient is set
+        aside, the anchor is accumulated into an empty ``.grad`` and measured,
+        and the RL gradient is added back -- the same sum, in another order.
+        ``retained_anchor_grad_norm`` is how much of the anchor survived being
+        added to the RL term.
+        """
+        every = int(self.config.grad_report_every)
+        if not (every > 0 and self.actor_steps % every == 0):
+            return self._anchor_backward(device, instruction)
+
+        rl_norm = self._gradient_norm(trainable)
+        with torch.no_grad():
+            stashed = [(p, None if p.grad is None else p.grad.detach().clone())
+                       for p in trainable]
+            for parameter, _previous in stashed:
+                parameter.grad = None
+        metrics = self._anchor_backward(device, instruction)
+        with torch.no_grad():
+            anchor_norm = self._gradient_norm(trainable)
+            retained = 0.0
+            for parameter, previous in stashed:
+                if previous is None:
+                    continue
+                if parameter.grad is None:
+                    parameter.grad = previous
+                    continue
+                combined = parameter.grad.detach() + previous
+                retained += float(((combined - previous).float() ** 2).sum())
+                parameter.grad = combined
+            del stashed
+        return metrics | {
+            "rl_grad_norm": rl_norm,
+            "anchor_grad_norm": anchor_norm,
+            "retained_anchor_grad_norm": float(retained ** 0.5),
+            "anchor_grad_ratio": (anchor_norm / rl_norm if rl_norm > 0
+                                  else float("inf"))}
+
+    def _anchor_backward(self, device, instruction=None) -> Dict[str, float]:
+        """Stage 1B's flow-matching loss on fresh demonstration rows.
+
+        Windows are drawn with a chunk of action lookahead, as Stage 1B draws
+        them, and the sampler's own lookahead is restored afterwards: the
+        world model's mixed batches are drawn without one.
+        """
+        from ..models.flow_sampler import flow_matching_loss
+        from .train_imitation import prepare_imitation_rows
+
+        chunk = int(self.actor.chunk_size)
+        previous = getattr(self.demo_sampler, "lookahead", None)
+        if previous is not None:
+            self.demo_sampler.lookahead = chunk
+        try:
+            windows = self.demo_sampler.batch(int(self.config.anchor_windows))
+        finally:
+            if previous is not None:
+                self.demo_sampler.lookahead = previous
+        rows = prepare_imitation_rows(
+            self.world_model, self.to_model_batch(windows), chunk,
+            max_rows=int(self.config.anchor_rows))
+        if rows is None:
+            raise RuntimeError(
+                f"demo_anchor={self.config.demo_anchor} but none of "
+                f"{self.config.anchor_windows} demonstration windows held an "
+                "eligible row; dropping the anchor silently would change the "
+                "objective")
+        feat, targets, mask = rows
+        # One denominator and one noise/time draw for the whole selection, made
+        # before it is cut into groups, so the loss does not depend on the cut.
+        valid = float(mask.sum()) * float(targets.shape[-1])
+        noise = torch.randn_like(targets)
+        times = torch.rand((targets.shape[0],), device=targets.device,
+                           dtype=targets.dtype)
+        weight = float(self.config.demo_anchor)
+        group = int(self.config.anchor_microbatch) or int(feat.shape[0])
+        total = torch.zeros((), device=device, dtype=torch.float32)
+        for offset in range(0, int(feat.shape[0]), group):
+            stop = offset + group
+            with autocast(device, self.config.precision):
+                cond = self.actor.condition(feat[offset:stop], instruction)
+                loss, _ = flow_matching_loss(
+                    self.actor.velocity_fn(), targets[offset:stop], cond,
+                    mask=mask[offset:stop], denominator=valid,
+                    noise=noise[offset:stop], times=times[offset:stop])
+            (weight * loss).backward()
+            total += loss.detach().float().to(total.device)
+            del loss, cond
+        return {"anchor_loss": float(total),
+                "anchor_rows": float(feat.shape[0]),
+                "demo_anchor": weight}

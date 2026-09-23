@@ -89,13 +89,33 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         profile=bool(online_settings.get("profile", False)),
         # Starts at zero and is set per update from the warm-up; the
         # configured beta is the value it warms up *to*.
-        progress_beta=0.0)
+        progress_beta=0.0,
+        demo_anchor=float(online_settings.get("demo_anchor", 0.0) or 0.0),
+        anchor_windows=int(online_settings.get("anchor_windows", 8)),
+        anchor_rows=int(online_settings.get("anchor_rows", 64)),
+        anchor_microbatch=int(online_settings.get("anchor_microbatch", 16)),
+        grad_report_every=int(online_settings.get("grad_report_every", 50)))
     for key in ("actor_lr", "critic_lr"):
         if online_settings.get(key) is not None:
             ac_kwargs[key] = float(online_settings[key])
     ac_cfg = ActorCriticConfig(**ac_kwargs)
 
     return online_cfg, ac_cfg
+
+
+def shaping_warmup(cfg, online_steps: int) -> tuple:
+    """Env steps where progress shaping starts, and where it reaches beta.
+
+    ``online.progress_warmup_*`` when set, else scaled to the run's budget.
+    The repository's absolute defaults (400k -> 700k) never turn shaping on
+    inside a shorter run, which would make the arm identical to plain `graph`
+    while being reported as a different method.
+    """
+    online = cfg.get("online") or {}
+    if online.get("progress_warmup_start") is not None:
+        return (int(online["progress_warmup_start"]),
+                int(online["progress_warmup_end"]))
+    return progress_module.warmup_for(int(online_steps))
 
 
 def shrink_online_chunk(cfg, actor) -> Dict[str, Any]:
@@ -252,11 +272,7 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         critic = ValueCritic(stage_a.model_cfg,
                              int(stage_a.model.feature_dim)).to(device)
         enabled = bool(cfg["model"]["progress"]["enabled"])
-        # The warm-up is scaled to this run's budget. The repository's absolute
-        # defaults (400k -> 700k env steps) never turn shaping on inside a
-        # shorter run, which would make the arm identical to plain `graph`
-        # while being reported as a different method.
-        warmup_start, warmup_end = progress_module.warmup_for(int(online_steps))
+        warmup_start, warmup_end = shaping_warmup(cfg, int(online_steps))
         progress_cfg = ProgressConfig(
             enabled=enabled,
             beta=float(cfg["model"]["progress"]["beta"]),
@@ -329,6 +345,11 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             "critic_lr": ac_cfg.critic_lr,
             "world_lr": online_cfg.world_lr,
             "progress_lr": online_cfg.progress_lr,
+            "demo_anchor": ac_cfg.demo_anchor,
+            "anchor_windows": ac_cfg.anchor_windows,
+            "anchor_rows": ac_cfg.anchor_rows,
+            "anchor_microbatch": ac_cfg.anchor_microbatch,
+            "grad_report_every": ac_cfg.grad_report_every,
             "critic_warmup": ac_cfg.critic_warmup,
             "seed": int(cfg["data"]["seed"]),
             "profile": ac_cfg.profile,
@@ -375,14 +396,9 @@ REMOVED_FLAGS = {
     "--imag-horizon":
         "a rollout is exactly actor.execute transitions of one generated "
         "chunk. Set actor.execute in the config.",
-    "--demo-anchor": "online imitation was removed; Stage 1B imitates.",
-    "--anchor-rows": "online imitation was removed.",
-    "--anchor-microbatch": "online imitation was removed.",
-    "--anchor-windows": "online imitation was removed.",
-    "--anchor-window-microbatch": "online imitation was removed.",
-    "--grad-report-every":
-        "it measured the RL gradient against the imitation anchor's, and "
-        "there is no anchor.",
+    "--anchor-window-microbatch":
+        "the anchor's windows are encoded together; --anchor-windows bounds "
+        "them.",
     "--eval-sampler":
         "there is one sampler, so the evaluation already runs the policy "
         "being trained.",
@@ -460,6 +476,27 @@ def parse_args(argv=None):
     parser.add_argument("--progress-lr", type=float, default=None,
                         help="Stage 2 progress-head learning rate "
                              "(graph_progress arm); unset keeps 3e-4")
+    parser.add_argument("--demo-anchor", type=float, default=None,
+                        help="weight of Stage 1B's flow-matching loss on "
+                             "demonstrations in the Stage 2 actor update; "
+                             "0 disables it")
+    parser.add_argument("--anchor-windows", type=int, default=None,
+                        help="demonstration windows encoded per anchored "
+                             "update")
+    parser.add_argument("--anchor-rows", type=int, default=None,
+                        help="demonstration rows kept per anchored update")
+    parser.add_argument("--anchor-microbatch", type=int, default=None,
+                        help="anchor rows conditioned at once; 0 is all")
+    parser.add_argument("--grad-report-every", type=int, default=None,
+                        help="actor steps between separate RL/anchor "
+                             "gradient measurements; 0 never")
+    parser.add_argument("--progress-warmup-start", type=int, default=None,
+                        help="env step where progress shaping starts ramping "
+                             "up; with --progress-warmup-end, replaces the "
+                             "20%%/60%% of --online-steps default")
+    parser.add_argument("--progress-warmup-end", type=int, default=None,
+                        help="env step where progress shaping reaches its "
+                             "full beta")
     parser.add_argument("--num-envs", type=int, default=None,
                         help="parallel online envs, stepped in lockstep with "
                              "updates between steps; more than 1 runs "
@@ -505,6 +542,13 @@ def main(argv=None) -> int:
                        ("world_lr", args.online_world_lr),
                        ("critic_lr", args.critic_lr),
                        ("progress_lr", args.progress_lr),
+                       ("demo_anchor", args.demo_anchor),
+                       ("anchor_windows", args.anchor_windows),
+                       ("anchor_rows", args.anchor_rows),
+                       ("anchor_microbatch", args.anchor_microbatch),
+                       ("grad_report_every", args.grad_report_every),
+                       ("progress_warmup_start", args.progress_warmup_start),
+                       ("progress_warmup_end", args.progress_warmup_end),
                        ("num_envs", args.num_envs),
                        ("reconfiguration_freq", args.reconfiguration_freq)):
         if value is not None:

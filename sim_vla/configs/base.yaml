@@ -91,6 +91,20 @@ online:
   critic_lr: null
   # The graph_progress arm's head. null keeps progress.PROGRESS_LR, 3e-4.
   progress_lr: null
+  # Stage 1B's flow-matching loss on demonstrations, weighted into the actor's
+  # gradient after the critic warm-up; 0 disables it. anchor_windows are
+  # encoded by the world model, anchor_rows of their positions are kept and
+  # conditioned anchor_microbatch at a time. grad_report_every logs the RL and
+  # anchor gradient norms apart (anchor_grad_ratio); 0 never.
+  demo_anchor: 0.0
+  anchor_windows: 8
+  anchor_rows: 64
+  anchor_microbatch: 16
+  grad_report_every: 50
+  # Progress shaping's ramp in env steps (graph_progress arm). null scales it
+  # to 20% -> 60% of --online-steps; set both or neither.
+  progress_warmup_start: null
+  progress_warmup_end: null
   # Actions generated per chunk from Stage 2 on; Stage 1B still imitates at
   # actor.chunk_size. Only actor.execute of a chunk is ever run, and SmolVLA's
   # action tokens attend causally, so the first actions of a shorter chunk are

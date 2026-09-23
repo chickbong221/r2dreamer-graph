@@ -638,7 +638,11 @@ class TestOnlineSettings(unittest.TestCase):
                          {"reconfiguration_freq": -1}, {"critic_warmup": -1},
                          {"actor_lr": 0}, {"world_lr": 0},
                          {"world_lr": float("nan")}, {"critic_lr": 0},
-                         {"progress_lr": -1e-4},
+                         {"progress_lr": -1e-4}, {"demo_anchor": -0.5},
+                         {"anchor_rows": 0}, {"anchor_windows": 0},
+                         {"progress_warmup_start": 30000},
+                         {"progress_warmup_start": 100,
+                          "progress_warmup_end": 100},
                          {"num_envs": 4, "train_ratio": 0}):
             with self.subTest(settings=settings), self.assertRaises(SystemExit):
                 load_config("peginsertion", "dreamer", {"online": settings})
@@ -667,6 +671,41 @@ class TestOnlineSettings(unittest.TestCase):
                          "actor": {"chunk_size": 10, "execute": 5}})
         # null is "keep what Stage 1B imitated at".
         load_config("peginsertion", "dreamer", {"online": {"chunk_size": None}})
+
+
+class TestAnchorAndShapingSettings(unittest.TestCase):
+    def test_flags_reach_the_trainer_config_and_the_shaping_schedule(self):
+        require_torch()
+        from unittest.mock import patch
+
+        from sim_vla.config import load_config
+        from sim_vla.models.model_config import load_model_config
+        from sim_vla.training import pipeline
+        from sim_vla.training.wandb_logger import RunLogger
+
+        with patch.object(pipeline, "run", return_value={}) as run, \
+                patch.object(pipeline, "start_run", return_value=RunLogger()):
+            pipeline.main([
+                "--task", "placesphere", "--experiment", "graph_progress",
+                "--device", "cpu", "--demo-anchor", "0.5",
+                "--anchor-rows", "32", "--progress-warmup-start", "30000",
+                "--progress-warmup-end", "100000"])
+        cfg = run.call_args.args[0]
+        model = load_model_config(cfg)
+        _online, ac = pipeline.online_configs(cfg, model, total_steps=500_000,
+                                              flow_steps=5)
+        self.assertEqual(ac.demo_anchor, 0.5)
+        self.assertEqual(ac.anchor_rows, 32)
+        self.assertEqual(pipeline.shaping_warmup(cfg, 500_000),
+                         (30_000, 100_000))
+
+        default = load_config("placesphere", "graph_progress")
+        _online, ac = pipeline.online_configs(default, model,
+                                              total_steps=500_000,
+                                              flow_steps=5)
+        self.assertEqual(ac.demo_anchor, 0.0)
+        self.assertEqual(pipeline.shaping_warmup(default, 500_000),
+                         (100_000, 300_000))
 
 
 class TestOnlineChunk(unittest.TestCase):

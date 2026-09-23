@@ -544,6 +544,109 @@ class TestImitationLearningRate(unittest.TestCase):
         self.assertEqual(stage.trainer.optimizer.param_groups[0]["lr"], 1e-4)
 
 
+class TestImitationAnchor(unittest.TestCase):
+    """Stage 1B's loss on demonstrations, weighted into the Stage 2 actor step."""
+
+    def build(self, demo_anchor, **overrides):
+        torch = require_torch()
+        from sim_vla.data.batch import to_model_batch
+        from sim_vla.data.replay import OnlineReplay
+        from sim_vla.models.critics import ValueCritic
+        from sim_vla.training.actor_critic import (ActorCriticConfig,
+                                                   ActorCriticTrainer)
+        from sim_vla.training.imagination import start_states
+
+        torch.manual_seed(0)
+        model, model_cfg = build_model()
+        actor = tiny_actor(model.feature_dim)
+        critic = ValueCritic(model_cfg, model.feature_dim)
+        demo = DemoStub(fill_replay(OnlineReplay(seed=0)), 4, 1)
+        coords = coordinates()
+
+        def convert(batch):
+            return to_model_batch(batch, "cpu", coords=coords)
+
+        settings = dict(execute=2, flow_steps=2, critic_warmup=0,
+                        demo_anchor=demo_anchor, anchor_windows=2,
+                        anchor_rows=5, anchor_microbatch=2,
+                        grad_report_every=1)
+        settings |= overrides
+        trainer = ActorCriticTrainer(
+            model, actor, critic, ActorCriticConfig(**settings),
+            coords=coords, demo_sampler=demo, to_model_batch=convert)
+        start = start_states(model, convert(demo.batch(2)))
+        return trainer, start, demo
+
+    def spy(self, demo):
+        seen = []
+        original = demo.batch
+
+        def batch(size):
+            seen.append(demo.lookahead)
+            return original(size)
+
+        demo.batch = batch
+        return seen
+
+    def test_the_anchor_moves_the_actor_and_is_measured_apart(self):
+        torch = require_torch()
+        plain, start, _ = self.build(0.0)
+        plain.update(start)
+        anchored, start, _ = self.build(1.0)
+        metrics = anchored.update(start)
+
+        self.assertGreater(metrics["anchor_loss"], 0.0)
+        self.assertEqual(metrics["anchor_rows"], 5.0)
+        self.assertGreater(metrics["anchor_grad_norm"], 0.0)
+        self.assertIn("rl_grad_norm", metrics)
+        self.assertIn("anchor_grad_ratio", metrics)
+        self.assertTrue(any(
+            not torch.equal(a, b) for a, b in zip(
+                plain.actor.parameters(), anchored.actor.parameters())),
+            "the anchor did not change the actor step")
+
+    def test_measuring_apart_leaves_the_summed_gradient_unchanged(self):
+        torch = require_torch()
+        measured, start, _ = self.build(1.0, grad_report_every=1)
+        measured.update(start)
+        silent, start, _ = self.build(1.0, grad_report_every=0)
+        metrics = silent.update(start)
+        self.assertNotIn("anchor_grad_ratio", metrics)
+        for a, b in zip(measured.actor.parameters(),
+                        silent.actor.parameters()):
+            torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-7)
+
+    def test_windows_carry_a_chunk_of_lookahead_and_the_sampler_is_restored(self):
+        require_torch()
+        trainer, start, demo = self.build(1.0)
+        seen = self.spy(demo)
+        trainer.update(start)
+        self.assertEqual(seen, [trainer.actor.chunk_size])
+        self.assertEqual(demo.lookahead, 0)
+
+    def test_no_anchor_during_the_critic_warmup(self):
+        require_torch()
+        trainer, start, demo = self.build(1.0, critic_warmup=5)
+        seen = self.spy(demo)
+        metrics = trainer.update(start)
+        self.assertEqual(seen, [])
+        self.assertNotIn("anchor_loss", metrics)
+
+    def test_a_weight_without_demonstrations_is_refused(self):
+        require_torch()
+        from sim_vla.training.actor_critic import (ActorCriticConfig,
+                                                   ActorCriticTrainer)
+
+        model, model_cfg = build_model()
+        from sim_vla.models.critics import ValueCritic
+
+        with self.assertRaises(ValueError):
+            ActorCriticTrainer(
+                model, tiny_actor(model.feature_dim),
+                ValueCritic(model_cfg, model.feature_dim),
+                ActorCriticConfig(execute=2, demo_anchor=0.5))
+
+
 class TestParallelLoop(unittest.TestCase):
     """Lockstep envs, updates between vector steps, whole episodes to replay."""
 

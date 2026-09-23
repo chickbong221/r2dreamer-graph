@@ -118,11 +118,12 @@ def encode_windows(world_model, batch: Dict[str, torch.Tensor]
 
 
 def prepare_imitation_rows(world_model, batch: Dict[str, torch.Tensor],
-                           chunk_size: int
+                           chunk_size: int, *, max_rows: int = 0
                            ) -> Optional[Tuple[torch.Tensor, ...]]:
     """Eligible ``(feature, action chunk, chunk mask)`` rows from one window.
 
-    Stage 1B's supervision, in one place: the chunk comes from
+    Stage 1B's supervision, in one place -- the Stage 2 demonstration anchor
+    calls this too, so both supervise the same thing: the chunk comes from
     ``action_target``, not from ``action``, which is the previous action the
     posterior already consumed, and a row is eligible only if it is scored and
     has a target of its own.
@@ -130,8 +131,10 @@ def prepare_imitation_rows(world_model, batch: Dict[str, torch.Tensor],
     Features are posterior and detached: the world model is never trained by
     the actor's objective.
 
-    Returns ``None`` when no window has an eligible row at all, which the
-    caller must handle rather than average over an empty selection.
+    ``max_rows`` caps the eligible rows, sampled without replacement; Stage 1B
+    passes zero and keeps them all. Returns ``None`` when no window has an
+    eligible row at all, which the caller must handle rather than average over
+    an empty selection.
     """
     if TARGET_KEY not in batch:
         raise KeyError(
@@ -153,6 +156,9 @@ def prepare_imitation_rows(world_model, batch: Dict[str, torch.Tensor],
     keep = torch.nonzero(flat_eligible, as_tuple=False).squeeze(-1)
     if keep.numel() == 0:
         return None
+    if max_rows and keep.numel() > int(max_rows):
+        keep = keep[torch.randperm(keep.numel(), device=keep.device)
+                    [: int(max_rows)]]
 
     # Selected before conditioning: the flow forward is the expensive part
     # and there is no reason to run it on rows that are masked out.

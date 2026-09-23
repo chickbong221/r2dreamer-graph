@@ -46,16 +46,10 @@ REMOVED_ONLINE = {
     "imag_horizon":
         "an imagined rollout is exactly actor.execute transitions of one "
         "generated chunk",
-    "demo_anchor":
-        "online imitation was removed; Stage 1B is where the policy imitates",
-    "anchor_windows": "online imitation was removed",
-    "anchor_window_microbatch": "online imitation was removed",
-    "anchor_rows": "online imitation was removed",
-    "anchor_microbatch": "online imitation was removed",
-    "anchor_retries": "online imitation was removed",
-    "grad_report_every":
-        "it measured the RL gradient against the imitation anchor's, and "
-        "there is no anchor",
+    "anchor_window_microbatch":
+        "the anchor's windows are encoded together; anchor_windows bounds them",
+    "anchor_retries":
+        "a draw with no eligible anchor row fails the update instead",
     "advantage_scale":
         "the pathwise objective maximises the return itself; no advantage is "
         "formed or normalized",
@@ -164,6 +158,24 @@ def validate(cfg: Mapping[str, Any]) -> None:
 
     if int(online.get("critic_warmup", 0)) < 0:
         raise SystemExit("online.critic_warmup must be nonnegative")
+    anchor = online.get("demo_anchor", 0.0)
+    if not (math.isfinite(float(anchor or 0.0)) and float(anchor or 0.0) >= 0):
+        raise SystemExit("online.demo_anchor must be finite and >= 0")
+    for key in ("anchor_windows", "anchor_rows"):
+        if int(online.get(key, 1)) < 1:
+            raise SystemExit(f"online.{key} must be at least 1")
+    for key in ("anchor_microbatch", "grad_report_every"):
+        if int(online.get(key, 0)) < 0:
+            raise SystemExit(f"online.{key} must be nonnegative")
+    start = online.get("progress_warmup_start")
+    end = online.get("progress_warmup_end")
+    if (start is None) != (end is None):
+        raise SystemExit("online.progress_warmup_start and "
+                         "online.progress_warmup_end are set together or not "
+                         "at all")
+    if start is not None and not 0 <= int(start) < int(end):
+        raise SystemExit(f"online.progress_warmup_start={start} must be >= 0 "
+                         f"and below online.progress_warmup_end={end}")
     for key in ("actor_lr", "world_lr", "critic_lr", "progress_lr"):
         value = online.get(key)
         if value is not None and not (math.isfinite(float(value))

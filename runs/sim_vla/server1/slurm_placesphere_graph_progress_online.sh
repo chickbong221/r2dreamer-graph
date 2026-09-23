@@ -77,15 +77,20 @@ SEED="${SEED:-0}"
 ONLINE_STEPS="${ONLINE_STEPS:-500000}"
 
 # Keep in sync with slurm_placesphere_baseline_online.sh.
-ONLINE_WORLD_LR=1e-4
+ONLINE_WORLD_LR=6e-5
 # Stage 2 rates (1.5x r2dreamer's 4e-5); PROGRESS_LR is graph_progress only.
 ACTOR_LR="${ACTOR_LR:-6e-5}"
 CRITIC_LR=6e-5
 PROGRESS_LR=6e-5
-# 896 imagination starts per update, in 2 groups (80 GB GPU); lower if OOM.
-IMAGINATION_MICROBATCH=448
+# 0 imagines all 896 starts per update at once (80 GB GPU); 448 if OOM.
+IMAGINATION_MICROBATCH=0
 CRITIC_WARMUP=150
 NUM_ENVS=64
+# Stage 1B's imitation loss weighted into the actor update after warm-up.
+DEMO_ANCHOR=0.5
+# Progress shaping ramps 0 -> beta over these env steps (graph_progress only).
+PROGRESS_WARMUP_START=30000
+PROGRESS_WARMUP_END=100000
 
 # Read only: the earlier --save-checkpoints run's --out directory.
 RESUME_FROM=/home/tuannl/logdir/r2dreamer-graph/sim_vla/20260922_185807/placesphere/graph_progress
@@ -117,6 +122,9 @@ python -m sim_vla.training.pipeline \
   --imagination-microbatch $IMAGINATION_MICROBATCH \
   --critic-warmup $CRITIC_WARMUP \
   --num-envs $NUM_ENVS \
+  --demo-anchor $DEMO_ANCHOR \
+  --progress-warmup-start $PROGRESS_WARMUP_START \
+  --progress-warmup-end $PROGRESS_WARMUP_END \
   --device cuda \
   --save-checkpoints \
   --out "$OUT_DIR"

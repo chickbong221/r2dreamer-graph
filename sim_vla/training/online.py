@@ -367,13 +367,14 @@ class OnlineTrainer:
         self.progress_opt = (
             torch.optim.AdamW(progress_head.parameters(), lr=progress_lr)
             if progress_head is not None else None)
-        # The demonstration sampler stays with this trainer: it feeds the
-        # world model's mixed batches. The actor update never sees it -- there
-        # is no online imitation term.
+        # The demonstration sampler feeds the world model's mixed batches, and
+        # the actor update's imitation anchor when ac_config.demo_anchor is set.
         self.ac = ActorCriticTrainer(world_model, actor, critic, ac_config,
                                      coords=coords,
                                      progress_head=progress_head,
-                                     device=self.device)
+                                     device=self.device,
+                                     demo_sampler=demo_sampler,
+                                     to_model_batch=self.to_torch)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.meta = meta
         self.env_steps = 0
@@ -511,6 +512,8 @@ class OnlineTrainer:
             "world_lr": float(self.world_opt.param_groups[0]["lr"]),
             "progress_lr": (float(self.progress_opt.param_groups[0]["lr"])
                             if self.progress_opt is not None else None),
+            "demo_anchor": float(ac.demo_anchor),
+            "anchor_rows": int(ac.anchor_rows),
             "precision": str(ac.precision),
             "train_ratio": float(self.config.train_ratio),
             # Counters, so a later run can say how far this one got and a log
@@ -551,10 +554,10 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
     unit of experience when train_ratio is zero. Otherwise the schedule uses
     replay timesteps per environment step, matching the original Dreamer.
     """
-    # No lookahead online, for either source. It exists to supervise whole
-    # demonstrated action chunks, which is Stage 1B's job; Stage 2 trains the
-    # world model on these windows and imagines its own actions. Both sources
-    # are set here because a mixed batch needs one target-axis length.
+    # No lookahead in the world model's mixed batches, for either source: it
+    # exists to supervise whole demonstrated chunks, and the imitation anchor
+    # sets it for its own draws only. Both sources are set here because a
+    # mixed batch needs one target-axis length.
     config.lookahead = 0
     if hasattr(demo_sampler, "lookahead"):
         demo_sampler.lookahead = 0

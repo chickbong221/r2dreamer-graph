@@ -313,10 +313,15 @@ different execution policy would not be a continuation of this experiment.
 
 `actor_objective`, `flow_noise_std`, `flow_noise_schedule`,
 `actor_transition_microbatch`, `imagination_batch`, `imag_horizon`,
-`demo_anchor`, the `anchor_*` budgets, `grad_report_every`, `advantage_scale`
-and `eval_sampler` went with the score-function objective and the online
+`advantage_scale` and `eval_sampler` went with the score-function objective,
+and `anchor_window_microbatch` and `anchor_retries` with the first online
 anchor. A config or a launch script that still sets one is refused by name,
 with what replaced it, rather than quietly running a different experiment.
+
+The online anchor itself is back for the pathwise update: `demo_anchor`
+weights Stage 1B's flow-matching loss on `anchor_rows` fresh demonstration
+rows into the actor's gradient after the critic warm-up, and
+`grad_report_every` logs `anchor_grad_ratio` so its weight can be judged.
 
 #### Online progress and W&B
 
@@ -341,7 +346,7 @@ the backlog to finish:
   against a monotonically increasing event counter. Phase IDs are 0 completed,
   1 replay sampling, 2 world forward, 3 world backward, 4 posterior encoding,
   5 progress-head fitting, 6 imagination, 7 actor backward, 8 critic backward,
-  and 9 actor/critic optimizer steps.
+  9 actor/critic optimizer steps and 10 the imitation anchor.
 - Existing `online/*` and `episode/*` charts retain the environment-step axis
   for comparisons across runs.
 
