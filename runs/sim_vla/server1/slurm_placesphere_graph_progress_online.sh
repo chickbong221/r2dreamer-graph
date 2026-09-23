@@ -78,17 +78,19 @@ ONLINE_STEPS="${ONLINE_STEPS:-500000}"
 
 # Keep in sync with slurm_placesphere_baseline_online.sh.
 ONLINE_WORLD_LR=6e-5
-# Stage 2 rates (1.5x r2dreamer's 4e-5); PROGRESS_LR is graph_progress only.
-ACTOR_LR="${ACTOR_LR:-6e-5}"
+# Stage 2 rates: critic/progress 1.5x r2dreamer's 4e-5; the actor lower, so
+# the pretrained expert is not overwritten. PROGRESS_LR is graph_progress only.
+ACTOR_LR="${ACTOR_LR:-1e-5}"
 CRITIC_LR=6e-5
 PROGRESS_LR=6e-5
 # Replay windows per update (base 16). 20 x 56 = 1120 imagination starts, all
 # at once with microbatch 0: ~75 GB est. on the graph arm; 560 if OOM.
 BATCH_SIZE=20
 IMAGINATION_MICROBATCH=0
-CRITIC_WARMUP=150
+CRITIC_WARMUP=600
 NUM_ENVS=64
 # Stage 1B's imitation loss weighted into the actor update after warm-up.
+# --return-norm below divides the RL term by the running return spread.
 DEMO_ANCHOR=0.5
 ANCHOR_MICROBATCH=0
 # Progress shaping ramps 0 -> beta over these env steps (graph_progress only).
@@ -128,6 +130,7 @@ python -m sim_vla.training.pipeline \
   --num-envs $NUM_ENVS \
   --demo-anchor $DEMO_ANCHOR \
   --anchor-microbatch $ANCHOR_MICROBATCH \
+  --return-norm \
   --progress-warmup-start $PROGRESS_WARMUP_START \
   --progress-warmup-end $PROGRESS_WARMUP_END \
   --device cuda \

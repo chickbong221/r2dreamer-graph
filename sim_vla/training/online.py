@@ -514,6 +514,8 @@ class OnlineTrainer:
                             if self.progress_opt is not None else None),
             "demo_anchor": float(ac.demo_anchor),
             "anchor_rows": int(ac.anchor_rows),
+            "return_norm": bool(ac.return_norm),
+            "return_scale": self.ac.return_scale(),
             "precision": str(ac.precision),
             "train_ratio": float(self.config.train_ratio),
             # Counters, so a later run can say how far this one got and a log

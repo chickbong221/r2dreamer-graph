@@ -101,6 +101,10 @@ online:
   anchor_rows: 64
   anchor_microbatch: 16
   grad_report_every: 50
+  # Divide the actor's RL term by the running 5-95% return spread (floored at
+  # 1), as dreamer.py does; keeps demo_anchor's weight meaningful as the
+  # critic's value scale grows. return_scale is logged either way.
+  return_norm: false
   # Progress shaping's ramp in env steps (graph_progress arm). null scales it
   # to 20% -> 60% of --online-steps; set both or neither.
   progress_warmup_start: null

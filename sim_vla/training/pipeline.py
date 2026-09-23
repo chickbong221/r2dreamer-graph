@@ -94,7 +94,8 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         anchor_windows=int(online_settings.get("anchor_windows", 8)),
         anchor_rows=int(online_settings.get("anchor_rows", 64)),
         anchor_microbatch=int(online_settings.get("anchor_microbatch", 16)),
-        grad_report_every=int(online_settings.get("grad_report_every", 50)))
+        grad_report_every=int(online_settings.get("grad_report_every", 50)),
+        return_norm=bool(online_settings.get("return_norm", False)))
     for key in ("actor_lr", "critic_lr"):
         if online_settings.get(key) is not None:
             ac_kwargs[key] = float(online_settings[key])
@@ -350,6 +351,7 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             "anchor_rows": ac_cfg.anchor_rows,
             "anchor_microbatch": ac_cfg.anchor_microbatch,
             "grad_report_every": ac_cfg.grad_report_every,
+            "return_norm": ac_cfg.return_norm,
             "critic_warmup": ac_cfg.critic_warmup,
             "seed": int(cfg["data"]["seed"]),
             "profile": ac_cfg.profile,
@@ -490,6 +492,9 @@ def parse_args(argv=None):
     parser.add_argument("--grad-report-every", type=int, default=None,
                         help="actor steps between separate RL/anchor "
                              "gradient measurements; 0 never")
+    parser.add_argument("--return-norm", action="store_true",
+                        help="divide the actor's RL term by the running "
+                             "5-95%% return spread (dreamer.py's ReturnEMA)")
     parser.add_argument("--progress-warmup-start", type=int, default=None,
                         help="env step where progress shaping starts ramping "
                              "up; with --progress-warmup-end, replaces the "
@@ -547,6 +552,7 @@ def main(argv=None) -> int:
                        ("anchor_rows", args.anchor_rows),
                        ("anchor_microbatch", args.anchor_microbatch),
                        ("grad_report_every", args.grad_report_every),
+                       ("return_norm", True if args.return_norm else None),
                        ("progress_warmup_start", args.progress_warmup_start),
                        ("progress_warmup_end", args.progress_warmup_end),
                        ("num_envs", args.num_envs),

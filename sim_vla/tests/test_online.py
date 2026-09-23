@@ -445,6 +445,85 @@ class TestMicrobatchUpdates(unittest.TestCase):
                 torch.testing.assert_close(a, b)
 
 
+class TestReturnNormalization(unittest.TestCase):
+    """The RL term is divided by the running return spread; nothing else is."""
+
+    def run_update(self, *, return_norm, spread=None, microbatch=0,
+                   warmup=0):
+        torch = require_torch()
+        from unittest.mock import patch
+
+        from sim_vla.training.actor_critic import ActorCriticTrainer
+
+        class Critic(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.net = torch.nn.Linear(1, 1)
+
+            def loss(self, feat, returns, mask=None):
+                return (self.net(feat).squeeze(-1) - returns).square().mean()
+
+            def update_target(self):
+                pass
+
+        def objective(wm, policy, value, seeds, config, *,
+                      differentiable=True, **kwargs):
+            feat = seeds[0]
+            returns = policy(feat).squeeze(-1) * feat.squeeze(-1)
+            one = torch.ones_like(returns)
+            return {"loss": -returns.mean(), "returns": returns,
+                    "feat": torch.stack([feat, feat]), "reward": one,
+                    "cont": one, "bootstrap": one, "shaping": None}
+
+        torch.manual_seed(3)
+        trainer = ActorCriticTrainer(
+            torch.nn.Linear(1, 1), torch.nn.Linear(1, 1), Critic(),
+            ac_config(imagination_microbatch=microbatch, critic_warmup=warmup,
+                      grad_clip=1e6, return_norm=return_norm))
+        if spread is not None:
+            trainer.return_ema.ema_vals.copy_(torch.tensor([0.0, spread]))
+        start = (torch.arange(1., 6.).reshape(5, 1),)
+        with patch("sim_vla.training.actor_critic.executed_chunk_objective",
+                   objective):
+            return trainer, trainer.update(start)
+
+    def test_the_actor_gradient_is_divided_by_the_spread_and_the_critic_is_not(self):
+        require_torch()
+        _plain, plain = self.run_update(return_norm=False, spread=10.0)
+        _normed, normed = self.run_update(return_norm=True, spread=10.0)
+        self.assertEqual(normed["return_scale"], 10.0)
+        self.assertAlmostEqual(normed["actor_grad_norm"],
+                               plain["actor_grad_norm"] / 10.0, places=5)
+        self.assertAlmostEqual(normed["critic_loss"], plain["critic_loss"],
+                               places=6)
+        self.assertAlmostEqual(normed["actor_loss"], plain["actor_loss"],
+                               places=6)
+
+    def test_a_small_spread_is_floored_at_one(self):
+        require_torch()
+        _plain, plain = self.run_update(return_norm=False, spread=0.2)
+        _normed, normed = self.run_update(return_norm=True, spread=0.2)
+        self.assertEqual(normed["return_scale"], 1.0)
+        self.assertAlmostEqual(normed["actor_grad_norm"],
+                               plain["actor_grad_norm"], places=6)
+
+    def test_grouping_still_changes_nothing(self):
+        require_torch()
+        _whole, whole = self.run_update(return_norm=True, spread=10.0)
+        _groups, groups = self.run_update(return_norm=True, spread=10.0,
+                                          microbatch=2)
+        self.assertAlmostEqual(whole["actor_grad_norm"],
+                               groups["actor_grad_norm"], places=5)
+
+    def test_the_scale_is_tracked_through_the_critic_warmup(self):
+        torch = require_torch()
+        trainer, metrics = self.run_update(return_norm=True, warmup=5)
+        self.assertTrue(np.isnan(metrics["actor_loss"]))
+        self.assertNotEqual(float(trainer.return_ema.ema_vals[1]), 0.0)
+        self.assertEqual(metrics["return_p95"],
+                         float(trainer.return_ema.ema_vals[1]))
+
+
 class TestImaginationStarts(unittest.TestCase):
     """Every eligible replay position, re-encoded after the world-model step."""
 
@@ -689,11 +768,12 @@ class TestAnchorAndShapingSettings(unittest.TestCase):
                 "--task", "placesphere", "--experiment", "graph_progress",
                 "--device", "cpu", "--demo-anchor", "0.5",
                 "--anchor-rows", "32", "--progress-warmup-start", "30000",
-                "--progress-warmup-end", "100000"])
+                "--progress-warmup-end", "100000", "--return-norm"])
         cfg = run.call_args.args[0]
         model = load_model_config(cfg)
         _online, ac = pipeline.online_configs(cfg, model, total_steps=500_000,
                                               flow_steps=5)
+        self.assertTrue(ac.return_norm)
         self.assertEqual(ac.demo_anchor, 0.5)
         self.assertEqual(ac.anchor_rows, 32)
         self.assertEqual(pipeline.shaping_warmup(cfg, 500_000),
@@ -704,6 +784,7 @@ class TestAnchorAndShapingSettings(unittest.TestCase):
                                               total_steps=500_000,
                                               flow_steps=5)
         self.assertEqual(ac.demo_anchor, 0.0)
+        self.assertFalse(ac.return_norm)
         self.assertEqual(pipeline.shaping_warmup(default, 500_000),
                          (100_000, 300_000))
 

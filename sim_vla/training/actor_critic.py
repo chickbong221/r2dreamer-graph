@@ -83,6 +83,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 
+import networks
+
 from .imagination import chunk_return, imagine_chunk, imagined_rewards
 from .precision import autocast
 from .profiling import Phases
@@ -144,6 +146,11 @@ class ActorCriticConfig:
     # Actor steps between separate RL and anchor gradient measurements; 0
     # never measures. Without it a dominating anchor looks like a balanced one.
     grad_report_every: int = 50
+    # Divide the actor's RL term by the running 5-95% spread of the return,
+    # floored at 1 -- dreamer.py's ReturnEMA. Returns grow as the critic learns
+    # the value scale; without this the RL gradient grows with them and
+    # swamps a fixed-weight anchor. The critic always regresses raw returns.
+    return_norm: bool = False
 
     def __post_init__(self):
         if int(self.execute) < 1:
@@ -256,6 +263,11 @@ class ActorCriticTrainer:
             lr=config.actor_lr)
         self.critic_opt = torch.optim.AdamW(critic.net.parameters(),
                                             lr=config.critic_lr)
+        # Tracked whether or not return_norm applies it, so return_scale is
+        # always logged.
+        self.return_ema = networks.ReturnEMA(
+            device=device if device is not None
+            else next(critic.net.parameters()).device)
         self.device = device
         self.step = 0
         self.actor_steps = 0
@@ -295,6 +307,11 @@ class ActorCriticTrainer:
             "actor_loss")}
         shaping_total = zero()
         shaped = False
+        # From the updates before this one, so every microbatch is divided by
+        # the same number and the grouping still changes nothing but memory.
+        scale = self.return_scale()
+        rl_weight = 1.0 / scale if self.config.return_norm else 1.0
+        returns_seen: List[torch.Tensor] = []
         for offset in range(0, count, microbatch):
             stop = min(offset + microbatch, count)
             small_start = tuple(s[offset:stop] for s in start)
@@ -314,7 +331,7 @@ class ActorCriticTrainer:
                 if on_progress is not None:
                     on_progress("actor_backward", **details)
                 with phases("actor_backward"):
-                    (out["loss"] * weight).backward()
+                    (out["loss"] * (weight * rl_weight)).backward()
             if on_progress is not None:
                 on_progress("critic_backward", **details)
             with phases("critic_backward"):
@@ -322,6 +339,7 @@ class ActorCriticTrainer:
                     closs = self.critic.loss(out["feat"][0].detach(),
                                              out["returns"].detach())
                 (closs * weight).backward()
+            returns_seen.append(out["returns"].detach().float().reshape(-1))
             totals["return"] += weight * out["returns"].detach().float().mean()
             totals["reward"] += weight * out["reward"].float().mean()
             totals["cont"] += weight * out["cont"].float().mean()
@@ -337,6 +355,12 @@ class ActorCriticTrainer:
         metrics: Dict[str, float] = {
             name: float(value) for name, value in totals.items()}
         metrics["imagined_transitions"] = float(count * int(self.config.execute))
+        # Updated during the critic warm-up too, so the scale has settled by
+        # the time the actor starts.
+        self.return_ema(torch.cat(returns_seen))
+        metrics |= {"return_scale": scale,
+                    "return_p05": float(self.return_ema.ema_vals[0]),
+                    "return_p95": float(self.return_ema.ema_vals[1])}
         if shaped:
             metrics["shaping_reward"] = float(shaping_total)
             metrics["progress_beta"] = float(self.config.progress_beta)
@@ -382,6 +406,11 @@ class ActorCriticTrainer:
         metrics["actor_steps"] = float(self.actor_steps)
         metrics |= phases.metrics()
         return metrics
+
+    def return_scale(self) -> float:
+        """The running 5-95% return spread, floored as ``ReturnEMA`` floors it."""
+        low, high = self.return_ema.ema_vals
+        return float(torch.clamp(high - low, min=self.return_ema.min_scale))
 
     @staticmethod
     def _gradient_norm(params) -> float:
