@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=r2d-svla-ps-gp
+#SBATCH --job-name=r2d-svla-ps-bl-online
 #SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -8,15 +8,19 @@
 #SBATCH --output=/home/%u/output/%x_%j.out
 #SBATCH --error=/home/%u/output/%x_%j.err
 
-# sim_vla arm 3 (graph_progress): graph + progress shaping (beta=0.05, Stage 2
-# only). Differs from slurm_placesphere_baseline.sh only by --experiment.
-# Needs PlaceSphere-v1/demos.h5 from slurm_collect_data.sh.
+# Fail the job when any step fails, so a crashed trainer does not exit 0.
+set -eo pipefail
+
+# sim_vla arm 1 (dreamer), Stage 2 only: restores Stage 1A + 1B weights and
+# starts a fresh online run. Differs from
+# slurm_placesphere_graph_progress_online.sh only by --experiment and
+# RESUME_FROM.
 
 echo "================================="
 echo "Job started on $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPUs allocated: $CUDA_VISIBLE_DEVICES"
-echo "sim_vla: PlaceSphere-v1, arm=graph_progress (beta=0.05), actor=pathwise executed chunk"
+echo "sim_vla: PlaceSphere-v1, arm=dreamer, stage 2 only, actor=pathwise executed chunk"
 echo "================================="
 
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -46,7 +50,8 @@ export VK_ICD_FILENAMES=$NVIDIA_USERSPACE_DIR/nvidia_icd_egl.json
 
 cd $HOME/projects/r2dreamer-graph
 
-# Demos live on server 1's storage; point data/sim_vla_demos at them.
+# Still needed after a resume: Stage 2 mixes demos into replay, and the
+# normalizer is rebuilt from the dataset.
 mkdir -p data
 ln -sfn /home/tuannl/mnt_data/data/maniskill data/sim_vla_demos
 
@@ -64,19 +69,16 @@ mkdir -p $HOME/output
 nvidia-smi
 nvidia-smi -l 100 > $HOME/output/gpu_${SLURM_JOB_ID}.log &
 GPU_MONITOR_PID=$!
+trap 'kill "$GPU_MONITOR_PID" 2>/dev/null || true' EXIT
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Keep in sync with slurm_placesphere_baseline.sh.
-WORLD_STEPS=30000
-IMITATION_STEPS=25000
-ONLINE_STEPS=500000
-# World model, Stage 1A and Stage 2.
-WORLD_LR=1e-4
-IMITATION_LR=1e-4
-
 # Overridable at submit time, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
+ONLINE_STEPS="${ONLINE_STEPS:-500000}"
+
+# Keep in sync with slurm_placesphere_graph_progress_online.sh.
+ONLINE_WORLD_LR=1e-4
 # Stage 2 rates (1.5x r2dreamer's 4e-5); PROGRESS_LR is graph_progress only.
 ACTOR_LR="${ACTOR_LR:-6e-5}"
 CRITIC_LR=6e-5
@@ -86,26 +88,38 @@ IMAGINATION_MICROBATCH=448
 CRITIC_WARMUP=150
 NUM_ENVS=64
 
+# Read only: the earlier --save-checkpoints run's --out directory.
+RESUME_FROM=/home/tuannl/logdir/r2dreamer-graph/sim_vla/20260922_190405/placesphere/dreamer
+
+for stage_file in world_model.pt imitation.pt; do
+  if [ ! -f "$RESUME_FROM/$stage_file" ]; then
+    echo "FATAL: $RESUME_FROM/$stage_file does not exist." >&2
+    exit 1
+  fi
+done
+echo "[resume] $RESUME_FROM"
+ls -la "$RESUME_FROM"
+
+OUT_DIR=$HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/dreamer_online_lr${ACTOR_LR}_seed${SEED}
+echo "[out] $OUT_DIR"
+
 python -m sim_vla.training.pipeline \
   --task placesphere \
-  --experiment graph_progress \
-  --world-steps $WORLD_STEPS \
-  --imitation-steps $IMITATION_STEPS \
-  --world-lr $WORLD_LR \
-  --online-world-lr $WORLD_LR \
-  --imitation-lr $IMITATION_LR \
-  --online-steps $ONLINE_STEPS \
+  --experiment dreamer \
+  --resume-from "$RESUME_FROM" \
+  --world-steps 0 \
+  --imitation-steps 0 \
+  --online-steps "$ONLINE_STEPS" \
   --seed "$SEED" \
-  --imagination-microbatch $IMAGINATION_MICROBATCH \
-  --critic-warmup $CRITIC_WARMUP \
+  --online-world-lr $ONLINE_WORLD_LR \
   --actor-lr "$ACTOR_LR" \
   --critic-lr $CRITIC_LR \
   --progress-lr $PROGRESS_LR \
+  --imagination-microbatch $IMAGINATION_MICROBATCH \
+  --critic-warmup $CRITIC_WARMUP \
   --num-envs $NUM_ENVS \
   --device cuda \
   --save-checkpoints \
-  --out $HOME/logdir/r2dreamer-graph/sim_vla/$TIMESTAMP/placesphere/graph_progress
-
-kill $GPU_MONITOR_PID
+  --out "$OUT_DIR"
 
 echo "Job finished"

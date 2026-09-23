@@ -68,6 +68,10 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         ignore_terminations=bool(cfg["data"]["ignore_terminations"]),
         save_checkpoints=bool(save_checkpoints),
         eval_episodes=int(cfg["eval"]["episodes"]))
+    if online_settings.get("world_lr") is not None:
+        online_cfg.world_lr = float(online_settings["world_lr"])
+    if online_settings.get("progress_lr") is not None:
+        online_cfg.progress_lr = float(online_settings["progress_lr"])
     ac_kwargs = dict(
         # The number of actions one generated chunk contributes, in the
         # environment and in imagination alike. Taken from actor.execute so
@@ -86,11 +90,29 @@ def online_configs(cfg, model_cfg, *, total_steps, flow_steps,
         # Starts at zero and is set per update from the warm-up; the
         # configured beta is the value it warms up *to*.
         progress_beta=0.0)
-    if online_settings.get("actor_lr") is not None:
-        ac_kwargs["actor_lr"] = float(online_settings["actor_lr"])
+    for key in ("actor_lr", "critic_lr"):
+        if online_settings.get(key) is not None:
+            ac_kwargs[key] = float(online_settings[key])
     ac_cfg = ActorCriticConfig(**ac_kwargs)
 
     return online_cfg, ac_cfg
+
+
+def shrink_online_chunk(cfg, actor) -> Dict[str, Any]:
+    """Cut the actor to ``online.chunk_size`` for Stage 2, when one is set.
+
+    After Stage 1B, whether it trained or was restored, so imitation always
+    supervises the full chunk and a checkpoint imitated at the full length is
+    reused as it is. ``shrink_chunk`` measures on the real expert that the
+    actions kept are unchanged and refuses otherwise.
+    """
+    imitated = int(actor.chunk_size)
+    wanted = (cfg.get("online") or {}).get("chunk_size")
+    difference = (0.0 if wanted is None
+                  else float(actor.shrink_chunk(int(wanted))))
+    return {"imitation_chunk_size": imitated,
+            "chunk_size": int(actor.chunk_size),
+            "shrink_difference": difference}
 
 
 def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
@@ -212,6 +234,12 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             print("[pipeline] stage 2 skipped (--online-steps 0)", flush=True)
             return report
 
+        # Before the env is built, so a refusal costs seconds.
+        chunk = shrink_online_chunk(cfg, stage_b.actor)
+        print(f"[pipeline] stage 2: chunk {chunk['imitation_chunk_size']} -> "
+              f"{chunk['chunk_size']} actions (max velocity difference "
+              f"{chunk['shrink_difference']:.2e})", flush=True)
+
         # The world model is trainable again here. Stage 1B froze it to train
         # the policy against a fixed state; Stage 2 trains both.
         for parameter in stage_a.model.parameters():
@@ -289,6 +317,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             "imagination_microbatch": ac_cfg.imagination_microbatch,
             "discount": ac_cfg.discount,
             "flow_steps": ac_cfg.flow_steps,
+            "chunk_size": chunk["chunk_size"],
+            "imitation_chunk_size": chunk["imitation_chunk_size"],
             # What the actor update is, resolved rather than as written: this
             # is what a later comparison has to match on.
             "actor_objective": actor_critic.OBJECTIVE,
@@ -297,6 +327,8 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
             "execute": ac_cfg.execute,
             "actor_lr": ac_cfg.actor_lr,
             "critic_lr": ac_cfg.critic_lr,
+            "world_lr": online_cfg.world_lr,
+            "progress_lr": online_cfg.progress_lr,
             "critic_warmup": ac_cfg.critic_warmup,
             "seed": int(cfg["data"]["seed"]),
             "profile": ac_cfg.profile,
@@ -420,6 +452,14 @@ def parse_args(argv=None):
                              "memory for each actor-critic update")
     parser.add_argument("--actor-lr", type=float, default=None,
                         help="actor learning rate")
+    parser.add_argument("--online-world-lr", type=float, default=None,
+                        help="Stage 2 world-model learning rate; unset keeps "
+                             "1e-4. --world-lr is Stage 1A's")
+    parser.add_argument("--critic-lr", type=float, default=None,
+                        help="Stage 2 critic learning rate; unset keeps 3e-4")
+    parser.add_argument("--progress-lr", type=float, default=None,
+                        help="Stage 2 progress-head learning rate "
+                             "(graph_progress arm); unset keeps 3e-4")
     parser.add_argument("--num-envs", type=int, default=None,
                         help="parallel online envs, stepped in lockstep with "
                              "updates between steps; more than 1 runs "
@@ -462,6 +502,9 @@ def main(argv=None) -> int:
                        ("critic_warmup", args.critic_warmup),
                        ("profile", True if args.profile_online else None),
                        ("actor_lr", args.actor_lr),
+                       ("world_lr", args.online_world_lr),
+                       ("critic_lr", args.critic_lr),
+                       ("progress_lr", args.progress_lr),
                        ("num_envs", args.num_envs),
                        ("reconfiguration_freq", args.reconfiguration_freq)):
         if value is not None:

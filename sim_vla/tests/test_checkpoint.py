@@ -775,7 +775,9 @@ class TestJointProgressCheckpoint(unittest.TestCase):
 
         def fake_stage_b(*args, **kwargs):
             return train_imitation.Stage1B(
-                actor=SimpleNamespace(flow_steps=2), adapter=None,
+                actor=SimpleNamespace(flow_steps=2, chunk_size=5,
+                                      shrink_chunk=lambda chunk: 0.0),
+                adapter=None,
                 loaded=None, trainer=None, losses={})
 
         with mock.patch.object(pretrain_world_model, "run",

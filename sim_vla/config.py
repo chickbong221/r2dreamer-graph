@@ -164,8 +164,11 @@ def validate(cfg: Mapping[str, Any]) -> None:
 
     if int(online.get("critic_warmup", 0)) < 0:
         raise SystemExit("online.critic_warmup must be nonnegative")
-    if online.get("actor_lr") is not None and float(online["actor_lr"]) <= 0:
-        raise SystemExit("online.actor_lr must be positive when set")
+    for key in ("actor_lr", "world_lr", "critic_lr", "progress_lr"):
+        value = online.get(key)
+        if value is not None and not (math.isfinite(float(value))
+                                      and float(value) > 0):
+            raise SystemExit(f"online.{key} must be positive when set")
 
     actor = cfg.get("actor") or {}
     # One number decides how many actions a generated chunk contributes, in
@@ -183,6 +186,17 @@ def validate(cfg: Mapping[str, Any]) -> None:
             f"actor.execute={execute} exceeds actor.chunk_size={chunk}; "
             "executing more actions than the policy predicts would repeat or "
             "invent commands")
+    online_chunk = online.get("chunk_size")
+    if online_chunk is not None:
+        if int(online_chunk) < int(execute):
+            raise SystemExit(
+                f"online.chunk_size={online_chunk} is below actor.execute="
+                f"{execute}; a chunk has to supply every executed action")
+        if chunk and int(online_chunk) > chunk:
+            raise SystemExit(
+                f"online.chunk_size={online_chunk} exceeds actor.chunk_size="
+                f"{chunk}; positions past the length Stage 1B imitated were "
+                "never supervised")
     if int(actor.get("flow_steps") or 0) < 0:
         raise SystemExit("actor.flow_steps must be nonnegative "
                          "(0 takes the checkpoint's own value)")

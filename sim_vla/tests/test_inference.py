@@ -578,6 +578,29 @@ class TestParallelLoop(unittest.TestCase):
                              coords=coordinates(), on_metrics=seen.append)
         return trainer, seen
 
+    def test_the_online_world_rate_reaches_the_world_optimizer(self):
+        trainer, _ = self.run_loop(FakeVecEnv(num_envs=4, steps=4),
+                                   world_lr=6e-5)
+        self.assertEqual(trainer.world_opt.param_groups[0]["lr"], 6e-5)
+        trainer, _ = self.run_loop(FakeVecEnv(num_envs=4, steps=4))
+        self.assertEqual(trainer.world_opt.param_groups[0]["lr"], 1e-4)
+
+    def test_the_online_progress_rate_reaches_the_trainer(self):
+        from unittest.mock import patch
+
+        from sim_vla.training import online
+
+        seen = {}
+        original = online.OnlineTrainer.__init__
+
+        def spy(trainer, *args, **kwargs):
+            seen.update(kwargs)
+            original(trainer, *args, **kwargs)
+
+        with patch.object(online.OnlineTrainer, "__init__", spy):
+            self.run_loop(FakeVecEnv(num_envs=4, steps=4), progress_lr=6e-5)
+        self.assertEqual(seen["progress_lr"], 6e-5)
+
     def test_rounds_train_between_steps_at_the_configured_ratio(self):
         env = FakeVecEnv(num_envs=4, steps=4)
         trainer, seen = self.run_loop(env)

@@ -77,6 +77,12 @@ TOKENIZER_PATHS = (
     "model.vlm_with_expert.processor",
 )
 
+# How far a shortened chunk's velocities may move from the full chunk's first
+# positions, relative to their size. Causal attention makes them equal up to
+# kernel rounding; a mask that let actions see later ones would move them by
+# the size of the velocity itself.
+SHRINK_TOLERANCE = 1e-2
+
 
 def freeze(module: nn.Module) -> int:
     """Stop a module's own parameters training, without cutting the graph."""
@@ -232,6 +238,56 @@ class SmolVLAActor(nn.Module):
                 "disagree after assignment; the pretrained stack would build "
                 "its attention mask for a different horizon than the one this "
                 "policy is supervised on.")
+
+    def shrink_chunk(self, chunk: int) -> float:
+        """Generate only the first ``chunk`` actions from here on.
+
+        Lossless because SmolVLA's action tokens attend causally:
+        ``embed_suffix`` makes every action its own attention block, so action
+        ``i`` reads the prefix and actions ``1..i`` at every denoising step and
+        never a later one. A shorter chunk therefore yields the actions a full
+        chunk would have started with, and weights imitated at the full length
+        serve a shorter one unchanged. That is a property of the pinned
+        lerobot's mask, not of flow matching, so it is measured here on this
+        expert before it is relied on. Returns the largest velocity difference.
+
+        Growing is refused: positions past the imitated length were never
+        supervised.
+        """
+        chunk, current = int(chunk), int(self.chunk_size)
+        if not 1 <= chunk <= current:
+            raise PretrainedError(
+                f"cannot shrink a {current}-action chunk to {chunk}; only a "
+                "shorter chunk keeps the actions the policy was trained on")
+        if chunk == current:
+            return 0.0
+        # A private generator: the run's seeded streams are not advanced.
+        generator = torch.Generator().manual_seed(0)
+        feat = torch.randn(2, int(self.adapter.feature_dim),
+                           generator=generator).to(self.device)
+        noisy = torch.randn(2, current, self.action_dim,
+                            generator=generator).to(self.device)
+        times = torch.rand(2, generator=generator).to(self.device)
+        with torch.no_grad():
+            cond = self.condition(feat)
+            full = self.expert_velocity(noisy, times, cond)[:, :chunk]
+            self._synchronise_chunk(chunk)
+            try:
+                short = self.expert_velocity(noisy[:, :chunk], times, cond)
+            except BaseException:
+                self._synchronise_chunk(current)
+                raise
+        difference = float((full - short).abs().max())
+        scale = max(float(full.abs().max()), 1.0)
+        if not difference <= SHRINK_TOLERANCE * scale:
+            self._synchronise_chunk(current)
+            raise PretrainedError(
+                f"shrinking the chunk from {current} to {chunk} moved the first "
+                f"{chunk} velocities by {difference:.3g} (scale {scale:.3g}). "
+                "This expert's action tokens read later ones, so a shorter "
+                "chunk is a different policy; leave online.chunk_size null.")
+        self.chunk_size = chunk
+        return difference
 
     @property
     def device(self) -> torch.device:

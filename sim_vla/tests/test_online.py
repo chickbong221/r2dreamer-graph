@@ -569,12 +569,14 @@ class TestOnlineSettings(unittest.TestCase):
                 "--device", "cpu", "--batch-size", "16", "--train-ratio", "32",
                 "--online-precision", "float32",
                 "--imagination-microbatch", "7", "--critic-warmup", "3",
-                "--num-envs", "128", "--reconfiguration-freq", "1"])
+                "--num-envs", "128", "--reconfiguration-freq", "1",
+                "--online-world-lr", "6e-5", "--critic-lr", "6e-5",
+                "--progress-lr", "6e-5"])
         cfg = run.call_args.args[0]
         self.assertEqual(cfg["online"]["num_envs"], 128)
         self.assertEqual(cfg["online"]["reconfiguration_freq"], 1)
         defaults = load_config("peginsertion", "dreamer")["online"]
-        self.assertEqual(defaults["num_envs"], 1)
+        self.assertEqual(defaults["num_envs"], 16)
         self.assertIsNone(defaults["reconfiguration_freq"])
         online, ac = pipeline.online_configs(
             cfg, model, total_steps=12, flow_steps=6)
@@ -583,6 +585,17 @@ class TestOnlineSettings(unittest.TestCase):
         self.assertEqual(ac.critic_warmup, 3)
         self.assertEqual(ac.precision, "float32")
         self.assertEqual(ac.flow_steps, 6)
+        # Stage 2's world-model rate, separate from Stage 1A's --world-lr.
+        self.assertEqual(online.world_lr, 6e-5)
+        self.assertEqual(ac.critic_lr, 6e-5)
+        self.assertEqual(online.progress_lr, 6e-5)
+        self.assertIsNone(cfg["pretrain"].get("world_lr"))
+        default, default_ac = pipeline.online_configs(
+            load_config("peginsertion", "dreamer"), model, total_steps=12,
+            flow_steps=6)
+        self.assertEqual(default.world_lr, 1e-4)
+        self.assertEqual(default_ac.critic_lr, 3e-4)
+        self.assertEqual(default.progress_lr, 3e-4)
 
     def test_stage_one_learning_rates_reach_both_stages(self):
         require_torch()
@@ -623,7 +636,9 @@ class TestOnlineSettings(unittest.TestCase):
         for settings in ({"train_ratio": -1}, {"imagination_microbatch": -1},
                          {"precision": "float16"}, {"num_envs": 0},
                          {"reconfiguration_freq": -1}, {"critic_warmup": -1},
-                         {"actor_lr": 0},
+                         {"actor_lr": 0}, {"world_lr": 0},
+                         {"world_lr": float("nan")}, {"critic_lr": 0},
+                         {"progress_lr": -1e-4},
                          {"num_envs": 4, "train_ratio": 0}):
             with self.subTest(settings=settings), self.assertRaises(SystemExit):
                 load_config("peginsertion", "dreamer", {"online": settings})
@@ -638,6 +653,66 @@ class TestOnlineSettings(unittest.TestCase):
         with self.assertRaises(SystemExit):
             load_config("peginsertion", "dreamer",
                         {"actor": {"chunk_size": 4, "execute": 5}})
+
+    def test_an_online_chunk_shorter_than_execute_or_longer_than_imitated_is_refused(self):
+        require_torch()
+        from sim_vla.config import load_config
+
+        with self.assertRaises(SystemExit):
+            load_config("peginsertion", "dreamer",
+                        {"online": {"chunk_size": 4}, "actor": {"execute": 5}})
+        with self.assertRaises(SystemExit):
+            load_config("peginsertion", "dreamer",
+                        {"online": {"chunk_size": 20},
+                         "actor": {"chunk_size": 10, "execute": 5}})
+        # null is "keep what Stage 1B imitated at".
+        load_config("peginsertion", "dreamer", {"online": {"chunk_size": None}})
+
+
+class TestOnlineChunk(unittest.TestCase):
+    """Stage 2 generates online.chunk_size actions; Stage 1B keeps its own."""
+
+    class Actor:
+        def __init__(self, chunk_size):
+            self.chunk_size = chunk_size
+            self.calls = []
+
+        def shrink_chunk(self, chunk):
+            self.calls.append(chunk)
+            self.chunk_size = chunk
+            return 1e-7
+
+    def test_the_default_config_runs_stage_two_at_five_actions_and_five_steps(self):
+        require_torch()
+        from sim_vla.config import load_config
+
+        cfg = load_config("peginsertion", "dreamer")
+        self.assertEqual(cfg["online"]["chunk_size"], 5)
+        self.assertEqual(cfg["actor"]["flow_steps"], 5)
+        self.assertGreaterEqual(cfg["online"]["chunk_size"],
+                                cfg["actor"]["execute"])
+
+    def test_a_set_chunk_shrinks_the_actor_and_is_reported(self):
+        require_torch()
+        from sim_vla.training.pipeline import shrink_online_chunk
+
+        actor = self.Actor(50)
+        out = shrink_online_chunk({"online": {"chunk_size": 5}}, actor)
+        self.assertEqual(actor.calls, [5])
+        self.assertEqual(out, {"imitation_chunk_size": 50, "chunk_size": 5,
+                               "shrink_difference": 1e-7})
+
+    def test_null_leaves_the_actor_alone(self):
+        require_torch()
+        from sim_vla.training.pipeline import shrink_online_chunk
+
+        for cfg in ({"online": {"chunk_size": None}}, {"online": {}}, {}):
+            with self.subTest(cfg=cfg):
+                actor = self.Actor(50)
+                out = shrink_online_chunk(cfg, actor)
+                self.assertEqual(actor.calls, [])
+                self.assertEqual(out["chunk_size"], 50)
+                self.assertEqual(out["imitation_chunk_size"], 50)
 
 
 class TestRemovedSettingsCannotRunSilently(unittest.TestCase):

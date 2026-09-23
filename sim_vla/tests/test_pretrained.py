@@ -296,6 +296,27 @@ class TestChunkSynchronisation(unittest.TestCase):
             # Restore, because load() caches the policy for the process.
             actor._synchronise_chunk(int(facts["chunk_size"]))
 
+    def test_shrinking_keeps_the_leading_actions_and_growing_is_refused(self):
+        """Stage 2's online.chunk_size rests on causal action attention."""
+        require_torch()
+        from sim_vla.models.pretrained import PretrainedError
+        from sim_vla.models.smolvla_actor import SHRINK_TOLERANCE
+
+        actor, facts = build_actor(BASELINE_FEATURE)
+        full = int(facts["chunk_size"])
+        try:
+            with self.assertRaises(PretrainedError):
+                actor.shrink_chunk(full + 1)
+            self.assertEqual(actor.chunk_size, full)
+            difference = actor.shrink_chunk(5)
+            print(f"[pretrained] chunk {full} -> 5: max velocity difference "
+                  f"{difference:.2e}")
+            self.assertLess(difference, SHRINK_TOLERANCE)
+            self.assertEqual(actor.chunk_size, 5)
+            self.assertEqual(int(actor.model.config.chunk_size), 5)
+        finally:
+            actor._synchronise_chunk(full)
+
 
 class TestRealSmokeRun(unittest.TestCase):
     """A real forward and backward through the pretrained expert, and a short

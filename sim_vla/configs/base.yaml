@@ -84,6 +84,20 @@ online:
   profile: false
   # null keeps ActorCriticConfig's own 3e-5.
   actor_lr: null
+  # The world model's rate in Stage 2; pretrain.world_lr is Stage 1A's. null
+  # keeps OnlineConfig's 1e-4.
+  world_lr: null
+  # null keeps ActorCriticConfig's 3e-4.
+  critic_lr: null
+  # The graph_progress arm's head. null keeps progress.PROGRESS_LR, 3e-4.
+  progress_lr: null
+  # Actions generated per chunk from Stage 2 on; Stage 1B still imitates at
+  # actor.chunk_size. Only actor.execute of a chunk is ever run, and SmolVLA's
+  # action tokens attend causally, so the first actions of a shorter chunk are
+  # the ones the full chunk would have produced -- this cuts the expert's work
+  # per flow step without changing the policy. Checked on the real expert when
+  # Stage 2 starts. At least actor.execute; null keeps actor.chunk_size.
+  chunk_size: 5
   # Parallel online envs, like the main trainer's env_num. 1 is the single CPU
   # env the demonstrations were collected in; more than 1 runs ManiSkill's GPU
   # backend, steps every env in lockstep and trains between steps. The update
@@ -116,7 +130,7 @@ actor:
   # same number of actions from one chunk, so the policy being optimised is
   # the policy being run. Must not exceed chunk_size.
   execute: 5
-  flow_steps: 1            # one Euler step for collection and imagination
+  flow_steps: 5            # Euler steps for collection and imagination
   # One MLP-generated state token beside the tokenized instruction. There is
   # no context-token block.
   state_tokens: 1

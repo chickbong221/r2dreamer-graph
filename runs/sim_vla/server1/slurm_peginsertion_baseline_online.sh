@@ -125,7 +125,11 @@ ACTOR_LR="${ACTOR_LR:-1e-5}"
 BATCH_SIZE=16
 # Starts imagined together. An update has no cap on its starts -- it imagines
 # every scored row of the replay batch -- so this is what bounds its memory.
-IMAGINATION_MICROBATCH=32
+# 448 is half of an update's 16 x 56 = 896 starts: two groups per update on
+# the 80 GB GPU, sized for 10 flow steps over a 5-action chunk
+# (online.chunk_size). Gradients accumulate across groups, so this changes
+# memory and speed, not the update.
+IMAGINATION_MICROBATCH=448
 TRAIN_RATIO=64
 ONLINE_PRECISION=bfloat16
 CRITIC_WARMUP=150

@@ -66,6 +66,11 @@ class OnlineConfig:
     burn_in: int = 8
     max_episode_steps: int = 150
     seed: int = 0
+    # The world model's rate from here on. Stage 1A's is pretrain.world_lr, a
+    # separate setting: this optimizer is built fresh for Stage 2.
+    world_lr: float = 1e-4
+    # The graph_progress arm's head; unused by the other arms.
+    progress_lr: float = PROGRESS_LR
     actor_every: int = 1
     # Action-only lookahead for replay windows. Zero online, for both replay
     # sources: it existed to supervise whole demonstrated chunks, and nothing
@@ -496,12 +501,16 @@ class OnlineTrainer:
             "execute": int(ac.execute),
             "start_selection": START_SELECTION,
             "flow_steps": int(ac.flow_steps),
+            "chunk_size": int(getattr(self.actor, "chunk_size", 0)),
             "discount": float(ac.discount),
             "imagination_microbatch": int(ac.imagination_microbatch),
             "critic_warmup": int(ac.critic_warmup),
             "grad_clip": float(ac.grad_clip),
             "actor_lr": float(ac.actor_lr),
             "critic_lr": float(ac.critic_lr),
+            "world_lr": float(self.world_opt.param_groups[0]["lr"]),
+            "progress_lr": (float(self.progress_opt.param_groups[0]["lr"])
+                            if self.progress_opt is not None else None),
             "precision": str(ac.precision),
             "train_ratio": float(self.config.train_ratio),
             # Counters, so a later run can say how far this one got and a log
@@ -562,7 +571,8 @@ def run_online(cfg: Dict[str, Any], world_model, actor, critic, demo_sampler,
 
     trainer = OnlineTrainer(
         world_model, actor, critic, demo_sampler, config=config,
-        ac_config=ac_config, device=device, progress_head=progress_head,
+        ac_config=ac_config, world_lr=float(config.world_lr), device=device,
+        progress_head=progress_head, progress_lr=float(config.progress_lr),
         checkpoint_dir=checkpoint_dir, meta=meta, normalizer=normalizer,
         coords=coords, seed=int(config.seed), potential=potential,
         progress_config=progress_config)
