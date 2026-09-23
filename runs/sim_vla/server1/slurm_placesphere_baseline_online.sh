@@ -83,12 +83,15 @@ ONLINE_WORLD_LR=6e-5
 ACTOR_LR="${ACTOR_LR:-6e-5}"
 CRITIC_LR=6e-5
 PROGRESS_LR=6e-5
-# 0 imagines all 896 starts per update at once (80 GB GPU); 448 if OOM.
+# Replay windows per update (base 16). 20 x 56 = 1120 imagination starts, all
+# at once with microbatch 0: ~75 GB est. on the graph arm; 560 if OOM.
+BATCH_SIZE=20
 IMAGINATION_MICROBATCH=0
 CRITIC_WARMUP=150
 NUM_ENVS=64
 # Stage 1B's imitation loss weighted into the actor update after warm-up.
 DEMO_ANCHOR=0.5
+ANCHOR_MICROBATCH=0
 # Progress shaping ramps 0 -> beta over these env steps (graph_progress only).
 PROGRESS_WARMUP_START=30000
 PROGRESS_WARMUP_END=100000
@@ -116,6 +119,7 @@ python -m sim_vla.training.pipeline \
   --imitation-steps 0 \
   --online-steps "$ONLINE_STEPS" \
   --seed "$SEED" \
+  --batch-size $BATCH_SIZE \
   --online-world-lr $ONLINE_WORLD_LR \
   --actor-lr "$ACTOR_LR" \
   --critic-lr $CRITIC_LR \
@@ -124,6 +128,7 @@ python -m sim_vla.training.pipeline \
   --critic-warmup $CRITIC_WARMUP \
   --num-envs $NUM_ENVS \
   --demo-anchor $DEMO_ANCHOR \
+  --anchor-microbatch $ANCHOR_MICROBATCH \
   --progress-warmup-start $PROGRESS_WARMUP_START \
   --progress-warmup-end $PROGRESS_WARMUP_END \
   --device cuda \
