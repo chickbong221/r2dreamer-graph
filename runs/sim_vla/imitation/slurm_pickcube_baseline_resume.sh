@@ -81,7 +81,7 @@ SEED="${SEED:-0}"
 # Imitation settings; keep in sync with slurm_pickcube_baseline.sh. The world
 # model is restored, so none of its settings apply.
 IMITATION_STEPS=25000
-BATCH_SIZE=32
+BATCH_SIZE=24
 IMITATION_LR=1e-4
 IMITATION_WARMUP=1000
 IMITATION_FINAL_LR=2.5e-6

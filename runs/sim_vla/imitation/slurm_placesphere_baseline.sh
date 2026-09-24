@@ -78,8 +78,9 @@ SEED="${SEED:-0}"
 # Keep in sync with slurm_placesphere_graph_progress.sh.
 WORLD_STEPS=25000
 IMITATION_STEPS=25000
-# Windows per step in both stages; the default 16 used ~34 of 80 GB.
-BATCH_SIZE=32
+# Windows per step in both stages; 32 ran out of memory in imitation on
+# an 80 GB GPU.
+BATCH_SIZE=24
 # Peak rates: linear warmup, then cosine decay to the final rate at the
 # stage's last step.
 WORLD_LR=1e-4
