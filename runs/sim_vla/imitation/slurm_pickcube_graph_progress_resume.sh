@@ -82,7 +82,6 @@ SEED="${SEED:-0}"
 # Imitation settings; keep in sync with slurm_pickcube_graph_progress.sh.
 # The world model is restored, so none of its settings apply.
 IMITATION_STEPS=25000
-BATCH_SIZE=24
 IMITATION_LR=1e-4
 IMITATION_WARMUP=1000
 IMITATION_FINAL_LR=2.5e-6
@@ -118,7 +117,6 @@ python -m sim_vla.training.pipeline \
   --resume-from "$OUT_DIR" \
   --world-steps 0 \
   --imitation-steps $IMITATION_STEPS \
-  --batch-size $BATCH_SIZE \
   --imitation-lr $IMITATION_LR \
   --imitation-warmup-steps $IMITATION_WARMUP \
   --imitation-final-lr $IMITATION_FINAL_LR \

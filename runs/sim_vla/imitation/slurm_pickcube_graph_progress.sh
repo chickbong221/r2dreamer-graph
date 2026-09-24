@@ -79,9 +79,6 @@ SEED="${SEED:-0}"
 # Keep in sync with slurm_pickcube_baseline.sh.
 WORLD_STEPS=25000
 IMITATION_STEPS=25000
-# Windows per step in both stages; 32 ran out of memory in imitation on
-# an 80 GB GPU.
-BATCH_SIZE=24
 # Peak rates: linear warmup, then cosine decay to the final rate at the
 # stage's last step.
 WORLD_LR=1e-4
@@ -103,7 +100,6 @@ python -m sim_vla.training.pipeline \
   --experiment graph_progress \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
-  --batch-size $BATCH_SIZE \
   --world-lr $WORLD_LR \
   --imitation-lr $IMITATION_LR \
   --world-warmup-steps $WORLD_WARMUP \
