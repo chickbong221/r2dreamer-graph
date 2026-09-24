@@ -6,13 +6,17 @@ import glob
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from ..preprocessing.gemini_client import (
     GeminiClient,
+    GeminiError,
     GeminiMalformed,
     GeminiRequestFailed,
     GeminiTruncated,
     TextPart,
+    VideoPart,
     normalize_usage,
 )
 
@@ -53,6 +57,55 @@ class Failures(unittest.TestCase):
 
     def failures(self):
         return glob.glob(os.path.join(self.tmp.name, "failures", "*.json"))
+
+    def test_forcing_a_new_answer_bypasses_success_cache(self):
+        client = Scripted(settings(self.tmp.name), [('{"a": 1}', USAGE, "STOP"),
+                                                   ('{"a": 2}', USAGE, "STOP")])
+        client.generate_json(self.parts, {}, "test")
+        client.use_response_cache = False
+        answer, record = client.generate_json(self.parts, {}, "test")
+        self.assertEqual(answer, {"a": 2})
+        self.assertFalse(record["cached"])
+        self.assertEqual(client.calls, 2)
+
+    def test_token_preflight_checks_input_and_output_limits(self):
+        client = GeminiClient(settings(self.tmp.name, input_token_headroom=10))
+        models = Mock()
+        client._client = SimpleNamespace(models=models)
+        models.get.return_value = SimpleNamespace(input_token_limit=1000, output_token_limit=200)
+        models.count_tokens.return_value = SimpleNamespace(total_tokens=800)
+        client._check_token_budget(self.parts)
+        models.count_tokens.return_value.total_tokens = 950
+        with self.assertRaisesRegex(GeminiError, "whole episode"):
+            client._check_token_budget(self.parts)
+        client.cfg["max_output_tokens"] = 201
+        with self.assertRaisesRegex(GeminiError, "max_output_tokens"):
+            client._check_token_budget(self.parts)
+        models.generate_content.assert_not_called()
+
+    def test_actual_sdk_accepts_video_metadata_and_nullable_answer_schema(self):
+        try:
+            from google.genai import types
+        except ImportError:
+            self.skipTest("requires google-genai")
+        from ..preprocessing.annotate_episode import answer_schema
+        from ..graphs.validate import full_scope
+        from . import synthetic
+
+        spec = synthetic.spec("blue_on_red")
+        schema = answer_schema(spec, full_scope(spec))
+        client = GeminiClient(settings(self.tmp.name, preflight_tokens=True))
+        models = Mock()
+        client._client = SimpleNamespace(models=models)
+        models.get.return_value = SimpleNamespace(input_token_limit=1000000, output_token_limit=65536)
+        models.count_tokens.return_value = SimpleNamespace(total_tokens=1000)
+        models.generate_content.return_value = SimpleNamespace(text='{}', candidates=[], usage_metadata=None)
+        client.upload = Mock(return_value={"uri": "https://example.org/test.mp4", "mime_type": "video/mp4"})
+        client._generate_content([TextPart("test"), VideoPart("unused.mp4", 10, 10)], schema)
+        kwargs = models.generate_content.call_args.kwargs
+        self.assertIsInstance(kwargs["config"], types.GenerateContentConfig)
+        self.assertEqual(kwargs["config"].response_json_schema, schema)
+        self.assertEqual(kwargs["contents"][0].parts[1].video_metadata.fps, 10)
 
     def test_a_truncated_answer_is_not_asked_again_identically(self):
         client = Scripted(settings(self.tmp.name), [('{"facts": [', USAGE, "FinishReason.MAX_TOKENS")])

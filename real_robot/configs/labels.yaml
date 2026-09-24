@@ -1,0 +1,97 @@
+version: so101-labels-v1
+
+# Unverified scale assumptions, not calibrated measurements. Edit after measuring the props.
+reference_sizes:
+  - "cube edge: about 3 cm"
+  - "banana: about 18 cm long and 4 cm thick"
+  - "pot: about 16 cm across the opening and 9 cm tall"
+  - "lid: about 18 cm across; its handle stands about 3 cm high"
+  - "cup: about 8 cm across the opening and 9 cm tall"
+  - "gripper jaws: about 7 cm long, opening to about 7 cm"
+
+# [lower_cm, upper_cm) between reference points. planar-distance is unsigned;
+# height-offset is src minus dst.
+spatial:
+  planar-distance:
+    ee-object:
+      very-near: [0, 2]
+      near: [2, 6]
+      medium: [6, 15]
+      far: [15, 30]
+      very-far: [30, 1000]
+    object-object:
+      very-near: [0, 3]
+      near: [3, 8]
+      medium: [8, 20]
+      far: [20, 35]
+      very-far: [35, 1000]
+  height-offset:
+    ee-object:
+      far-below: [-1000, -10]
+      below: [-10, -2]
+      level: [-2, 2]
+      above: [2, 10]
+      far-above: [10, 1000]
+    object-object:
+      far-below: [-1000, -6]
+      below: [-6, -1.5]
+      level: [-1.5, 1.5]
+      above: [1.5, 6]
+      far-above: [6, 1000]
+
+# Signed change over the temporal window, in cm.
+temporal:
+  spatial:
+    decrease-fast: [-1000, -2]
+    decrease-slow: [-2, -0.5]
+    stable: [-0.5, 0.5]
+    increase-slow: [0.5, 2]
+    increase-fast: [2, 1000]
+  compatibility: >-
+    The value is the degree of mismatch, so `decrease-*` means the fit is improving and `increase-*` that it
+    is getting worse: `-fast` when it changes by a whole label step or more within the window, `-slow` for a
+    visible but smaller change, `stable` otherwise.
+
+physical:
+  contact: >-
+    `holds` when the two entities directly touch. A held object touching another entity does not by itself
+    mean the gripper touches that entity.
+  grasp: >-
+    `holds` when the jaws are closed on the object and hold it, so it would move with the gripper. Jaws
+    around the object, or touching it without closing on it, are `not-holds`. The wrist camera usually
+    decides.
+  support: >-
+    one entity rests on the other and is borne by it: a cube resting on the other cube, the lid seated on
+    the pot rim with the pot bearing it, an object lying on the table. Grasp and support are independent;
+    a gripped object can still rest on a supporting surface before lift-off or after placement.
+  contain: >-
+    an object is at least partly below the rim, inside the container. Above the opening, or resting on the
+    rim, is `not-holds`.
+
+compatibility:
+  grasp-compatibility:
+    match: the jaws are open, around the object and at grasp height, so closing them would grasp it; or they already hold it
+    partial-match: close to such a pose, but offset, too high, or not open enough
+    poor-match: far from a pose from which the object could be grasped
+  contact-compatibility:
+    match: the two entities touch, or their nearest surfaces are within about 1 cm
+    partial-match: their nearest surfaces are a few cm apart
+    poor-match: their nearest surfaces are far apart; motion direction alone does not change this absolute label
+  support-compatibility:
+    match: the object rests on the supporter, or is held centred directly over it within about 1 cm
+    partial-match: over the supporter but off-centre or several cm above it
+    poor-match: not over the supporter
+  contain-compatibility:
+    match: the object is inside the container, or held over the opening, aligned and at rim height
+    partial-match: over the opening but misaligned or well above the rim
+    poor-match: not over the opening
+
+unobserved: >-
+  Use `unobserved` only where the fact's listed vocabulary permits it and neither camera shows enough to
+  decide. For other facts, or unknown temporal change, use JSON `null` rather than guessing.
+
+general:
+  - "When the cameras disagree, trust the view that shows the contact or gap most directly: the wrist camera for the gripper and what it holds, the top camera for positions on the table."
+  - "At a bin boundary, choose the bin the value is in on that frame; do not smooth across frames."
+  - "Motion blur or a brief occlusion does not change a label; carry it through unless the frames after show it changed."
+  - "Failed and repeated attempts are labelled as they happen: a grasp that slips ends on the frame the object leaves the jaws."

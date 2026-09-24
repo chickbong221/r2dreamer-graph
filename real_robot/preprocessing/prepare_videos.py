@@ -1,22 +1,16 @@
-"""Decode the source videos and write the copies Gemini reads.
+"""Decode each episode's frames and write the copies Gemini reads.
 
     python -m real_robot.preprocessing.prepare_videos --episodes pilot
 
-The LeRobot videos are AV1. Each camera is decoded with PyAV, checked
-frame-for-frame against the episode's recorded rows, and re-encoded as H.264
-with the camera name, the frame number and the timestamp burned into every
-frame. Gemini reads the frame number off the image; that, not its own notion
-of time, is what makes a frame-exact interval boundary possible.
+The LeRobot videos are AV1, many episodes per file. Each camera's segment is
+decoded with PyAV, checked frame for frame against the episode's length, and
+every ``stride``-th frame is re-encoded as H.264 at ``videos.fps`` with the
+camera name, the recorded frame number and the time burned in. Gemini reads
+the frame number off the image, so its intervals come back in recorded frames.
 
-The decoding helpers here are also what tracking, geometry and the dataset
-build use to read source frames, so every stage agrees on frame indexing.
-
-``index.json`` records, per camera, the digest of the source video a copy was
-made from and the digest of the copy itself. A copy is reused only while the
-video settings, the episode's rows and frame rate, the source video and the
-copy on disk all still match that record; otherwise it is made again.
-:func:`prepared_status` answers the same question without making anything,
-for stages that only need to know whether an annotation's videos are current.
+``index.json`` records, per camera, the source file's digest and span and the
+copy's digest. A copy is reused only while all of those and the video settings
+still match; otherwise it is made again.
 """
 
 from __future__ import annotations
@@ -24,7 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 from fractions import Fraction
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -43,20 +37,6 @@ from ..common import (
 # --------------------------------------------------------------------------- #
 # Video I/O
 # --------------------------------------------------------------------------- #
-def video_metadata(path: str) -> Dict[str, object]:
-    import av
-
-    with av.open(path) as container:
-        stream = container.streams.video[0]
-        return {
-            "codec": stream.codec_context.name,
-            "width": int(stream.codec_context.width),
-            "height": int(stream.codec_context.height),
-            "frames_declared": int(stream.frames or 0),
-            "average_rate": float(stream.average_rate) if stream.average_rate else None,
-        }
-
-
 def iter_frames(path: str) -> Iterator[Tuple[int, Optional[float], np.ndarray]]:
     """``(index, pts_seconds, rgb uint8 HxWx3)`` in decode order."""
     import av
@@ -69,26 +49,33 @@ def iter_frames(path: str) -> Iterator[Tuple[int, Optional[float], np.ndarray]]:
             yield index, seconds, frame.to_ndarray(format="rgb24")
 
 
-def read_frames(path: str, indices: Optional[Sequence[int]] = None) -> np.ndarray:
-    """All frames, or the requested subset in the requested order."""
-    if indices is None:
-        return np.stack([rgb for _, _, rgb in iter_frames(path)])
-    wanted = {int(i) for i in indices}
-    found: Dict[int, np.ndarray] = {}
-    last = max(wanted) if wanted else -1
-    for index, _, rgb in iter_frames(path):
-        if index in wanted:
-            found[index] = rgb
-        if index >= last:
-            break
-    missing = sorted(wanted - set(found))
-    if missing:
-        raise IndexError(f"{path}: frames {missing[:10]} are beyond the end of the video")
-    return np.stack([found[int(i)] for i in indices])
+def iter_segment(path: str, start_s: float, end_s: float, count: int, fps: float
+                 ) -> Iterator[Tuple[int, np.ndarray]]:
+    """``(frame_index, rgb)`` for the ``count`` frames in ``[start_s, end_s)`` of a concatenated video."""
+    import av
 
-
-def frame_times(path: str) -> List[Optional[float]]:
-    return [seconds for _, seconds, _ in iter_frames(path)]
+    half = 0.5 / float(fps)
+    expected = 0
+    with av.open(path) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        container.seek(max(0, int((start_s - 1.0) / stream.time_base)), stream=stream, backward=True)
+        for frame in container.decode(stream):
+            if frame.pts is None:
+                continue
+            seconds = float(frame.pts * stream.time_base)
+            if seconds < start_s - half:
+                continue
+            if seconds >= end_s - half or expected >= count:
+                break
+            index = int(round((seconds - start_s) * fps))
+            if index != expected:
+                raise ValueError(f"{path}: expected frame {expected} of the segment at {start_s:.3f}s, "
+                                 f"decoded one at {seconds:.3f}s (frame {index})")
+            yield expected, frame.to_ndarray(format="rgb24")
+            expected += 1
+    if expected != count:
+        raise ValueError(f"{path}: {expected} frames in [{start_s:.3f}s, {end_s:.3f}s), the episode has {count}")
 
 
 def write_video(frames: Iterable[np.ndarray], path: str, fps: float, codec: str = "libx264",
@@ -182,22 +169,35 @@ def trim_video(source: str, out: str, start_frame: int, end_frame: int, fps: flo
 # --------------------------------------------------------------------------- #
 # Stage
 # --------------------------------------------------------------------------- #
+def stride_for(source_fps: float, video_cfg: Mapping[str, Any]) -> int:
+    return max(1, int(round(float(source_fps) / float(video_cfg["fps"]))))
+
+
 def prepared_video_path(dataset_cfg, episode: int, camera: str) -> str:
     return os.path.join(repo_path(dataset_cfg["paths"]["videos"]), episode_name(episode), f"{camera}.mp4")
-
-
-def video_settings(video_cfg: Mapping[str, Any]) -> Dict[str, Any]:
-    return {"overlay": bool(video_cfg["overlay"]), "codec": video_cfg["codec"],
-            "crf": int(video_cfg["crf"]), "font_size": int(video_cfg["font_size"])}
 
 
 def index_path(dataset_cfg, episode: int) -> str:
     return os.path.join(repo_path(dataset_cfg["paths"]["videos"]), episode_name(episode), "index.json")
 
 
+def video_settings(video_cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    return {"sampling_version": 2, "fps": float(video_cfg["fps"]), "overlay": bool(video_cfg["overlay"]), "codec": video_cfg["codec"],
+            "crf": int(video_cfg["crf"]), "font_size": int(video_cfg["font_size"])}
+
+
+def source_identity(source, episode: int, camera: str) -> Dict[str, Any]:
+    from .artifacts import source_video_digest
+
+    path = source.video_path(episode, camera)
+    return {"file": os.path.relpath(path, source.root).replace(os.sep, "/"),
+            "sha256": source_video_digest(source, episode, camera),
+            "span": list(source.video_span(episode, camera))}
+
+
 def prepared_status(source, episode: int, video_cfg: Mapping[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     """``(index, "current")`` when every prepared copy is current, else ``(None, why not)``. Makes nothing."""
-    from .artifacts import file_digest, source_video_digest
+    from .artifacts import file_digest
 
     dataset_cfg = source.dataset_cfg
     path = index_path(dataset_cfg, episode)
@@ -206,16 +206,15 @@ def prepared_status(source, episode: int, video_cfg: Mapping[str, Any]) -> Tuple
     record = read_json(path)
     if record.get("settings_hash") != stable_hash(video_settings(video_cfg)):
         return None, "the video settings changed"
-    if int(record.get("rows", -1)) != int(source.lengths()[episode]) or float(record.get("fps", -1)) != source.fps():
-        return None, "the episode's rows or frame rate changed"
+    if int(record.get("rows", -1)) != int(source.lengths()[episode]) or \
+            float(record.get("source_fps", -1)) != source.fps():
+        return None, "the episode's length or frame rate changed"
     cameras = record.get("cameras") or {}
-    for camera in dataset_cfg["source"]["cameras"]:
+    for camera in source.cameras():
         entry = cameras.get(camera)
         if entry is None:
             return None, f"no {camera} copy was made"
-        if entry.get("source_sha256") is None:
-            return None, f"the {camera} copy does not record its source video"
-        if entry["source_sha256"] != source_video_digest(source, episode, camera):
+        if entry.get("source") != source_identity(source, episode, camera):
             return None, f"the {camera} source video changed"
         digest = file_digest(prepared_video_path(dataset_cfg, episode, camera))
         if digest is None:
@@ -225,48 +224,49 @@ def prepared_status(source, episode: int, video_cfg: Mapping[str, Any]) -> Tuple
     return record, "current"
 
 
-def prepare_episode(source, episode: int, video_cfg, force: bool = False) -> Dict[str, object]:
-    from .artifacts import file_digest, source_video_digest
+def prepare_episode(source, episode: int, video_cfg: Mapping[str, Any], force: bool = False) -> Dict[str, Any]:
+    from .artifacts import file_digest
 
     dataset_cfg = source.dataset_cfg
     fps = source.fps()
     rows = source.lengths()[episode]
     settings = video_settings(video_cfg)
+    stride = stride_for(fps, video_cfg)
     if not force:
         existing, reason = prepared_status(source, episode, video_cfg)
         if existing is not None:
             return existing
         if os.path.isfile(index_path(dataset_cfg, episode)):
             print(f"[videos] episode {episode}: making the copies again ({reason})", flush=True)
-    record: Dict[str, object] = {"episode_index": episode, "rows": rows, "fps": fps,
-                                 "settings": settings, "settings_hash": stable_hash(settings),
-                                 "created": utc_now(), "cameras": {}}
-    for camera in dataset_cfg["source"]["cameras"]:
-        src = source.video_path(episode, camera)
+    record: Dict[str, Any] = {"episode_index": episode, "rows": rows, "source_fps": fps, "stride": stride,
+                              "fps": fps / stride, "shown": len(range(0, rows, stride)) + int((rows - 1) % stride != 0), "settings": settings,
+                              "settings_hash": stable_hash(settings), "created": utc_now(), "cameras": {}}
+    for camera in source.cameras():
         out = prepared_video_path(dataset_cfg, episode, camera)
-        total = rows
 
-        def labelled():
-            for index, _, rgb in iter_frames(src):
-                yield overlay_text(rgb, frame_label(camera, index, total, fps), settings["font_size"]) \
+        def shown():
+            for index, rgb in source.frames(episode, camera):
+                if index % stride and index != rows - 1:
+                    continue
+                yield overlay_text(rgb, frame_label(camera, index, rows, fps), settings["font_size"]) \
                     if settings["overlay"] else rgb
 
-        written = write_video(labelled(), out, fps, settings["codec"], settings["crf"])
-        if written != rows:
-            raise RuntimeError(
-                f"episode {episode} {camera}: decoded {written} frames but the episode has {rows} "
-                "rows; video and table do not align"
-            )
-        record["cameras"][camera] = {"path": os.path.relpath(out, repo_path("")).replace(os.sep, "/"),
-                                     "frames": written, "source": os.path.basename(src),
-                                     "source_sha256": source_video_digest(source, episode, camera),
+        written = write_video(shown(), out, fps / stride, settings["codec"], settings["crf"])
+        if written != record["shown"]:
+            raise RuntimeError(f"episode {episode} {camera}: wrote {written} frames, expected {record['shown']}")
+        try:
+            stored_path = os.path.relpath(out, repo_path(""))
+        except ValueError:  # Windows output and repository on different drives.
+            stored_path = os.path.abspath(out)
+        record["cameras"][camera] = {"path": stored_path.replace(os.sep, "/"),
+                                     "frames": written, "source": source_identity(source, episode, camera),
                                      "sha256": file_digest(out)}
     write_json(index_path(dataset_cfg, episode), record)
     return record
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    from ..data.episode_dataset import RawEpisodeSource
+    from ..data.source import LeRobotSource
 
     parser = argparse.ArgumentParser(description="Write frame-labelled H.264 copies for Gemini.")
     parser.add_argument("--episodes", default="pilot")
@@ -274,12 +274,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     add_config_arguments(parser)
     args = parser.parse_args(argv)
     configs = load_configs(["dataset", "annotation", "graph"], args.overrides)
-    source = RawEpisodeSource(configs)
-    episodes = source.select(args.episodes)
-    for episode in episodes:
+    source = LeRobotSource(configs)
+    minimum = int(configs["annotation"]["annotation"]["min_frames"])
+    for episode in source.select(args.episodes):
+        if source.lengths()[episode] < minimum:
+            print(f"[videos] episode {episode}: skipped, {source.lengths()[episode]} frames < {minimum}", flush=True)
+            continue
         record = prepare_episode(source, episode, configs["annotation"]["videos"], force=args.force)
-        print(f"[videos] episode {episode}: " + ", ".join(
-            f"{cam}={info['frames']}" for cam, info in record["cameras"].items()), flush=True)
+        print(f"[videos] episode {episode}: {record['shown']} of {record['rows']} frames per camera at "
+              f"{record['fps']:g} fps", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,160 +1,125 @@
-"""Orientation, label mirroring, vocabulary and packing against the repository's contract."""
+"""The shipped graph configuration, the vocabulary and the packed rows, against the repository's packer."""
 
 from __future__ import annotations
 
-import copy
 import unittest
 
 import numpy as np
 
-from scenegraph.adapters.graph_pack import GRAPH_KEYS
-from scenegraph.adapters.graph_vocab import build_absolute_vocab, build_relation_vocab, build_temporal_vocab
-from scenegraph.core import schedule as repo_schedule
-from scenegraph.core.relation_rules import TEMPORAL_RELATIONS
+from scenegraph.adapters.graph_vocab import EE_TOKEN, PAD_TOKEN
 
-from ..common import load_config
-from ..graphs.pack import build_frame_graph, node_rows, pack_episode, pack_frame
-from ..graphs.schema import CHANGE_MIRROR, HEIGHT_MIRROR, GraphSpec, SpecError
+from ..graphs.pack import pack_episode
+from ..graphs.schema import GraphConfig, SpecError
+from ..graphs.validate import build_annotation
 from ..graphs.vocabulary import build_vocab, vocab_sizes
-from . import synthetic as syn
-
-
-class Orientation(unittest.TestCase):
-    def setUp(self):
-        self.spec = syn.graph_spec()
-
-    def test_end_effector_facts_start_at_the_end_effector(self):
-        for fact in self.spec.facts:
-            if "ee" in (fact.src, fact.dst):
-                self.assertEqual(fact.src, "ee", fact)
-
-    def test_object_pairs_follow_key_order(self):
-        for fact in self.spec.facts:
-            if fact.src != "ee":
-                self.assertLess(self.spec.entity(fact.src).key, self.spec.entity(fact.dst).key, fact)
-        self.assertIsNotNone(self.spec.fact_index("banana", "pot", "contain"))
-        self.assertIsNone(self.spec.fact_index("pot", "banana", "contain"))
-
-    def test_height_offset_mirrors_with_the_swap(self):
-        src, dst, label, change = self.spec.canonicalize("height-offset", "pot", "banana", "above", "increase-fast")
-        self.assertEqual((src, dst, label, change), ("banana", "pot", "below", "decrease-fast"))
-
-    def test_directional_labels_mirror_with_the_swap(self):
-        _, _, label, _ = self.spec.canonicalize("contain", "pot", "banana", "src-holds")
-        self.assertEqual(label, "dst-holds")
-        _, _, label, _ = self.spec.canonicalize("support", "pot", "lid", "not-holds")
-        self.assertEqual(label, "not-holds")
-
-    def test_symmetric_labels_do_not_change(self):
-        _, _, label, change = self.spec.canonicalize("planar-distance", "pot", "banana", "near", "decrease-slow")
-        self.assertEqual((label, change), ("near", "decrease-slow"))
-
-    def test_mirror_tables_agree_with_the_schedule_compiler(self):
-        self.assertEqual(HEIGHT_MIRROR, repo_schedule._MIRROR)
-        self.assertEqual({k: CHANGE_MIRROR[CHANGE_MIRROR[k]] for k in CHANGE_MIRROR}, {k: k for k in CHANGE_MIRROR})
+from . import synthetic
 
 
 class Configuration(unittest.TestCase):
-    def config(self):
-        return copy.deepcopy(load_config("graph"))
+    def test_every_task_loads_with_the_end_effector_first(self):
+        config = synthetic.graph_config()
+        self.assertEqual(set(config.tasks), set(synthetic.TASKS))
+        for spec in config.tasks.values():
+            self.assertEqual(spec.entities[0].id, "ee")
+            self.assertLessEqual(len(spec.entities), config.n_max)
+            self.assertLessEqual(len(spec.facts), config.e_max)
 
-    def test_grasp_between_objects_is_refused(self):
-        cfg = self.config()
-        cfg["facts"].append({"pair": ["banana", "pot"], "relations": ["grasp"]})
-        with self.assertRaises(SpecError):
-            GraphSpec.from_config(cfg)
+    def test_dataset_task_strings_map_to_tasks(self):
+        config = synthetic.graph_config()
+        self.assertEqual(config.task_for("Pick blue cube and place on red cube"), "blue_on_red")
+        self.assertEqual(config.task_for("Pick all cubes and place into cup "), "cubes_in_cup")
+        with self.assertRaises(KeyError):
+            config.task_for("stack the plates")
 
-    def test_duplicate_facts_are_refused_in_either_orientation(self):
-        cfg = self.config()
-        cfg["facts"].append({"pair": ["pot", "banana"], "relations": ["contain"]})
+    def test_a_task_naming_an_unknown_entity_is_refused(self):
+        cfg = synthetic.configs()["graph"]
+        cfg["tasks"]["blue_on_red"]["entities"].append("plate")
         with self.assertRaises(SpecError):
-            GraphSpec.from_config(cfg)
+            GraphConfig.from_config(cfg)
 
-    def test_too_many_facts_for_the_edge_budget(self):
-        cfg = self.config()
-        cfg["e_max"] = 5
-        with self.assertRaises(SpecError):
-            GraphSpec.from_config(cfg)
+    def test_object_pairs_are_stored_in_key_order_with_mirrored_labels(self):
+        spec = synthetic.spec("cubes_in_cup")
+        self.assertIsNotNone(spec.fact_index("cup", "red_cube", "contain"))
+        self.assertIsNone(spec.fact_index("red_cube", "cup", "contain"))
+        self.assertEqual(spec.canonicalize("contain", "red_cube", "cup", "dst-holds"),
+                         ("cup", "red_cube", "src-holds", None))
+        self.assertEqual(spec.canonicalize("height-offset", "red_cube", "cup", "above", "increase-fast"),
+                         ("cup", "red_cube", "below", "decrease-fast"))
 
 
 class Vocabulary(unittest.TestCase):
-    def test_label_vocabularies_are_the_repository_tables(self):
-        vocab = build_vocab(syn.graph_spec())
-        self.assertEqual(vocab.relation.token_to_id, build_relation_vocab().token_to_id)
-        self.assertEqual(vocab.absolute.token_to_id, build_absolute_vocab().token_to_id)
-        self.assertEqual(vocab.temporal.token_to_id, build_temporal_vocab().token_to_id)
-
-    def test_sizes_match_what_the_decoder_masks_expect(self):
-        sizes = vocab_sizes(build_vocab(syn.graph_spec()))
-        base = load_config("configs/model/_base_.yaml")["graph"]
-        self.assertEqual((sizes["n_rel"], sizes["n_abs"], sizes["n_temp"]), (base["n_rel"], base["n_abs"], base["n_temp"]))
-        self.assertEqual(sizes["entity_vocab"], 2 + len(syn.graph_spec().object_ids))
-
-    def test_end_effector_has_the_reserved_id(self):
-        vocab = build_vocab(syn.graph_spec())
-        self.assertEqual(vocab.entity.pad_id, 0)
-        self.assertEqual(vocab.entity.ee_id, 1)
+    def test_entity_ids_are_shared_by_every_task(self):
+        config = synthetic.graph_config()
+        vocab = build_vocab(config)
+        table = vocab.entity.token_to_id
+        self.assertEqual(table[PAD_TOKEN], 0)
+        self.assertEqual(table[EE_TOKEN], 1)
+        objects = [e.key for e in config.entities if e.type == "object"]
+        self.assertEqual([table[key] for key in objects], list(range(2, 2 + len(objects))))
+        self.assertEqual(vocab_sizes(vocab)["entity_vocab"], 2 + len(objects))
 
 
 class Packing(unittest.TestCase):
-    def setUp(self):
-        self.spec = syn.graph_spec()
-        self.vocab = build_vocab(self.spec)
-        self.annotation = syn.annotation(self.spec)
-        self.assertTrue(self.annotation.valid, [i.message for i in self.annotation.issues])
-        n, e, c = self.annotation.n_frames, len(self.spec.entities), len(self.spec.cameras)
-        self.boxes = np.tile(np.array([0.1, 0.4, 0.2, 0.5], dtype=np.float32), (n, e, c, 1))
-        self.visible = np.ones((n, e, c), dtype=bool)
-        self.centroids = np.random.default_rng(0).normal(size=(n, e, 3)).astype(np.float32)
-        self.known = np.ones((n, e), dtype=bool)
+    def pack(self, task: str, n: int = 90):
+        spec = synthetic.spec(task)
+        annotation = build_annotation(spec, episode_index=0, n_frames=n, fps=30.0,
+                                      answer=synthetic.complete_answer(spec, n), settings=synthetic.settings())
+        self.assertTrue(annotation.valid, [i.message for i in annotation.issues])
+        vocab = build_vocab(synthetic.graph_config())
+        arrays, valid = pack_episode(spec, vocab, annotation)
+        return spec, vocab, annotation, arrays, valid
 
-    def test_rows_and_dtypes_follow_the_packer(self):
-        arrays, valid = pack_episode(self.spec, self.vocab, self.annotation, self.boxes, self.visible,
-                                     self.centroids, self.known)
-        self.assertTrue(valid.all())
-        self.assertEqual(set(arrays), set(GRAPH_KEYS))
-        self.assertEqual(arrays["graph_node_ent"].dtype, np.uint8)
-        self.assertEqual(arrays["graph_node_bbox"].shape[1:], (self.spec.n_max, len(self.spec.cameras), 4))
-        self.assertTrue((arrays["graph_node_ent"][:, 0] == self.vocab.entity.ee_id).all())
-        self.assertTrue((arrays["graph_node_target"][:, 1] == 1).all())
-        self.assertEqual(int(arrays["graph_node_target"].sum()), self.annotation.n_frames)
+    def test_rows_are_the_repository_contract(self):
+        for task in synthetic.TASKS:
+            spec, vocab, annotation, arrays, valid = self.pack(task)
+            n = annotation.n_frames
+            self.assertEqual(arrays["graph_node_ent"].shape, (n, spec.n_max))
+            self.assertEqual(arrays["graph_node_bbox"].shape, (n, spec.n_max, len(spec.cameras), 4))
+            self.assertEqual(arrays["graph_edge_rel"].shape, (n, spec.e_max))
+            self.assertTrue(valid.all())
+            self.assertTrue((arrays["graph_node_ent"][:, 0] == vocab.entity.ee_id).all())
+            for t in (0, n - 1):
+                target = spec.entity(annotation.active_target[t])
+                self.assertEqual(arrays["graph_node_ent"][t, 1], vocab.entity.encode(target.key))
+                self.assertEqual(arrays["graph_node_target"][t].tolist().index(1), 1)
+            self.assertEqual(int((arrays["graph_node_ent"][0] > 0).sum()), len(spec.entities))
+            self.assertEqual(int((arrays["graph_edge_rel"][0] > 0).sum()), len(spec.facts))
+            self.assertFalse(arrays["graph_node_centroid"].any())
 
-    def test_switching_target_keeps_every_identity(self):
-        arrays, _ = pack_episode(self.spec, self.vocab, self.annotation, self.boxes, self.visible,
-                                 self.centroids, self.known)
-        before = node_rows(self.spec, {k: v[0] for k, v in arrays.items()}, self.vocab)
-        after = node_rows(self.spec, {k: v[-1] for k, v in arrays.items()}, self.vocab)
-        self.assertEqual(before["banana"], 1)
-        self.assertEqual(after["lid"], 1)
-        self.assertEqual(set(before), set(after))
-        # The banana's facts survive the switch with its entity id, wherever its row is.
-        index = self.spec.facts.index(next(f for f in self.spec.facts if f.relation == "grasp" and f.dst == "banana"))
-        self.assertIsNotNone(self.annotation.absolute[index][-1])
+    def test_a_target_switch_moves_the_new_target_to_row_one(self):
+        spec, vocab, annotation, arrays, _ = self.pack("banana_pot_lid")
+        lid, banana = vocab.entity.encode("actor:lid"), vocab.entity.encode("actor:banana")
+        self.assertEqual(arrays["graph_node_ent"][0, 1], banana)
+        self.assertEqual(arrays["graph_node_ent"][-1, 1], lid)
+        self.assertIn(banana, arrays["graph_node_ent"][-1, 2:].tolist())
 
-    def test_no_temporal_label_before_the_window(self):
-        arrays, _ = pack_episode(self.spec, self.vocab, self.annotation, self.boxes, self.visible,
-                                 self.centroids, self.known)
-        K = self.spec.temporal_window
-        self.assertTrue((arrays["graph_edge_temp"][:K] == 0).all())
-        temporal_facts = sum(f.relation in TEMPORAL_RELATIONS for f in self.spec.facts)
-        self.assertEqual(int((arrays["graph_edge_temp"][K] > 0).sum()), temporal_facts)
+    def test_edges_decode_to_the_annotated_labels(self):
+        spec, vocab, annotation, arrays, _ = self.pack("blue_on_red")
+        t = 50
+        rows = {int(ent): row for row, ent in enumerate(arrays["graph_node_ent"][t]) if ent}
+        relation = {i: name for name, i in vocab.relation.token_to_id.items()}
+        absolute = {i: name for name, i in vocab.absolute.token_to_id.items()}
+        temporal = {i: name for name, i in vocab.temporal.token_to_id.items()}
+        decoded = {}
+        for e in range(spec.e_max):
+            if not arrays["graph_edge_rel"][t, e]:
+                continue
+            decoded[(int(arrays["graph_edge_src"][t, e]), int(arrays["graph_edge_dst"][t, e]),
+                     relation[int(arrays["graph_edge_rel"][t, e])])] = (
+                absolute[int(arrays["graph_edge_abs"][t, e])], temporal.get(int(arrays["graph_edge_temp"][t, e])))
+        for index, fact in enumerate(spec.facts):
+            src = rows[vocab.entity.encode(spec.entity(fact.src).key)]
+            dst = rows[vocab.entity.encode(spec.entity(fact.dst).key)]
+            label, change = decoded[(src, dst, fact.relation)]
+            self.assertEqual(label, annotation.absolute[index][t])
+            self.assertEqual(change, annotation.temporal[index][t] if fact.temporal else None)
 
-    def test_invisible_camera_leaves_an_empty_box(self):
-        visible = self.visible.copy()
-        visible[:, :, 1] = False
-        arrays, _ = pack_episode(self.spec, self.vocab, self.annotation, self.boxes, visible,
-                                 self.centroids, self.known)
-        self.assertTrue((arrays["graph_node_bbox"][:, :, 1] == 0).all())
-        self.assertTrue((arrays["graph_node_bbox"][:, :5, 0, 1] > 0).all())
-
-    def test_overflowing_edges_raise_rather_than_truncate(self):
-        cfg = copy.deepcopy(load_config("graph"))
-        spec = GraphSpec.from_config(cfg)
-        spec.e_max = 10
-        graph = build_frame_graph(spec, self.annotation, 0, self.boxes[0], self.visible[0],
-                                  self.centroids[0], self.known[0])
-        with self.assertRaises(RuntimeError):
-            pack_frame(spec, self.vocab, graph)
+    def test_boxes_are_normalised_x0_x1_y0_y1(self):
+        spec, vocab, annotation, arrays, _ = self.pack("blue_on_red")
+        box = arrays["graph_node_bbox"][0, 0, 0].astype(np.float32)
+        expected = synthetic.gemini_box(0, 0)
+        np.testing.assert_allclose(box, [expected[1] / 1000, expected[3] / 1000, expected[0] / 1000,
+                                         expected[2] / 1000], atol=1e-3)
 
 
 if __name__ == "__main__":

@@ -1,68 +1,104 @@
-# The kitchen graph contract: which vertices exist, which facts each pair
-# carries, and which image points are localised for geometry. Changing any of
-# it changes the cache identity of everything downstream.
+version: so101-graph-v1
 
-version: kitchen-graph-v1
-
-# Frames between the two values a temporal label compares: v_t - v_{t-K}.
-# 5 frames is 0.33 s at 15 Hz (the simulator used 5 frames at 20 Hz).
-temporal_window_frames: 5
-
+# v_t - v_{t-K} for temporal labels: 10 frames is 0.33 s at 30 Hz.
+temporal_window_frames: 10
 n_max: 8
 e_max: 168
+cameras: [top, wrist]
 
-# Camera axis of graph_node_bbox. Must name the cameras in dataset.yaml.
-cameras: [high, wrist_right]
-
-# Row order among the unreserved rows follows this list. Row 0 is always the
-# end effector and row 1 the active target (banana, then lid).
+# Entity vocabulary, in id order after padding and the end effector.
 entities:
-  - {id: ee, key: "<ee>", name: right gripper, type: ee}
-  - {id: banana, key: "actor:banana", name: banana, type: object}
-  - {id: pot, key: "actor:pot", name: pot, type: object}
-  - {id: lid, key: "actor:lid", name: lid, type: object}
-  - {id: table, key: "actor:table", name: table, type: object}
+  - {id: ee, key: "<ee>", name: gripper, type: ee,
+     description: "the robot's teal two-jaw gripper (one fixed jaw, one moving jaw)",
+     reference: "the point midway between the two jaw tips"}
+  - {id: banana, key: "actor:banana", name: banana,
+     description: "a yellow banana", reference: "the middle of the banana"}
+  - {id: pot, key: "actor:pot", name: pot,
+     description: "a stainless-steel cooking pot", reference: "the centre of the pot's opening, at rim height"}
+  - {id: lid, key: "actor:lid", name: lid,
+     description: "the pot's round metal lid with a black handle on top", reference: "the centre of the lid"}
+  - {id: red_cube, key: "actor:red_cube", name: red cube,
+     description: "a small red cube", reference: "the centre of the cube"}
+  - {id: blue_cube, key: "actor:blue_cube", name: blue cube,
+     description: "a small blue cube", reference: "the centre of the cube"}
+  - {id: cup, key: "actor:cup", name: cup,
+     description: "a light-blue translucent plastic mug with a handle", reference: "the centre of the cup's opening, at rim height"}
+  - {id: table, key: "actor:table", name: table,
+     description: "the black mat and the tabletop under it", reference: "the tabletop directly below the other entity"}
 
-targets: [banana, lid]
+tasks:
+  banana_pot_lid:
+    dataset_tasks: ["Pick up the banana and place it in the bot, then close the lid"]
+    instruction: Pick up the banana and place it in the pot, then put the lid on the pot.
+    entities: [ee, banana, pot, lid, table]
+    targets: [banana, lid]
+    target_rule: >-
+      `banana` until the banana rests inside the pot and the gripper has let go of it, and `lid` from then on.
+      If the banana leaves the pot again before the lid is on, it is `banana` again until the banana is back
+      inside and released.
+    facts:
+      - pair: [ee, banana]
+        relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+      - pair: [ee, lid]
+        relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+      - pair: [ee, pot]
+        relations: [contact, planar-distance, height-offset]
+      - pair: [banana, pot]
+        relations: [contact, contain, planar-distance, height-offset, contain-compatibility]
+      - pair: [lid, pot]
+        relations: [contact, support, planar-distance, height-offset, support-compatibility]
+      - pair: [banana, lid]
+        relations: [contact]
+      - pair: [banana, table]
+        relations: [support]
+      - pair: [lid, table]
+        relations: [support]
+      - pair: [pot, table]
+        relations: [support]
 
-# Unordered pairs. The code stores each fact in the repository's canonical
-# order (end effector first, object pairs sorted by key) and mirrors
-# direction-carrying labels when it has to swap.
-facts:
-  - pair: [ee, banana]
-    relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
-  - pair: [ee, lid]
-    relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
-  - pair: [ee, pot]
-    relations: [contact, planar-distance, height-offset]
-  - pair: [banana, pot]
-    relations: [contact, contain, planar-distance, height-offset, contain-compatibility]
-  - pair: [lid, pot]
-    relations: [contact, support, planar-distance, height-offset, support-compatibility]
-  - pair: [banana, lid]
-    relations: [contact]
-  - pair: [banana, table]
-    relations: [support]
-  - pair: [lid, table]
-    relations: [support]
-  - pair: [pot, table]
-    relations: [support]
+  blue_on_red:
+    dataset_tasks: ["Pick blue cube and place on red cube"]
+    instruction: Pick up the blue cube and place it on top of the red cube.
+    entities: [ee, red_cube, blue_cube, table]
+    targets: [blue_cube]
+    target_rule: "`blue_cube` on every frame."
+    facts:
+      - pair: [ee, blue_cube]
+        relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+      - pair: [ee, red_cube]
+        relations: [contact, planar-distance, height-offset]
+      - pair: [blue_cube, red_cube]
+        relations: [contact, support, planar-distance, height-offset, support-compatibility]
+      - pair: [blue_cube, table]
+        relations: [support]
+      - pair: [red_cube, table]
+        relations: [support]
 
-# Named image points Gemini places at initialisation and correction frames
-# and tracking propagates. Geometry reads them from the high camera. Every
-# point lies on a physical surface: depth is read where the point is, so the
-# gripper's closing point is not annotated directly (between open fingertips
-# there is table or object) but derived as the midpoint of the two lifted
-# fingertips.
-points:
-  ee: [fingertip_1, fingertip_2]
-  banana: [center, grasp_region]
-  pot: [rim_left, rim_right, rim_near, rim_far]
-  lid: [center, handle]
-  table: [surface_1, surface_2, surface_3, surface_4]
-
-# Fixed centroid normalisation for GraphEncoder, in the declared scene frame
-# (metres). Fixed, not fitted to the batch: a stationary pot must encode
-# identically in every episode.
-centroid_origin: [0.0, 0.0, 0.0]
-centroid_scale: 1.0
+  cubes_in_cup:
+    dataset_tasks: ["Pick all cubes and place into cup"]
+    instruction: Pick up each cube and place it into the cup.
+    entities: [ee, red_cube, blue_cube, cup, table]
+    targets: [red_cube, blue_cube]
+    target_rule: >-
+      the cube the robot is reaching for, holding or placing. It switches to the other cube once the first one
+      is inside the cup and released; once both are inside, it stays on the last one. A cube that falls out
+      of the cup before the task is done becomes the target again.
+    facts:
+      - pair: [ee, red_cube]
+        relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+      - pair: [ee, blue_cube]
+        relations: [contact, grasp, planar-distance, height-offset, grasp-compatibility, contact-compatibility]
+      - pair: [ee, cup]
+        relations: [contact, planar-distance, height-offset]
+      - pair: [red_cube, cup]
+        relations: [contact, contain, planar-distance, height-offset, contain-compatibility]
+      - pair: [blue_cube, cup]
+        relations: [contact, contain, planar-distance, height-offset, contain-compatibility]
+      - pair: [red_cube, blue_cube]
+        relations: [contact]
+      - pair: [red_cube, table]
+        relations: [support]
+      - pair: [blue_cube, table]
+        relations: [support]
+      - pair: [cup, table]
+        relations: [support]

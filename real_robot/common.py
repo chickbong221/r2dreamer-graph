@@ -25,14 +25,8 @@ PROMPT_DIR = os.path.join(PACKAGE_DIR, "prompts")
 if REPO_ROOT not in sys.path:
     # Entry points run as ``python -m real_robot...`` from the repository root,
     # which already puts it on the path. Importing the package from anywhere
-    # else still has to find ``graph``, ``rssm`` and ``scenegraph``.
+    # else still has to find ``scenegraph``.
     sys.path.insert(0, REPO_ROOT)
-
-# Named episode selections. Every episode trains; ``diagnostic`` is a fixed
-# subset of those same episodes and ``pilot`` the first milestone's three.
-SELECTIONS = ("training", "diagnostic", "pilot")
-# Names from the earlier held-out design, refused with an explanation.
-REMOVED_SPLITS = ("train", "val", "test")
 
 
 # --------------------------------------------------------------------------- #
@@ -64,7 +58,7 @@ def load_yaml(path: str) -> dict:
 
 
 def config_path(name_or_path: str) -> str:
-    """``reward`` -> ``real_robot/configs/reward.yaml``; paths pass through."""
+    """``graph`` -> ``real_robot/configs/graph.yaml``; paths pass through."""
     if name_or_path.endswith((".yaml", ".yml")) or os.sep in name_or_path or "/" in name_or_path:
         return repo_path(name_or_path)
     return os.path.join(CONFIG_DIR, f"{name_or_path}.yaml")
@@ -110,7 +104,7 @@ def load_config(name_or_path: str, overrides: Sequence[str] = ()) -> dict:
 def load_configs(names: Iterable[str], overrides: Sequence[str] = ()) -> Dict[str, dict]:
     """Several named configs; each override names its config first.
 
-    ``--set reward.settle.frames=10`` changes ``reward.yaml``. An override
+    ``--set annotation.gemini.model=...`` changes ``annotation.yaml``. An override
     whose first segment names no loaded config is an error.
     """
     names = list(names)
@@ -129,7 +123,7 @@ def add_config_arguments(parser) -> None:
     parser.add_argument(
         "--set", dest="overrides", action="append", default=[],
         metavar="CONFIG.KEY=VALUE",
-        help="override one setting, e.g. --set reward.settle.frames=10",
+        help="override one setting, e.g. --set annotation.videos.fps=15",
     )
 
 
@@ -242,24 +236,16 @@ def parse_episodes(text: str, selections: Mapping[str, Sequence[int]],
                    available: Sequence[int]) -> List[int]:
     """Resolve an episode selection.
 
-    ``all`` | ``training`` | ``diagnostic`` | ``pilot`` | ``diagnostic:3``
-    (the first three, in selection order) | ``3,17,42`` | ``0-9``. Explicit
-    indices must exist. There are no train/val/test splits: every episode
-    trains, and those names are refused rather than guessed at.
+    ``all`` | a named selection (``pilot``, or a task such as ``blue_on_red``)
+    | ``blue_on_red:3`` (its first three) | ``3,17,42`` | ``0-9``. Explicit
+    indices must exist.
     """
     text = (text or "all").strip()
     available_set = set(int(i) for i in available)
     if text == "all":
         return sorted(available_set)
     head, _, count = text.partition(":")
-    if head in REMOVED_SPLITS:
-        raise KeyError(
-            f"{head!r}: there are no train/val/test splits -- every episode trains. "
-            "Use all, training, diagnostic, pilot or explicit episode ids."
-        )
-    if head in SELECTIONS:
-        if head not in selections:
-            raise KeyError(f"no {head!r} selection exists yet; run `python -m real_robot.data.selection create`")
+    if head in selections:
         chosen = [int(i) for i in selections[head]]
         if count:
             chosen = chosen[: int(count)]
@@ -278,43 +264,3 @@ def parse_episodes(text: str, selections: Mapping[str, Sequence[int]],
     if missing:
         raise KeyError(f"episodes {missing} are not in the dataset")
     return chosen
-
-
-# --------------------------------------------------------------------------- #
-# Logging
-# --------------------------------------------------------------------------- #
-class RunLogger:
-    """JSONL always; TensorBoard when it is installed; a short console line.
-
-    The repository's ``tools.Logger`` filters its console output down to the
-    online run's keys, which would hide every offline metric, so this keeps
-    its own list of what to print.
-    """
-
-    def __init__(self, logdir: str, console_keys: Sequence[str] = (), tensorboard: bool = True):
-        self.logdir = makedirs(logdir)
-        self.console_keys = tuple(console_keys)
-        self._path = os.path.join(self.logdir, "metrics.jsonl")
-        self._writer = None
-        if tensorboard:
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-                self._writer = SummaryWriter(log_dir=self.logdir, max_queue=1000)
-            except Exception:
-                self._writer = None
-
-    def write(self, step: int, scalars: Mapping[str, float]) -> None:
-        values = {key: float(value) for key, value in scalars.items()}
-        with open(self._path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"step": int(step), **values}) + "\n")
-        if self._writer is not None:
-            for key, value in values.items():
-                self._writer.add_scalar(key, value, int(step))
-            self._writer.flush()
-        shown = [(k, values[k]) for k in self.console_keys if k in values]
-        if shown:
-            print(f"[{step}] " + " / ".join(f"{k} {v:.4g}" for k, v in shown), flush=True)
-
-    def close(self) -> None:
-        if self._writer is not None:
-            self._writer.close()

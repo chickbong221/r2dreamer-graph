@@ -5,12 +5,8 @@
 The configured revision (``main`` by default) is resolved to a commit sha once,
 downloaded at that sha, and recorded with a checksum for every file in
 ``source.json``. A later run that resolves to a different sha refuses to
-overwrite the snapshot: annotations, geometry and every model trained on them
-refer to the frames of one revision.
-
-Nothing is split off here. Every episode trains; the diagnostic subset is
-chosen later by ``python -m real_robot.data.selection create``, once
-annotations can say which outcomes exist.
+overwrite the snapshot: annotations and packed graphs refer to the frames of
+one revision.
 """
 
 from __future__ import annotations

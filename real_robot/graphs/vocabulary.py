@@ -1,10 +1,8 @@
-"""The kitchen entity vocabulary beside the repository's label vocabularies.
+"""The dataset's entity vocabulary beside the repository's label vocabularies.
 
 Relation, absolute and temporal ids come from the shared builders in
-:mod:`scenegraph.adapters.graph_vocab`, never from literals: the model's
-decoder masks are derived from the same tables and refuses a config whose
-sizes disagree. Only the entity table is new, because the kitchen's objects
-are not whitelist members of any mined task.
+:mod:`scenegraph.adapters.graph_vocab`; only the entity table is new. It is
+built from the global entity list, so an entity has the same id in every task.
 """
 
 from __future__ import annotations
@@ -25,12 +23,12 @@ from scenegraph.adapters.graph_vocab import (
 from scenegraph.core.relation_rules import RELATION_TYPES, TEMPORAL_RELATIONS, abs_labels_for
 
 from ..common import stable_hash
-from .schema import GraphSpec
+from .schema import GraphConfig
 
 
-def build_vocab(spec: GraphSpec) -> GraphVocab:
+def build_vocab(config: GraphConfig) -> GraphVocab:
     """Pad at 0, the end effector at 1, then objects in configuration order."""
-    tokens = [PAD_TOKEN, EE_TOKEN] + [e.key for e in spec.entities if e.type == "object"]
+    tokens = [PAD_TOKEN, EE_TOKEN] + [e.key for e in config.entities if e.type == "object"]
     entity = EntityVocab(token_to_id={token: index for index, token in enumerate(tokens)})
     relation = build_relation_vocab()
     absolute = build_absolute_vocab()
@@ -57,14 +55,15 @@ def vocab_sizes(vocab: GraphVocab) -> Dict[str, int]:
     }
 
 
+def vocab_tables(vocab: GraphVocab) -> Dict[str, Dict[str, int]]:
+    """Token -> id for each vocabulary, padding (id 0) included."""
+    labels = {name: {PAD_TOKEN: 0, **table.token_to_id}
+              for name, table in (("relation", vocab.relation), ("absolute", vocab.absolute),
+                                  ("temporal", vocab.temporal))}
+    return {"entity": dict(vocab.entity.token_to_id), **labels}
+
+
 def vocab_identity(vocab: GraphVocab) -> Dict[str, Any]:
     """Digests of the numeric encodings, independent of dictionary order."""
-    def digest(token_to_id):
-        return f"{len(token_to_id)}:{stable_hash(sorted(token_to_id.items()))}"
-
-    return {
-        "entity": digest(vocab.entity.token_to_id),
-        "relation": digest(vocab.relation.token_to_id),
-        "absolute": digest(vocab.absolute.token_to_id),
-        "temporal": digest(vocab.temporal.token_to_id),
-    }
+    return {name: f"{len(table)}:{stable_hash(sorted(table.items()))}"
+            for name, table in vocab_tables(vocab).items()}

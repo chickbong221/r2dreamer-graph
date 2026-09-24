@@ -1,82 +1,25 @@
-# Source, episode selection, output layout and model-input transforms. Every stage reads
-# this file; `--set dataset.key=value` overrides a leaf.
-
 source:
-  repo_id: locht131/aloha_placing_kitchen_lerobot
-  # Resolved to a commit sha by download.py and pinned in source.json. Every
-  # later stage reads the pinned sha, never this string.
+  repo_id: hungho77/so101-multitask
+  # Resolved to a commit sha by download.py and pinned in source.json.
   revision: main
-  fps: 15
-  task: >-
-    Use the right gripper to pick up the banana and place it into the pot.
-    Then pick up the lid with the right gripper and place it on top of the pot
-    to close it.
-  # Packed camera order. It is the camera axis of graph_node_bbox and the
-  # order images are fed to the encoder, so it is part of the cache identity.
+  fps: 30
+  # Camera axis of graph_node_bbox, in this order.
   cameras:
-    high: observation.images.color.high
-    wrist_right: observation.images.color.wrist_right
+    top: observation.images.top
+    wrist: observation.images.wrist
+  camera_descriptions:
+    top: a fixed camera looking down at the table from above
+    wrist: mounted on the gripper; it moves and tilts with it, and the jaws are always at the bottom of its image
   fields:
     state: observation.state
     action: action
-    velocity: observation.velocity
-    effort: observation.effort
-  # Names of the 13 state/action dimensions. The metadata writes them under a
-  # "displacement" key; what the action dimensions command is declared, with
-  # evidence, in action_mapping.yaml and checked by the audit.
-  dims: [waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate, gripper,
-         eef_x, eef_y, eef_z, eef_roll, eef_pitch, eef_yaw]
 
 paths:
-  root: real_robot/outputs
   source: real_robot/outputs/source
-  selections: real_robot/outputs/selections
-  audit: real_robot/outputs/audit
   videos: real_robot/outputs/videos
-  spec: real_robot/outputs/spec
   annotations: real_robot/outputs/annotations
-  tracks: real_robot/outputs/tracks
-  depth: real_robot/outputs/depth
-  geometry: real_robot/outputs/geometry
-  reward: real_robot/outputs/reward
-  datasets: real_robot/outputs/datasets
-  runs: real_robot/outputs/runs
-  latents: real_robot/outputs/latents
-  rollouts: real_robot/outputs/rollouts
+  graphs: real_robot/outputs/graphs
   renders: real_robot/outputs/renders
 
-# Every episode of the pinned dataset trains; nothing is held out. The
-# diagnostic episodes are a fixed subset of those same episodes, saved by id in
-# selections/selection_<version>.json by `python -m real_robot.data.selection
-# create`. Fitting and pipeline behaviour are watched on them; they measure
-# nothing about generalisation. A different subset is a new version.
-selection:
-  version: v1
-  diagnostic:
-    count: 10
-    # Spread across episode lengths. When every episode has a valid
-    # full-episode annotation, each outcome it records is represented too.
-    use_annotated_outcomes: true
-
-# The first milestone's episodes. `auto` picks the shortest, median and
-# longest episode.
+# auto: the median-length episode of each task.
 pilot_episodes: auto
-
-model_inputs:
-  image_size: [128, 128]
-  # stretch: resize without padding. Normalised boxes are unchanged by it,
-  # which is why it is the default. letterbox pads to keep the aspect ratio
-  # and moves the boxes accordingly.
-  resize_mode: stretch
-  # joints (6) + gripper (1) + eef_xyz (3) + eef_rot_sincos (6). The Euler
-  # angles wrap at +-pi several times per episode, so they enter as sin/cos.
-  # velocity and effort stay out until the audit resolves what they measure.
-  state_features: [joints, gripper, eef_xyz, eef_rot_sincos]
-  effort_scale: 1000.0
-
-action:
-  # The declaration of what the action field commands. audit_dataset.py checks
-  # it against the recordings and writes audit/action_spec.json.
-  mapping: real_robot/configs/action_mapping.yaml
-  # The min/max normaliser is fitted over every training episode.
-  normalization_margin: 0.05

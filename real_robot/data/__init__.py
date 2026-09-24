@@ -1,1 +1,1 @@
-"""Split, manifest and loaders for raw artifacts, packed episodes and latents."""
+"""The pinned LeRobot snapshot, addressed by episode."""

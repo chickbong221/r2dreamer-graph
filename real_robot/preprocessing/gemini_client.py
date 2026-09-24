@@ -188,6 +188,8 @@ class GeminiClient:
         self.model = str(cfg["model"])
         self.cache_dir = repo_path(cfg["cache_dir"])
         self._client = None
+        self.use_response_cache = True
+        self._model_info = None
 
     # ----------------------------------------------------------- client
     @property
@@ -286,7 +288,7 @@ class GeminiClient:
                       ) -> Tuple[Any, Dict[str, Any]]:
         key = self.request_key(parts, schema)
         path = os.path.join(self.cache_dir, "responses", f"{key}.json")
-        if os.path.isfile(path):
+        if self.use_response_cache and os.path.isfile(path):
             record = read_json(path)
             return record["parsed"], {**{k: v for k, v in record.items() if k != "parsed"}, "cached": True}
 
@@ -395,9 +397,12 @@ class GeminiClient:
         except Exception:
             # SDKs before response_json_schema take the OpenAPI subset instead.
             generation = types.GenerateContentConfig(**config, response_schema=dict(schema))
+        contents = [types.Content(role="user", parts=content_parts)]
+        if self.cfg.get("preflight_tokens", False):
+            self._check_token_budget(contents)
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[types.Content(role="user", parts=content_parts)],
+            contents=contents,
             config=generation,
         )
         finish = None
@@ -409,6 +414,25 @@ class GeminiClient:
         except Exception:
             text = None
         return text, _to_dict(getattr(response, "usage_metadata", None)), finish
+
+    def _check_token_budget(self, contents):
+        """Check video/text input before generation, reserving headroom for schema and output."""
+        if self._model_info is None:
+            self._model_info = self.client.models.get(model=self.model)
+        limit = self._model_info.input_token_limit
+        output_limit = self._model_info.output_token_limit
+        requested = self.settings()["max_output_tokens"]
+        if output_limit and requested > output_limit:
+            raise GeminiError(f"max_output_tokens={requested} exceeds {self.model}'s {output_limit}; lower it")
+        count = self.client.models.count_tokens(model=self.model, contents=contents).total_tokens
+        if count is None or not limit:
+            raise GeminiError("token preflight returned no count or input limit; cannot verify episode fits")
+        reserve = requested + int(self.cfg.get("input_token_headroom", 8192))
+        print(f"[gemini] input token count {count}; reserved {reserve}; model input limit {limit}", flush=True)
+        if count + reserve > limit:
+            raise GeminiError(f"whole episode needs {count} input tokens plus {reserve} reserved, exceeding "
+                              f"{limit}; lower annotation.videos.fps and prepare videos again, or use a "
+                              "model with a larger context. Splitting the answer does not reduce video input.")
 
     def _interactions(self, parts: Sequence[Part], schema: Mapping[str, Any]):
         settings = self.settings()
