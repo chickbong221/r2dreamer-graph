@@ -76,8 +76,10 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 SEED="${SEED:-0}"
 
 # Keep in sync with slurm_pickcube_graph_progress.sh.
-WORLD_STEPS=30000
-IMITATION_STEPS=30000
+WORLD_STEPS=25000
+IMITATION_STEPS=25000
+# Windows per step in both stages; the default 16 used ~34 of 80 GB.
+BATCH_SIZE=32
 # Peak rates: linear warmup, then cosine decay to the final rate at the
 # stage's last step.
 WORLD_LR=1e-4
@@ -99,6 +101,7 @@ python -m sim_vla.training.pipeline \
   --experiment dreamer \
   --world-steps $WORLD_STEPS \
   --imitation-steps $IMITATION_STEPS \
+  --batch-size $BATCH_SIZE \
   --world-lr $WORLD_LR \
   --imitation-lr $IMITATION_LR \
   --world-warmup-steps $WORLD_WARMUP \
