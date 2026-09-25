@@ -11,8 +11,7 @@
 # SO-101 stackcube (task 2, blue cube on red), arm=graph_progress.
 # World model -> imitation on the recorded episodes; no simulator, so no
 # evaluation. Submit from the repository root after
-# `bash runs/sim_vla/real/prepare.sh stackcube`. wandb reads WANDB_API_KEY from
-# the submitting shell.
+# `bash runs/sim_vla/real/prepare.sh stackcube`.
 
 set -eo pipefail
 
@@ -30,6 +29,7 @@ cd "$SLURM_SUBMIT_DIR"
 test -f sim_vla/__init__.py || { echo "FATAL: submit from the repository root" >&2; exit 1; }
 source runs/sim_vla/real/setup.sh
 
+export WANDB_API_KEY="b1d6eed8871c7668a889ae74a621b5dbd2f3b070"
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -47,8 +47,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # Overridable at submit time, e.g. SEED=1 sbatch <this file>.
 SEED="${SEED:-0}"
 
-WORLD_STEPS=10000
-IMITATION_STEPS=10000
+WORLD_STEPS=15000
+IMITATION_STEPS=15000
 WORLD_LR=1e-4
 WORLD_WARMUP=1000
 WORLD_FINAL_LR=1e-5
