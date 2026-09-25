@@ -67,11 +67,15 @@ class WandbSettings:
         experiment = dict((cfg.get("experiment") or {}))
         task = str(experiment.get("task") or "")
         arm = str(experiment.get("arm") or "")
+        # Real-robot runs share task names with the simulator's.
+        real = experiment.get("data") == "real"
 
         tags = list(block.get("tags") or [])
-        for value in (task, arm):
+        for value in (task, arm, "real" if real else ""):
             if value and value not in tags:
                 tags.append(value)
+        if real and task:
+            task = f"real-{task}"
 
         return cls(
             enabled=bool(block.get("enabled", False)),

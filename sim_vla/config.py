@@ -104,18 +104,54 @@ def _interpolate(node: Any, root: Mapping[str, Any]) -> Any:
     return out
 
 
+DATA_KINDS = ("sim", "real")
+
+
+def _task_folder(data: str, root: Path) -> Path:
+    if data not in DATA_KINDS:
+        raise SystemExit(f"--data must be one of {list(DATA_KINDS)}, not {data!r}")
+    return root / "tasks" if data == "sim" else root / "real" / "tasks"
+
+
+def task_file(task: str, data: str = "sim", root: Path = CONFIG_ROOT) -> Path:
+    """The task's yaml for one data kind: ``tasks/`` for sim, ``real/tasks/``
+    for recorded robot data."""
+    folder = _task_folder(data, root)
+    path = folder / f"{task}.yaml"
+    if path.is_file():
+        return path
+    known = sorted(p.stem for p in folder.glob("*.yaml"))
+    other = "real" if data == "sim" else "sim"
+    hint = (f" {task!r} is a {other} task: pass --data {other}."
+            if (_task_folder(other, root) / f"{task}.yaml").is_file() else "")
+    raise SystemExit(f"no {data} task {task!r}; {data} tasks are {known}.{hint}")
+
+
 def load_config(task: str, experiment: str,
                 overrides: Optional[Mapping[str, Any]] = None,
-                root: Path = CONFIG_ROOT) -> Dict[str, Any]:
-    """The resolved settings for one arm on one task."""
+                root: Path = CONFIG_ROOT, data: str = "sim") -> Dict[str, Any]:
+    """The resolved settings for one arm on one task.
+
+    ``data="real"`` layers ``real/base.yaml`` over the base and reads the task
+    from ``real/tasks/``; the sim path is unchanged.
+    """
+    path = task_file(task, data, root)
     merged = _read(root / "base.yaml")
-    merged = deep_merge(merged, _read(root / "tasks" / f"{task}.yaml"))
+    if data == "real":
+        merged = deep_merge(merged, _read(root / "real" / "base.yaml"))
+    merged = deep_merge(merged, _read(path))
     merged = deep_merge(merged, _read(root / "experiments" / f"{experiment}.yaml"))
     merged = deep_merge(merged, overrides or {})
     merged = _interpolate(merged, merged)
     merged["experiment"] = {"task": task, "arm": experiment}
+    if data == "real":
+        merged["experiment"]["data"] = "real"
     validate(merged)
     return merged
+
+
+def is_real(cfg: Mapping[str, Any]) -> bool:
+    return (cfg.get("experiment") or {}).get("data") == "real"
 
 
 def validate(cfg: Mapping[str, Any]) -> None:
@@ -252,6 +288,13 @@ def validate(cfg: Mapping[str, Any]) -> None:
 def check_dataset_compatibility(cfg: Mapping[str, Any],
                                 metadata: Mapping[str, Any]) -> None:
     """Refuse a dataset this arm cannot be trained on as configured."""
+    if is_real(cfg):
+        wanted = str((cfg.get("task") or {}).get("env_id") or "")
+        got = str(metadata.get("env_id") or "")
+        if got != wanted:
+            raise SystemExit(
+                f"task.env_id is {wanted!r} but the dataset records {got!r}; "
+                "it was converted from another task's graphs.")
     graph = ((cfg.get("model") or {}).get("graph") or {})
     if not graph.get("enabled"):
         # A baseline needs nothing from the graph metadata, including its

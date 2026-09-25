@@ -43,7 +43,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 import torch
 
-from ..config import check_dataset_compatibility, load_config
+from ..config import DATA_KINDS, check_dataset_compatibility, load_config
 from ..data.batch import to_model_batch
 from ..data.dataset import DemoDataset
 from ..data.normalization import Normalizer, fit_normalizer
@@ -503,6 +503,9 @@ def parse_args(argv=None):
     parser.add_argument("--task", default="pickcube")
     parser.add_argument("--experiment", default="dreamer",
                         choices=("dreamer", "graph", "graph_progress"))
+    parser.add_argument("--data", default="sim", choices=DATA_KINDS,
+                        help="sim: ManiSkill demonstrations; real: recorded "
+                             "SO-101 episodes (configs/real/tasks)")
     parser.add_argument("--steps", type=int, default=50_000)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -537,7 +540,8 @@ def main(argv=None) -> int:
             data_overrides[key] = value
     cfg = load_config(
         args.task, args.experiment,
-        overrides={"data": data_overrides} if data_overrides else None)
+        overrides={"data": data_overrides} if data_overrides else None,
+        data=args.data)
     if int(cfg["data"]["batch_size"]) < 1:
         raise SystemExit("--batch-size must be at least 1")
     if int(cfg["data"]["sequence_length"]) < 2:
@@ -552,8 +556,9 @@ def main(argv=None) -> int:
         raise SystemExit(f"model config does not exist: {model_yaml}")
     cfg.setdefault("runtime", {})["model_config"] = str(model_yaml)
 
+    kind = "real/" if args.data == "real" else ""
     out = Path(args.out or
-               f"runs/sim_vla/{args.task}/{args.experiment}/world_model.pt")
+               f"runs/sim_vla/{kind}{args.task}/{args.experiment}/world_model.pt")
     if args.save_checkpoints and out.exists() and not args.overwrite:
         raise SystemExit(
             f"{out} already exists; pass --overwrite to replace it. An arm's "

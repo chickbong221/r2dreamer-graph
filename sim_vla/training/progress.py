@@ -352,6 +352,113 @@ class SchedulePotential:
                 "whitelist_dir": self.source.whitelist_dir}
 
 
+def recorded_schedules(cfg) -> list:
+    """``[(path, weight)]`` from ``task.progress_schedules``; empty for sim tasks."""
+    import os
+
+    parts = list((cfg.get("task") or {}).get("progress_schedules") or [])
+    folder = str(((cfg.get("model") or {}).get("progress") or {}).get(
+        "schedule_dir") or DEFAULT_SCHEDULE_DIR)
+    return [(os.path.join(folder, str(part["schedule"])), float(part["weight"]))
+            for part in parts]
+
+
+class RecordedSchedulePotential:
+    """``Phi`` for annotated graphs: schedules compiled against recorded facts.
+
+    There are no mined assets to say which relations a pair can carry, so each
+    schedule is compiled against the facts the dataset records
+    (``metadata.graph.facts``) and its entity vocabulary. Several schedules are
+    summed with their weights; a frame is scorable only where every one is.
+    """
+
+    def __init__(self, parts, graph_meta: Mapping[str, Any], n_abs: int, *,
+                 env_id: str = "", device=None):
+        import json
+
+        from scenegraph.adapters.graph_vocab import EE_TOKEN, PAD_TOKEN, EntityVocab
+        from scenegraph.core.schedule import compile_schedule
+
+        from progress import TaskScheduleReplayPotential
+
+        vocab = EntityVocab(token_to_id={str(k): int(v) for k, v in
+                                         graph_meta["entity_tokens"].items()})
+        scorable: Dict[str, Dict[str, bool]] = {}
+        for src, dst, relation in graph_meta["facts"]:
+            scorable.setdefault(f"{src} / {dst}", {})[str(relation)] = True
+        members = {key: {} for key in vocab.token_to_id
+                   if key not in (PAD_TOKEN, EE_TOKEN)}
+        self.env_id = str(env_id)
+        self.paths = [str(path) for path, _ in parts]
+        self.weights = [float(weight) for _, weight in parts]
+        self.scorers = []
+        self.phases = 0
+        for path in self.paths:
+            with open(path, encoding="utf-8") as handle:
+                raw = json.load(handle)
+            schedule = compile_schedule(raw, {}, members, {}, vocab,
+                                        scorable=scorable)
+            scorer = TaskScheduleReplayPotential(schedule, int(n_abs))
+            self.scorers.append(scorer if device is None else scorer.to(device))
+            self.phases += len(schedule.phases)
+
+    @torch.no_grad()
+    def targets(self, batch):
+        """``(phi, valid)`` shaped like the batch's ``(batch, time)``."""
+        from graph import compact_graph
+        from scenegraph.adapters.graph_pack import GRAPH_KEYS
+
+        packed = {key: batch[key] for key in GRAPH_KEYS}
+        shape = tuple(packed["graph_node_ent"].shape[:-1])
+        compact = compact_graph(packed)
+        phi = valid = None
+        for weight, scorer in zip(self.weights, self.scorers):
+            part, ok = scorer(
+                compact.node_ent, compact.edge_rel, compact.edge_abs,
+                compact.edge_src_local, compact.edge_dst_local,
+                compact.edge_graph, compact.graph_count)
+            phi = weight * part if phi is None else phi + weight * part
+            valid = ok if valid is None else valid & ok
+        return phi.reshape(shape).float(), valid.reshape(shape).bool()
+
+    def describe(self) -> Dict[str, Any]:
+        return {"env_id": self.env_id, "phases": self.phases,
+                "schedule": ",".join(self.paths),
+                "weights": ",".join(f"{w:g}" for w in self.weights)}
+
+
+def recorded_availability(cfg, metadata=None) -> list:
+    """:func:`availability` for a task that names ``progress_schedules``."""
+    import os
+
+    graph_meta = dict((metadata or {}).get("graph") or {})
+    missing = []
+    if not bool((cfg.get("model") or {}).get("graph", {}).get("enabled")):
+        missing.append(
+            "model.graph.enabled is false: the schedule resolves roles against "
+            "the graph's entity vocabulary, and a baseline has no graph")
+    parts = recorded_schedules(cfg)
+    for path, weight in parts:
+        if not os.path.isfile(path):
+            missing.append(f"no task schedule at {path}")
+        if not weight > 0:
+            missing.append(f"{path} has weight {weight}; weights must be positive")
+    total = sum(weight for _, weight in parts)
+    if abs(total - 1.0) > 1e-6:
+        missing.append(f"task.progress_schedules weights sum to {total:g}, not 1, "
+                       "so the potential would not end at 1")
+    if not graph_meta.get("facts") or not graph_meta.get("entity_tokens"):
+        missing.append(
+            "the dataset metadata records no graph facts or entity vocabulary; "
+            "prepare it with python -m sim_vla.data.prepare_real")
+    if not graph_meta.get("absolute_tokens") and not graph_meta.get(
+            "vocab_sizes"):
+        missing.append(
+            "the dataset metadata records no absolute-token vocabulary, so "
+            "the number of spatial bins the scorer needs is unknown")
+    return missing
+
+
 def availability(cfg, metadata=None) -> list:
     """What the progress arm is missing, or an empty list.
 
@@ -360,6 +467,8 @@ def availability(cfg, metadata=None) -> list:
     """
     import os
 
+    if recorded_schedules(cfg):
+        return recorded_availability(cfg, metadata)
     progress = dict((cfg.get("model") or {}).get("progress") or {})
     graph_meta = dict((metadata or {}).get("graph") or {})
     env_id = str((cfg.get("task") or {}).get("env_id") or "")
@@ -442,6 +551,11 @@ def build_potential(cfg, metadata, *, device=None):
         raise SystemExit(
             "the dataset records no absolute-token vocabulary; the scorer "
             "needs its size to allocate one slot per spatial bin")
+    parts = recorded_schedules(cfg)
+    if parts:
+        return RecordedSchedulePotential(
+            parts, graph_meta, n_abs, env_id=str(cfg["task"]["env_id"]),
+            device=device)
     return SchedulePotential(
         str(cfg["task"]["env_id"]), str(graph_meta.get("whitelist_dir") or ""),
         n_abs,

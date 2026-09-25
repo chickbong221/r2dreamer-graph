@@ -42,3 +42,38 @@ The run has three stages:
 3. **Evaluation:** Run the imitation policy on new PickCube episodes in the simulator and report its success rate. `--online-steps 0` stops after this stage; there is no online reinforcement learning or progress reward shaping.
 
 The output directory contains the world model checkpoint, imitation checkpoint, and evaluation results.
+
+## 4. SO-101 real data (`--data real`)
+
+Tasks 2 (`stackcube`, blue cube on red) and 3 (`cubes_in_cup`) of `hungho77/so101-multitask`. Their scene graphs are committed in `real_robot/scene_graphs/`; the recorded episodes are downloaded from Hugging Face. There is no simulator for these tasks, so a run stops after imitation and writes `world_model.pt` and `imitation.pt`. Without `--data`, or with `--data sim`, everything above uses the ManiSkill demonstrations as before.
+
+On the H100 cluster, from the repository root. `runs/sim_vla/real/setup.sh` holds each account's data and SmolVLA cache paths. First download and convert, on the login node:
+
+```bash
+bash runs/sim_vla/real/prepare.sh stackcube
+bash runs/sim_vla/real/prepare.sh cubes_in_cup
+```
+
+Then submit, with `WANDB_API_KEY` exported in the same shell:
+
+```bash
+sbatch runs/sim_vla/real/slurm_stackcube_graph_progress.sh
+sbatch runs/sim_vla/real/slurm_stackcube_baseline.sh
+sbatch runs/sim_vla/real/slurm_cubes_in_cup_graph_progress.sh
+sbatch runs/sim_vla/real/slurm_cubes_in_cup_baseline.sh
+```
+
+Elsewhere, the same two steps:
+
+```bash
+python -m sim_vla.data.prepare_real --task stackcube
+python -m sim_vla.training.pipeline \
+  --data real --task stackcube --experiment graph_progress \
+  --world-steps 10000 --imitation-steps 10000 --online-steps 0 \
+  --world-lr 1e-4 --world-warmup-steps 1000 --world-final-lr 1e-5 \
+  --imitation-lr 1e-4 --imitation-warmup-steps 1000 --imitation-final-lr 2.5e-6 \
+  --seed 0 --device cuda \
+  --save-checkpoints --out logdir/sim_vla/real/stackcube/graph_progress_seed0
+```
+
+`cubes_in_cup` has about twice the frames and trains 15000 steps per stage. To update the graphs, replace `real_robot/scene_graphs/<task>/` with the folder `real_robot.preprocessing.pack_graphs` wrote, commit and push; `prepare_real` converts again after the next pull, and training refuses a dataset older than its graphs.

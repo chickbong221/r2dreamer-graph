@@ -38,6 +38,8 @@ REQUIRED = {
     "sim_vla.tests.test_progress",       # the shaping arithmetic
     "sim_vla.tests.test_timeline",       # which index a reward is read at
     "sim_vla.tests.test_inference",      # the recurrence, and one online turn
+    "tests.test_sim_vla_real",           # the converter on a real video
+    "sim_vla.tests.test_real_progress",  # the SO-101 schedules
 }
 
 

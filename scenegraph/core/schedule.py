@@ -480,8 +480,13 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                      entity_vocab,
                      sites: Optional[Dict[str, SiteDeclaration]] = None,
                      structural: Optional[set] = None,
+                     scorable: Optional[Dict[str, Dict[str, bool]]] = None,
                      ) -> CompiledSchedule:
-    """Validate and translate one schedule. Raises on anything unscorable."""
+    """Validate and translate one schedule. Raises on anything unscorable.
+
+    ``scorable`` replaces what :func:`scorable_relations` derives from mined
+    assets, for graphs whose facts were annotated rather than mined.
+    """
     env_id = str(raw.get("env_id") or "?")
     version = int(raw.get("_schema_version", 0))
     if version != SCHEDULE_SCHEMA_VERSION:
@@ -519,8 +524,9 @@ def compile_schedule(raw: Dict[str, Any], objects: Dict[str, Any],
                 "entity vocabulary. Re-mine the task."
             ) from None
 
-    scorable = scorable_relations(
-        objects, members, bin_edges, sites, structural)
+    if scorable is None:
+        scorable = scorable_relations(
+            objects, members, bin_edges, sites, structural)
     relations, absolute = build_relation_vocab(), build_absolute_vocab()
 
     def entity_id(key: str) -> int:

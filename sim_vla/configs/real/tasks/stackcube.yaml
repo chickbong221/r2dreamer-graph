@@ -1,0 +1,10 @@
+# Task 2 of hungho77/so101-multitask (episodes 50-98).
+task:
+  env_id: so101/blue_on_red
+  instruction: "Pick up the blue cube and place it on top of the red cube."
+  dataset: ${data.root}/stackcube/${data.name}
+  source:
+    lerobot: real_robot/outputs/source
+    graphs: real_robot/scene_graphs/stackcube
+  progress_schedules:
+    - {schedule: stackcube.json, weight: 1.0}

@@ -1,0 +1,1062 @@
+{
+  "format": "real_robot/so101-graphs-v1",
+  "graph": {
+    "version": "so101-graph-v1",
+    "entities": [
+      [
+        "ee",
+        "<ee>",
+        "ee"
+      ],
+      [
+        "banana",
+        "actor:banana",
+        "object"
+      ],
+      [
+        "pot",
+        "actor:pot",
+        "object"
+      ],
+      [
+        "lid",
+        "actor:lid",
+        "object"
+      ],
+      [
+        "red_cube",
+        "actor:red_cube",
+        "object"
+      ],
+      [
+        "blue_cube",
+        "actor:blue_cube",
+        "object"
+      ],
+      [
+        "cup",
+        "actor:cup",
+        "object"
+      ],
+      [
+        "table",
+        "actor:table",
+        "object"
+      ]
+    ],
+    "cameras": [
+      "top",
+      "wrist"
+    ],
+    "n_max": 8,
+    "e_max": 168,
+    "temporal_window": 10,
+    "tasks": {
+      "banana_pot_lid": {
+        "version": "so101-graph-v1",
+        "task": "banana_pot_lid",
+        "entities": [
+          [
+            "ee",
+            "<ee>",
+            "ee"
+          ],
+          [
+            "banana",
+            "actor:banana",
+            "object"
+          ],
+          [
+            "pot",
+            "actor:pot",
+            "object"
+          ],
+          [
+            "lid",
+            "actor:lid",
+            "object"
+          ],
+          [
+            "table",
+            "actor:table",
+            "object"
+          ]
+        ],
+        "facts": [
+          [
+            "ee",
+            "banana",
+            "contact"
+          ],
+          [
+            "ee",
+            "banana",
+            "grasp"
+          ],
+          [
+            "ee",
+            "banana",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "banana",
+            "height-offset"
+          ],
+          [
+            "ee",
+            "banana",
+            "grasp-compatibility"
+          ],
+          [
+            "ee",
+            "banana",
+            "contact-compatibility"
+          ],
+          [
+            "ee",
+            "lid",
+            "contact"
+          ],
+          [
+            "ee",
+            "lid",
+            "grasp"
+          ],
+          [
+            "ee",
+            "lid",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "lid",
+            "height-offset"
+          ],
+          [
+            "ee",
+            "lid",
+            "grasp-compatibility"
+          ],
+          [
+            "ee",
+            "lid",
+            "contact-compatibility"
+          ],
+          [
+            "ee",
+            "pot",
+            "contact"
+          ],
+          [
+            "ee",
+            "pot",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "pot",
+            "height-offset"
+          ],
+          [
+            "banana",
+            "pot",
+            "contact"
+          ],
+          [
+            "banana",
+            "pot",
+            "contain"
+          ],
+          [
+            "banana",
+            "pot",
+            "planar-distance"
+          ],
+          [
+            "banana",
+            "pot",
+            "height-offset"
+          ],
+          [
+            "banana",
+            "pot",
+            "contain-compatibility"
+          ],
+          [
+            "lid",
+            "pot",
+            "contact"
+          ],
+          [
+            "lid",
+            "pot",
+            "support"
+          ],
+          [
+            "lid",
+            "pot",
+            "planar-distance"
+          ],
+          [
+            "lid",
+            "pot",
+            "height-offset"
+          ],
+          [
+            "lid",
+            "pot",
+            "support-compatibility"
+          ],
+          [
+            "banana",
+            "lid",
+            "contact"
+          ],
+          [
+            "banana",
+            "table",
+            "support"
+          ],
+          [
+            "lid",
+            "table",
+            "support"
+          ],
+          [
+            "pot",
+            "table",
+            "support"
+          ]
+        ],
+        "targets": [
+          "banana",
+          "lid"
+        ],
+        "temporal_window": 10,
+        "cameras": [
+          "top",
+          "wrist"
+        ],
+        "n_max": 8,
+        "e_max": 168
+      },
+      "blue_on_red": {
+        "version": "so101-graph-v1",
+        "task": "blue_on_red",
+        "entities": [
+          [
+            "ee",
+            "<ee>",
+            "ee"
+          ],
+          [
+            "red_cube",
+            "actor:red_cube",
+            "object"
+          ],
+          [
+            "blue_cube",
+            "actor:blue_cube",
+            "object"
+          ],
+          [
+            "table",
+            "actor:table",
+            "object"
+          ]
+        ],
+        "facts": [
+          [
+            "ee",
+            "blue_cube",
+            "contact"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "grasp"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "height-offset"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "grasp-compatibility"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "contact-compatibility"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "contact"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "height-offset"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "contact"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "support"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "planar-distance"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "height-offset"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "support-compatibility"
+          ],
+          [
+            "blue_cube",
+            "table",
+            "support"
+          ],
+          [
+            "red_cube",
+            "table",
+            "support"
+          ]
+        ],
+        "targets": [
+          "blue_cube"
+        ],
+        "temporal_window": 10,
+        "cameras": [
+          "top",
+          "wrist"
+        ],
+        "n_max": 8,
+        "e_max": 168
+      },
+      "cubes_in_cup": {
+        "version": "so101-graph-v1",
+        "task": "cubes_in_cup",
+        "entities": [
+          [
+            "ee",
+            "<ee>",
+            "ee"
+          ],
+          [
+            "red_cube",
+            "actor:red_cube",
+            "object"
+          ],
+          [
+            "blue_cube",
+            "actor:blue_cube",
+            "object"
+          ],
+          [
+            "cup",
+            "actor:cup",
+            "object"
+          ],
+          [
+            "table",
+            "actor:table",
+            "object"
+          ]
+        ],
+        "facts": [
+          [
+            "ee",
+            "red_cube",
+            "contact"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "grasp"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "height-offset"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "grasp-compatibility"
+          ],
+          [
+            "ee",
+            "red_cube",
+            "contact-compatibility"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "contact"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "grasp"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "height-offset"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "grasp-compatibility"
+          ],
+          [
+            "ee",
+            "blue_cube",
+            "contact-compatibility"
+          ],
+          [
+            "ee",
+            "cup",
+            "contact"
+          ],
+          [
+            "ee",
+            "cup",
+            "planar-distance"
+          ],
+          [
+            "ee",
+            "cup",
+            "height-offset"
+          ],
+          [
+            "cup",
+            "red_cube",
+            "contact"
+          ],
+          [
+            "cup",
+            "red_cube",
+            "contain"
+          ],
+          [
+            "cup",
+            "red_cube",
+            "planar-distance"
+          ],
+          [
+            "cup",
+            "red_cube",
+            "height-offset"
+          ],
+          [
+            "cup",
+            "red_cube",
+            "contain-compatibility"
+          ],
+          [
+            "blue_cube",
+            "cup",
+            "contact"
+          ],
+          [
+            "blue_cube",
+            "cup",
+            "contain"
+          ],
+          [
+            "blue_cube",
+            "cup",
+            "planar-distance"
+          ],
+          [
+            "blue_cube",
+            "cup",
+            "height-offset"
+          ],
+          [
+            "blue_cube",
+            "cup",
+            "contain-compatibility"
+          ],
+          [
+            "blue_cube",
+            "red_cube",
+            "contact"
+          ],
+          [
+            "red_cube",
+            "table",
+            "support"
+          ],
+          [
+            "blue_cube",
+            "table",
+            "support"
+          ],
+          [
+            "cup",
+            "table",
+            "support"
+          ]
+        ],
+        "targets": [
+          "red_cube",
+          "blue_cube"
+        ],
+        "temporal_window": 10,
+        "cameras": [
+          "top",
+          "wrist"
+        ],
+        "n_max": 8,
+        "e_max": 168
+      }
+    }
+  },
+  "vocab": {
+    "entity": {
+      "<pad>": 0,
+      "<ee>": 1,
+      "actor:banana": 2,
+      "actor:pot": 3,
+      "actor:lid": 4,
+      "actor:red_cube": 5,
+      "actor:blue_cube": 6,
+      "actor:cup": 7,
+      "actor:table": 8
+    },
+    "relation": {
+      "<pad>": 0,
+      "contact": 1,
+      "grasp": 2,
+      "support": 3,
+      "contain": 4,
+      "planar-distance": 5,
+      "height-offset": 6,
+      "grasp-compatibility": 7,
+      "contact-compatibility": 8,
+      "support-compatibility": 9,
+      "contain-compatibility": 10,
+      "reached": 11
+    },
+    "absolute": {
+      "<pad>": 0,
+      "not-holds": 1,
+      "holds": 2,
+      "unobserved": 3,
+      "src-holds": 4,
+      "dst-holds": 5,
+      "very-near": 6,
+      "near": 7,
+      "medium": 8,
+      "far": 9,
+      "very-far": 10,
+      "far-below": 11,
+      "below": 12,
+      "level": 13,
+      "above": 14,
+      "far-above": 15,
+      "match": 16,
+      "partial-match": 17,
+      "poor-match": 18
+    },
+    "temporal": {
+      "<pad>": 0,
+      "decrease-fast": 1,
+      "decrease-slow": 2,
+      "stable": 3,
+      "increase-slow": 4,
+      "increase-fast": 5
+    }
+  },
+  "source": {
+    "repo_id": "hungho77/so101-multitask",
+    "revision": "a89fb7c830b39ecfb6ad0ae7209ae6bf2b20585d"
+  },
+  "labels": "695ec2b56b489bec",
+  "source_config": "915978d193882955",
+  "annotation_config": "c60e41bf1a1d8869",
+  "graph_config": "e8770ffeb269789c",
+  "prompt": "87c7e1bbcfaeab77",
+  "name": "cubes_in_cup_graph_progress",
+  "updated": "2026-09-25T02:40:12Z",
+  "vocab_sizes": {
+    "entity_vocab": 9,
+    "n_rel": 12,
+    "n_abs": 19,
+    "n_temp": 6
+  },
+  "cameras": [
+    "top",
+    "wrist"
+  ],
+  "box_format": "graph_node_bbox is [x0, x1, y0, y1] per camera, normalised to the image; zero when not visible",
+  "centroids": "unknown; graph_node_centroid is zero",
+  "arrays": {
+    "graph_node_ent": {
+      "dtype": "uint8",
+      "per_frame": [
+        8
+      ]
+    },
+    "graph_node_bbox": {
+      "dtype": "float16",
+      "per_frame": [
+        8,
+        2,
+        4
+      ]
+    },
+    "graph_node_centroid": {
+      "dtype": "float32",
+      "per_frame": [
+        8,
+        3
+      ]
+    },
+    "graph_node_target": {
+      "dtype": "uint8",
+      "per_frame": [
+        8
+      ]
+    },
+    "graph_edge_src": {
+      "dtype": "uint8",
+      "per_frame": [
+        168
+      ]
+    },
+    "graph_edge_dst": {
+      "dtype": "uint8",
+      "per_frame": [
+        168
+      ]
+    },
+    "graph_edge_rel": {
+      "dtype": "uint8",
+      "per_frame": [
+        168
+      ]
+    },
+    "graph_edge_abs": {
+      "dtype": "uint8",
+      "per_frame": [
+        168
+      ]
+    },
+    "graph_edge_temp": {
+      "dtype": "uint8",
+      "per_frame": [
+        168
+      ]
+    },
+    "graph_valid": {
+      "dtype": "bool",
+      "per_frame": []
+    },
+    "episode_index": {
+      "dtype": "int64",
+      "per_frame": []
+    },
+    "frame_index": {
+      "dtype": "int64",
+      "per_frame": []
+    },
+    "index": {
+      "dtype": "int64",
+      "per_frame": []
+    }
+  },
+  "episodes": {
+    "99": {
+      "task": "cubes_in_cup",
+      "n_frames": 618,
+      "valid_frames": 618,
+      "file": "episode_000099.npz",
+      "annotation": "38d422859834fc69",
+      "answer_hash": "7bacce4a287c84b1"
+    },
+    "100": {
+      "task": "cubes_in_cup",
+      "n_frames": 654,
+      "valid_frames": 654,
+      "file": "episode_000100.npz",
+      "annotation": "d7a8ec01296c15e0",
+      "answer_hash": "f7d5ce37576168a1"
+    },
+    "101": {
+      "task": "cubes_in_cup",
+      "n_frames": 598,
+      "valid_frames": 598,
+      "file": "episode_000101.npz",
+      "annotation": "c95fc36ca83ba25c",
+      "answer_hash": "b6dd71412e21796c"
+    },
+    "102": {
+      "task": "cubes_in_cup",
+      "n_frames": 649,
+      "valid_frames": 649,
+      "file": "episode_000102.npz",
+      "annotation": "eb2c204ba63d3ebf",
+      "answer_hash": "e37466f1ed3e2835"
+    },
+    "103": {
+      "task": "cubes_in_cup",
+      "n_frames": 597,
+      "valid_frames": 597,
+      "file": "episode_000103.npz",
+      "annotation": "b1b9faf56956edf7",
+      "answer_hash": "d7f4ca290c895f46"
+    },
+    "104": {
+      "task": "cubes_in_cup",
+      "n_frames": 626,
+      "valid_frames": 626,
+      "file": "episode_000104.npz",
+      "annotation": "cc9eeeccb50461c1",
+      "answer_hash": "061f4b3ac2a6cf5d"
+    },
+    "105": {
+      "task": "cubes_in_cup",
+      "n_frames": 597,
+      "valid_frames": 597,
+      "file": "episode_000105.npz",
+      "annotation": "5d70e02d5ab0c112",
+      "answer_hash": "5f6dc4a4516a4930"
+    },
+    "106": {
+      "task": "cubes_in_cup",
+      "n_frames": 839,
+      "valid_frames": 839,
+      "file": "episode_000106.npz",
+      "annotation": "74e83cb2cc025624",
+      "answer_hash": "d7fbe3e216ce0205"
+    },
+    "107": {
+      "task": "cubes_in_cup",
+      "n_frames": 649,
+      "valid_frames": 649,
+      "file": "episode_000107.npz",
+      "annotation": "8aabbf833ddc6ca0",
+      "answer_hash": "6404cd0cd2b4bb1b"
+    },
+    "108": {
+      "task": "cubes_in_cup",
+      "n_frames": 607,
+      "valid_frames": 607,
+      "file": "episode_000108.npz",
+      "annotation": "b3288451e8d1635a",
+      "answer_hash": "fc2df288a0f05124"
+    },
+    "109": {
+      "task": "cubes_in_cup",
+      "n_frames": 576,
+      "valid_frames": 576,
+      "file": "episode_000109.npz",
+      "annotation": "0b804c4e325c0621",
+      "answer_hash": "e44b35538f082d66"
+    },
+    "110": {
+      "task": "cubes_in_cup",
+      "n_frames": 627,
+      "valid_frames": 627,
+      "file": "episode_000110.npz",
+      "annotation": "d44c72e5b84cab6a",
+      "answer_hash": "ce15010359d895bc"
+    },
+    "111": {
+      "task": "cubes_in_cup",
+      "n_frames": 661,
+      "valid_frames": 661,
+      "file": "episode_000111.npz",
+      "annotation": "dca7c61a8d89d1ff",
+      "answer_hash": "940946e156ad672f"
+    },
+    "112": {
+      "task": "cubes_in_cup",
+      "n_frames": 805,
+      "valid_frames": 805,
+      "file": "episode_000112.npz",
+      "annotation": "a740916bef61e782",
+      "answer_hash": "9ce4bdb67c3d3455"
+    },
+    "113": {
+      "task": "cubes_in_cup",
+      "n_frames": 620,
+      "valid_frames": 620,
+      "file": "episode_000113.npz",
+      "annotation": "9292ed77b626429a",
+      "answer_hash": "6be6dd5da6d68576"
+    },
+    "114": {
+      "task": "cubes_in_cup",
+      "n_frames": 602,
+      "valid_frames": 602,
+      "file": "episode_000114.npz",
+      "annotation": "72c2ef26b556cc11",
+      "answer_hash": "1e03ed51433506ca"
+    },
+    "115": {
+      "task": "cubes_in_cup",
+      "n_frames": 648,
+      "valid_frames": 648,
+      "file": "episode_000115.npz",
+      "annotation": "a8aac72c905c1dd0",
+      "answer_hash": "6278ba65724694d1"
+    },
+    "116": {
+      "task": "cubes_in_cup",
+      "n_frames": 638,
+      "valid_frames": 638,
+      "file": "episode_000116.npz",
+      "annotation": "7782d1aa38af4e69",
+      "answer_hash": "322a6fcd8e78a8fe"
+    },
+    "117": {
+      "task": "cubes_in_cup",
+      "n_frames": 640,
+      "valid_frames": 640,
+      "file": "episode_000117.npz",
+      "annotation": "e9c505e1a319499e",
+      "answer_hash": "48a5563cf01c99c9"
+    },
+    "118": {
+      "task": "cubes_in_cup",
+      "n_frames": 628,
+      "valid_frames": 628,
+      "file": "episode_000118.npz",
+      "annotation": "b96f27deb05425c2",
+      "answer_hash": "b485e936f692fe32"
+    },
+    "119": {
+      "task": "cubes_in_cup",
+      "n_frames": 603,
+      "valid_frames": 603,
+      "file": "episode_000119.npz",
+      "annotation": "1163a131a54044aa",
+      "answer_hash": "6633df9e05678083"
+    },
+    "120": {
+      "task": "cubes_in_cup",
+      "n_frames": 624,
+      "valid_frames": 624,
+      "file": "episode_000120.npz",
+      "annotation": "370d849b9c916d6d",
+      "answer_hash": "1792db433de59ba2"
+    },
+    "121": {
+      "task": "cubes_in_cup",
+      "n_frames": 594,
+      "valid_frames": 594,
+      "file": "episode_000121.npz",
+      "annotation": "905a61a2ff91e030",
+      "answer_hash": "1e8714d0366dbbf1"
+    },
+    "122": {
+      "task": "cubes_in_cup",
+      "n_frames": 578,
+      "valid_frames": 578,
+      "file": "episode_000122.npz",
+      "annotation": "e42b749117207375",
+      "answer_hash": "679acf5e9050655c"
+    },
+    "123": {
+      "task": "cubes_in_cup",
+      "n_frames": 570,
+      "valid_frames": 570,
+      "file": "episode_000123.npz",
+      "annotation": "a6f9c5d1bd0433da",
+      "answer_hash": "e426b3cb2f91155e"
+    },
+    "124": {
+      "task": "cubes_in_cup",
+      "n_frames": 581,
+      "valid_frames": 581,
+      "file": "episode_000124.npz",
+      "annotation": "42660f8389af7872",
+      "answer_hash": "7891332708db0f9b"
+    },
+    "125": {
+      "task": "cubes_in_cup",
+      "n_frames": 577,
+      "valid_frames": 577,
+      "file": "episode_000125.npz",
+      "annotation": "f578a99ee4b77a02",
+      "answer_hash": "e36ff14727835984"
+    },
+    "126": {
+      "task": "cubes_in_cup",
+      "n_frames": 760,
+      "valid_frames": 760,
+      "file": "episode_000126.npz",
+      "annotation": "0d5e2f542ed96b6d",
+      "answer_hash": "01ec4f29501944cd"
+    },
+    "127": {
+      "task": "cubes_in_cup",
+      "n_frames": 586,
+      "valid_frames": 586,
+      "file": "episode_000127.npz",
+      "annotation": "094e623c262761ba",
+      "answer_hash": "590c83f77b54f41a"
+    },
+    "128": {
+      "task": "cubes_in_cup",
+      "n_frames": 590,
+      "valid_frames": 590,
+      "file": "episode_000128.npz",
+      "annotation": "c8cc0763e2829f41",
+      "answer_hash": "4652c5fe1e811f32"
+    },
+    "129": {
+      "task": "cubes_in_cup",
+      "n_frames": 573,
+      "valid_frames": 573,
+      "file": "episode_000129.npz",
+      "annotation": "4d5ea7e85b0a9435",
+      "answer_hash": "2d775cd0b2166d2c"
+    },
+    "130": {
+      "task": "cubes_in_cup",
+      "n_frames": 582,
+      "valid_frames": 582,
+      "file": "episode_000130.npz",
+      "annotation": "4062994af56db4b6",
+      "answer_hash": "3b179b2344a5a059"
+    },
+    "131": {
+      "task": "cubes_in_cup",
+      "n_frames": 511,
+      "valid_frames": 511,
+      "file": "episode_000131.npz",
+      "annotation": "dbdea6300248f709",
+      "answer_hash": "f54a5fc7d3e845e7"
+    },
+    "132": {
+      "task": "cubes_in_cup",
+      "n_frames": 476,
+      "valid_frames": 476,
+      "file": "episode_000132.npz",
+      "annotation": "f69a1a1ecddeed18",
+      "answer_hash": "19018695136243f9"
+    },
+    "133": {
+      "task": "cubes_in_cup",
+      "n_frames": 563,
+      "valid_frames": 563,
+      "file": "episode_000133.npz",
+      "annotation": "115a604f3d6c8eb3",
+      "answer_hash": "9b9addf23e8f03c9"
+    },
+    "134": {
+      "task": "cubes_in_cup",
+      "n_frames": 538,
+      "valid_frames": 538,
+      "file": "episode_000134.npz",
+      "annotation": "77a4120c51ce9598",
+      "answer_hash": "d3a3adf2d4341ddf"
+    },
+    "135": {
+      "task": "cubes_in_cup",
+      "n_frames": 510,
+      "valid_frames": 510,
+      "file": "episode_000135.npz",
+      "annotation": "b14752ee3f93b807",
+      "answer_hash": "9d633b60e7e0c733"
+    },
+    "136": {
+      "task": "cubes_in_cup",
+      "n_frames": 588,
+      "valid_frames": 588,
+      "file": "episode_000136.npz",
+      "annotation": "9c7b8f1be80539f4",
+      "answer_hash": "77d57e169aa3b651"
+    },
+    "137": {
+      "task": "cubes_in_cup",
+      "n_frames": 505,
+      "valid_frames": 505,
+      "file": "episode_000137.npz",
+      "annotation": "c722d6e908ffdbf4",
+      "answer_hash": "794244d8551a873b"
+    },
+    "138": {
+      "task": "cubes_in_cup",
+      "n_frames": 516,
+      "valid_frames": 516,
+      "file": "episode_000138.npz",
+      "annotation": "c1a03406c5f10916",
+      "answer_hash": "a21096b4e37b7374"
+    },
+    "139": {
+      "task": "cubes_in_cup",
+      "n_frames": 500,
+      "valid_frames": 500,
+      "file": "episode_000139.npz",
+      "annotation": "53bc16e0c6af1955",
+      "answer_hash": "4f066035fabe7b95"
+    },
+    "140": {
+      "task": "cubes_in_cup",
+      "n_frames": 506,
+      "valid_frames": 506,
+      "file": "episode_000140.npz",
+      "annotation": "dd3e6971b67808ef",
+      "answer_hash": "ec90f8b97f2bd25b"
+    },
+    "141": {
+      "task": "cubes_in_cup",
+      "n_frames": 522,
+      "valid_frames": 522,
+      "file": "episode_000141.npz",
+      "annotation": "975c78ca51b2f5df",
+      "answer_hash": "3cf3bb0a6629cf30"
+    },
+    "142": {
+      "task": "cubes_in_cup",
+      "n_frames": 510,
+      "valid_frames": 510,
+      "file": "episode_000142.npz",
+      "annotation": "306ad733280b7dde",
+      "answer_hash": "c4a6893eebe05254"
+    }
+  },
+  "skipped": {}
+}

@@ -31,7 +31,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..config import load_config
+from ..config import DATA_KINDS, is_real, load_config
 from ..models.model_config import DEFAULT_MODEL
 from . import pretrain_world_model
 from .pretrain_world_model import seed_everything
@@ -168,6 +168,30 @@ def evaluate_imitation(cfg, stage_a, actor, *, episodes: int,
         env.close()
 
 
+def check_real_run(cfg: Dict[str, Any], *, online_steps: int) -> None:
+    """Refuse what recorded robot data cannot do: it comes with no simulator."""
+    if not is_real(cfg):
+        return
+    if int(online_steps) > 0:
+        raise SystemExit("--online-steps needs the simulator and --data real "
+                         "has none; use --online-steps 0")
+    if int((cfg.get("eval") or {}).get("episodes") or 0) > 0:
+        raise SystemExit("--eval-episodes runs the policy in the simulator and "
+                         "--data real has none; use --eval-episodes 0")
+    task = (cfg.get("experiment") or {}).get("task")
+    prepare = f"python -m sim_vla.data.prepare_real --task {task}"
+    dataset = Path(cfg["task"]["dataset"])
+    if not dataset.is_file():
+        raise SystemExit(f"{dataset} does not exist; prepare it first: {prepare}")
+    graphs = (cfg["task"].get("source") or {}).get("graphs")
+    if graphs and Path(graphs).is_dir():
+        from ..data.convert_real import stale_reason
+
+        reason = stale_reason(dataset, graphs)
+        if reason is not None:
+            raise SystemExit(f"{reason}; convert it again: {prepare}")
+
+
 def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
         online_steps: int, device: str, root: Path,
         save_checkpoints: bool = False,
@@ -183,6 +207,7 @@ def run(cfg: Dict[str, Any], *, world_steps: int, imitation_steps: int,
     paths = stage_paths(root)
     report: Dict[str, Any] = {}
     logger = logger if logger is not None else RunLogger()
+    check_real_run(cfg, online_steps=int(online_steps))
 
     # Refused before anything expensive: the progress arm has no supervision
     # contract in this package, and discovering that after Stage 1A costs a
@@ -501,6 +526,10 @@ def parse_args(argv=None):
     parser.add_argument("--task", default="pickcube")
     parser.add_argument("--experiment", default="dreamer",
                         choices=("dreamer", "graph", "graph_progress"))
+    parser.add_argument("--data", default="sim", choices=DATA_KINDS,
+                        help="sim: the ManiSkill demonstrations (configs/"
+                             "tasks). real: recorded SO-101 episodes (configs/"
+                             "real/tasks), no simulator")
     parser.add_argument("--world-steps", type=int, default=50_000)
     parser.add_argument("--imitation-steps", type=int, default=20_000,
                         help="0 stops after the world model")
@@ -660,11 +689,13 @@ def main(argv=None) -> int:
     cfg = load_config(args.task, args.experiment,
                       overrides={"data": overrides, "online": online_overrides,
                                  "pretrain": pretrain_overrides,
-                                 "eval": eval_overrides})
+                                 "eval": eval_overrides},
+                      data=args.data)
     model_yaml = Path(args.model_config)
     if not model_yaml.is_file():
         raise SystemExit(f"model config does not exist: {model_yaml}")
     cfg.setdefault("runtime", {})["model_config"] = str(model_yaml)
+    check_real_run(cfg, online_steps=int(args.online_steps))
 
     # Seeded here, before anything is constructed. build() seeds again on its
     # own, but that is Stage 1A's call: the critic and the adapter are built
@@ -675,9 +706,13 @@ def main(argv=None) -> int:
     seed = int(cfg["data"]["seed"])
     seed_everything(seed)
 
-    root = Path(args.out or f"runs/sim_vla/{args.task}/{args.experiment}")
+    default_root = (f"runs/sim_vla/real/{args.task}/{args.experiment}"
+                    if args.data == "real"
+                    else f"runs/sim_vla/{args.task}/{args.experiment}")
+    root = Path(args.out or default_root)
     print(f"[pipeline] {args.task} / {args.experiment} on {args.device} "
-          f"seed {seed}", flush=True)
+          f"seed {seed}" + (" (real data)" if args.data == "real" else ""),
+          flush=True)
     print("[pipeline] checkpoints: "
           + (f"on -> {root}" if args.save_checkpoints
              else "off (stages pass their models in memory)"), flush=True)

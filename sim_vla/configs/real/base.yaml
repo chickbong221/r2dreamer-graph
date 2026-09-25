@@ -1,0 +1,12 @@
+# Layered over base.yaml by --data real: recorded SO-101 episodes converted by
+# sim_vla/data/convert_real.py. There is no simulator, so no online stage and
+# no simulator evaluation.
+data:
+  root: data/sim_vla_real
+
+model:
+  progress:
+    schedule_dir: sim_vla/configs/real/schedules
+
+eval:
+  episodes: 0

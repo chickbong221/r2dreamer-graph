@@ -1,0 +1,12 @@
+# Task 3 of hungho77/so101-multitask (episodes 99-142). Either cube may go
+# first, so progress is the mean of one schedule per cube.
+task:
+  env_id: so101/cubes_in_cup
+  instruction: "Pick up each cube and place it into the cup."
+  dataset: ${data.root}/cubes_in_cup/${data.name}
+  source:
+    lerobot: real_robot/outputs/source
+    graphs: real_robot/scene_graphs/cubes_in_cup
+  progress_schedules:
+    - {schedule: cubes_in_cup_red.json, weight: 0.5}
+    - {schedule: cubes_in_cup_blue.json, weight: 0.5}
