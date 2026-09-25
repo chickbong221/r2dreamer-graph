@@ -11,6 +11,14 @@ You are labelling one episode of a robot-manipulation dataset with its scene gra
 - The final recorded frame is also included, even when it is off the sampling grid. Its playback spacing may differ from recorded time; use the burned-in frame number and time.
 - The task text says what the operator tried to do; it is not evidence that it happened. An attempt can fail, stall, drop an object, retry or recover. Label only what the video shows.
 
+## Evidence procedure
+
+- Inspect both camera streams chronologically before writing intervals. Locate each visible transition, including failed attempts, slips, releases, retries and reversals. Do not assume that an episode follows a standard demonstration or contains a fixed number of pick-and-place phases.
+- Decide every fact from the visible state at that time. Task phase, elapsed time, gripper motion and the labels used in other episodes are not substitutes for visual evidence.
+- For `planar-distance`, `height-offset` and every compatibility relation, estimate the underlying geometry independently on each shown frame using the reference points and size rulers below. Do not create smooth ramps from reach/grasp/release timing. A label may stay in one bin, reverse direction or oscillate when that is what the video shows.
+- Gripper opening is only supporting evidence for release. Put the release boundary at the earliest shown frame supported by the whole sequence: jaw separation wider than the object, the object staying while the gripper departs, or the object moving independently of the jaws. Later frames may confirm that an earlier opening was the release. The jaws need not return to their fully open pose. Conversely, a partly open gripper can still hold an object if it remains constrained and follows the gripper.
+- Explicitly inspect both views of the final shown frame. Re-evaluate every object's `grasp`, `contact`, `support` and `contain` state there instead of carrying the preceding state to the end.
+
 ## Entities
 
 {{ENTITIES}}
@@ -34,8 +42,17 @@ Each line is one fact: its id, its orientation `relation(src, dst)`, and the lab
 - {{UNOBSERVED}}
 - If neither view supports a legal label, use JSON `null` for that interval (also for temporal change when either endpoint is unknown). This marks missing supervision, not a negative fact or stable motion. Do not invent metric precision from the approximate sizes.
 - Temporal labels use a window of K = {{K}} frames ({{K_SECONDS}} s): the temporal label at frame t is the change of the fact's value from frame t - {{K}} to frame t. Frames 0 to {{K_MINUS_ONE}} have no temporal label. For distances a decrease means the gap is closing; for `height-offset` it means `src` moves down relative to `dst`.
+- Derive temporal labels only after estimating the underlying absolute quantity at t and t - K. Use the change in that quantity, not the name of the action phase, the gripper's open/closed timing or a generic progress curve.
 - Absolute and temporal labels are independent: a distance can close quickly while staying inside one bin, so their boundaries need not coincide.
 - A label starts at the first frame on which its condition holds. Later frames may make you certain of what happened, but they never move a boundary away from where the condition first held.
+
+### Required consistency checks
+
+- `grasp(...)=holds` means the jaws touch and constrain the object. If the matching facts exist, `contact(...)=holds` and `grasp-compatibility(...)=match` must hold on the same frames.
+- `contact(...)=holds` implies `contact-compatibility(...)=match` when that compatibility fact exists.
+- `support(...)=src-holds` or `dst-holds` implies direct contact and `support-compatibility(...)=match` when those matching facts exist.
+- `contain(...)=src-holds` or `dst-holds` implies `contain-compatibility(...)=match` when that compatibility fact exists. Containment alone does not prove that the object touches the container; it may still be suspended inside by the gripper.
+- Grasp, support and containment must still be judged independently. During pickup or placement, more than one of them can briefly hold at once.
 
 ## Label definitions
 
@@ -61,6 +78,8 @@ Each line is one fact: its id, its orientation `relation(src, dst)`, and the lab
 Report:
 
 {{ITEMS}}
+
+Before returning the answer, silently audit the first and final frames, every grasp and release, every retry, full interval coverage, legal labels, and the consistency checks above. Return only the JSON object required by the response schema; do not add Markdown or explanatory prose outside it.
 
 <!-- ITEM target -->
 `active_target`: contiguous intervals `{start, end, object}` covering every frame from 0 to {{LAST_FRAME}} exactly once. The active target is {{TARGET_RULE}}

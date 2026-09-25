@@ -63,7 +63,27 @@ sbatch runs/sim_vla/real/slurm_cubes_in_cup_graph_progress.sh
 sbatch runs/sim_vla/real/slurm_cubes_in_cup_baseline.sh
 ```
 
-Elsewhere, the same steps for `cubes_in_cup`, graph_progress and baseline:
+Elsewhere, the same steps for each task: graph_progress, then the baseline (`--experiment dreamer`). `stackcube` has about half the frames and trains 15000 steps per stage:
+
+```bash
+python -m sim_vla.data.prepare_real --task stackcube
+python -m sim_vla.training.pipeline \
+  --data real --task stackcube --experiment graph_progress \
+  --world-steps 15000 --imitation-steps 15000 --online-steps 0 \
+  --world-lr 1e-4 --world-warmup-steps 1000 --world-final-lr 1e-5 \
+  --imitation-lr 1e-4 --imitation-warmup-steps 1000 --imitation-final-lr 2.5e-6 \
+  --seed 0 --device cuda \
+  --save-checkpoints --out logdir/sim_vla/real/stackcube/graph_progress_seed0
+python -m sim_vla.training.pipeline \
+  --data real --task stackcube --experiment dreamer \
+  --world-steps 15000 --imitation-steps 15000 --online-steps 0 \
+  --world-lr 1e-4 --world-warmup-steps 1000 --world-final-lr 1e-5 \
+  --imitation-lr 1e-4 --imitation-warmup-steps 1000 --imitation-final-lr 2.5e-6 \
+  --seed 0 --device cuda \
+  --save-checkpoints --out logdir/sim_vla/real/stackcube/dreamer_seed0
+```
+
+`cubes_in_cup` trains 20000 steps per stage:
 
 ```bash
 python -m sim_vla.data.prepare_real --task cubes_in_cup
@@ -83,4 +103,4 @@ python -m sim_vla.training.pipeline \
   --save-checkpoints --out logdir/sim_vla/real/cubes_in_cup/dreamer_seed0
 ```
 
-`stackcube` has about half the frames and trains 15000 steps per stage. To update the graphs, replace `real_robot/scene_graphs/<task>/` with the folder `real_robot.preprocessing.pack_graphs` wrote, commit and push; `prepare_real` converts again after the next pull, and training refuses a dataset older than its graphs.
+To update the graphs, replace `real_robot/scene_graphs/<task>/` with the folder `real_robot.preprocessing.pack_graphs` wrote, commit and push; `prepare_real` converts again after the next pull, and training refuses a dataset older than its graphs.

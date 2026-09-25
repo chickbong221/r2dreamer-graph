@@ -1,14 +1,16 @@
-"""Label each episode's scene graph with Gemini.
+"""Label each episode's scene graph with a structured-output video LLM.
 
     python -m real_robot.preprocessing.annotate_episode --episodes pilot
 
-One request per episode shows both cameras over the whole episode and asks for
-the active target, every fact's label intervals and box keyframes. An answer
-cut off at the output limit is asked for again in smaller pieces. Problems
-found by validation are sent back for the parts they concern, at most
-``repair_rounds`` times; the episode is saved either way, with its issues, and
-packing refuses an invalid one. Every response is cached on disk, so a rerun
-repeats no call that was already answered.
+The bundled entry point uses Gemini. Another provider can reuse the prompt and
+schema builders by supplying a compatible ``settings``/``generate_json``
+client adapter. One request per episode shows both cameras over the whole
+episode and asks for the active target, every fact's label intervals and box
+keyframes. An answer cut off at the output limit is asked for again in smaller
+pieces. Problems found by validation are sent back for the parts they concern,
+at most ``repair_rounds`` times; the episode is saved either way, with its
+issues, and packing refuses an invalid one. Every response is cached on disk,
+so a rerun repeats no call that was already answered.
 """
 
 from __future__ import annotations
@@ -135,7 +137,48 @@ def _interval_schema(labels: Sequence[str]) -> Dict[str, Any]:
         "type": "object",
         "properties": {"start": {"type": "integer"}, "end": {"type": "integer"},
                        "label": {"type": ["string", "null"], "enum": [*labels, None]}},
-        "required": ["start", "end", "label"]}}
+        "required": ["start", "end", "label"],
+        "additionalProperties": False}}
+
+
+def _fact_schema(spec: GraphSpec, fid: str, fact) -> Dict[str, Any]:
+    """A fact-specific schema, so the model cannot mix vocabularies between facts."""
+    temporal = (_interval_schema(list(CHANGE_LABELS)) if fact.temporal
+                else {"type": "array", "maxItems": 0})
+    return {
+        "type": "object",
+        "properties": {
+            "fact": {"type": "string", "enum": [fid]},
+            "absolute": _interval_schema(spec.legal_labels(fact.relation)),
+            "temporal": temporal,
+        },
+        "required": ["fact", "absolute", "temporal"],
+        "additionalProperties": False,
+    }
+
+
+def _box_schema(entity: str, camera: str) -> Dict[str, Any]:
+    """A schema for one exact entity-camera slot, rather than a cross product."""
+    return {
+        "type": "object",
+        "properties": {
+            "entity": {"type": "string", "enum": [entity]},
+            "camera": {"type": "string", "enum": [camera]},
+            "keyframes": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "frame": {"type": "integer"},
+                    "visible": {"type": "boolean"},
+                    "box_2d": {"type": "array", "items": {"type": "integer"},
+                               "minItems": 4, "maxItems": 4},
+                },
+                "required": ["frame", "visible", "box_2d"],
+                "additionalProperties": False,
+            }},
+        },
+        "required": ["entity", "camera", "keyframes"],
+        "additionalProperties": False,
+    }
 
 
 def answer_schema(spec: GraphSpec, scope: Scope) -> Dict[str, Any]:
@@ -145,35 +188,26 @@ def answer_schema(spec: GraphSpec, scope: Scope) -> Dict[str, Any]:
             "type": "object",
             "properties": {"start": {"type": "integer"}, "end": {"type": "integer"},
                            "object": {"type": "string", "enum": list(spec.targets)}},
-            "required": ["start", "end", "object"]}}
+            "required": ["start", "end", "object"],
+            "additionalProperties": False}}
     if scope.facts:
         index = dict(zip(fact_ids(spec), spec.facts))
-        labels: List[str] = []
-        for fid in scope.facts:
-            for label in spec.legal_labels(index[fid].relation):
-                if label not in labels:
-                    labels.append(label)
-        properties["facts"] = {"type": "array", "items": {
-            "type": "object",
-            "properties": {"fact": {"type": "string", "enum": list(scope.facts)},
-                           "absolute": _interval_schema(labels),
-                           "temporal": _interval_schema(list(CHANGE_LABELS))},
-            "required": ["fact", "absolute", "temporal"]}}
+        properties["facts"] = {
+            "type": "array",
+            "items": {"anyOf": [_fact_schema(spec, fid, index[fid]) for fid in scope.facts]},
+            "minItems": len(scope.facts),
+            "maxItems": len(scope.facts),
+        }
     if scope.boxes:
-        properties["boxes"] = {"type": "array", "items": {
-            "type": "object",
-            "properties": {
-                "entity": {"type": "string", "enum": sorted({entity for entity, _ in scope.boxes})},
-                "camera": {"type": "string", "enum": sorted({camera for _, camera in scope.boxes})},
-                "keyframes": {"type": "array", "items": {
-                    "type": "object",
-                    "properties": {"frame": {"type": "integer"}, "visible": {"type": "boolean"},
-                                   "box_2d": {"type": "array", "items": {"type": "integer"},
-                                              "minItems": 4, "maxItems": 4}},
-                    "required": ["frame", "visible", "box_2d"]}}},
-            "required": ["entity", "camera", "keyframes"]}}
+        properties["boxes"] = {
+            "type": "array",
+            "items": {"anyOf": [_box_schema(entity, camera) for entity, camera in scope.boxes]},
+            "minItems": len(scope.boxes),
+            "maxItems": len(scope.boxes),
+        }
     properties["notes"] = {"type": "string"}
-    return {"type": "object", "properties": properties, "required": list(properties)}
+    return {"type": "object", "properties": properties, "required": list(properties),
+            "additionalProperties": False}
 
 
 def split_scope(scope: Scope) -> List[Scope]:
@@ -242,7 +276,7 @@ class EpisodeAnnotator:
 
     def input_identity(self, spec: GraphSpec, prepared: Mapping[str, Any]) -> Dict[str, Any]:
         return {"format": ANNOTATION_FORMAT, "graph": spec.identity(), "labels": stable_hash(self.labels_cfg),
-                "prompt": self.prompt_hash, "gemini": self.client.settings(),
+                "prompt": self.prompt_hash, "llm": self.client.settings(),
                 "videos": {camera: info["sha256"] for camera, info in sorted(prepared["cameras"].items())},
                 "rendered_spec": stable_hash(self.spec_text(spec)),
                 "instruction": spec.instruction, "target_rule": spec.target_rule,
@@ -389,7 +423,7 @@ def reusable(path: str, identity: Mapping[str, Any]) -> bool:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     from ..data.source import LeRobotSource
 
-    parser = argparse.ArgumentParser(description="Annotate episodes' scene graphs with Gemini.")
+    parser = argparse.ArgumentParser(description="Annotate episodes' scene graphs with a video LLM (Gemini client).")
     parser.add_argument("--episodes", default="pilot")
     parser.add_argument("--force", action="store_true", help="annotate again even when the inputs are unchanged")
     add_config_arguments(parser)

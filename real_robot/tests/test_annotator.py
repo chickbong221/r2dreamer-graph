@@ -7,8 +7,8 @@ import os
 import tempfile
 import unittest
 
-from ..graphs.validate import fact_ids, full_scope
-from ..preprocessing.annotate_episode import EpisodeAnnotator, labels_text
+from ..graphs.validate import Scope, fact_ids, full_scope
+from ..preprocessing.annotate_episode import EpisodeAnnotator, answer_schema, labels_text
 from ..preprocessing.gemini_client import GeminiClient, TextPart, VideoPart
 from . import synthetic
 
@@ -49,12 +49,15 @@ def answering(answer, extra_facts=()):
         if "active_target" in props:
             out["active_target"] = answer.get("active_target", [])
         if "facts" in props:
-            wanted = props["facts"]["items"]["properties"]["fact"]["enum"]
+            variants = props["facts"]["items"]["anyOf"]
+            wanted = [variant["properties"]["fact"]["enum"][0] for variant in variants]
             out["facts"] = [f for f in answer["facts"] if f["fact"] in wanted] + list(extra_facts)
         if "boxes" in props:
-            item = props["boxes"]["items"]["properties"]
+            variants = props["boxes"]["items"]["anyOf"]
+            wanted = {(variant["properties"]["entity"]["enum"][0],
+                       variant["properties"]["camera"]["enum"][0]) for variant in variants}
             out["boxes"] = [b for b in answer["boxes"]
-                            if b["entity"] in item["entity"]["enum"] and b["camera"] in item["camera"]["enum"]]
+                            if (b["entity"], b["camera"]) in wanted]
         return json.dumps(out), USAGE, "STOP"
     return respond
 
@@ -116,8 +119,11 @@ class Flow(unittest.TestCase):
         annotation = annotator.annotate(3, self.prepared)
         self.assertTrue(annotation.valid, [i.message for i in annotation.issues])
         repair = client.schemas[1]["properties"]
-        self.assertEqual(repair["facts"]["items"]["properties"]["fact"]["enum"], ["F07"])
-        self.assertEqual(repair["boxes"]["items"]["properties"]["entity"]["enum"], ["lid"])
+        fact_variant = repair["facts"]["items"]["anyOf"][0]
+        box_variant = repair["boxes"]["items"]["anyOf"][0]
+        self.assertEqual(fact_variant["properties"]["fact"]["enum"], ["F07"])
+        self.assertEqual(box_variant["properties"]["entity"]["enum"], ["lid"])
+        self.assertEqual(box_variant["properties"]["camera"]["enum"], ["wrist"])
         self.assertNotIn("active_target", repair)
         self.assertEqual(annotation.repair_log[0]["issues_after"], 0)
         self.assertEqual(len(annotation.repair_log[0]["rejected"]), 1)
@@ -150,6 +156,38 @@ class Flow(unittest.TestCase):
             text = labels_text(spec, labels)
             for relation in spec.relations_in_use:
                 self.assertIn(f"`{relation}`", text, f"{task}: {relation}")
+
+    def test_prompt_requires_visual_measurement_release_and_final_frame_audit(self):
+        annotator, _ = self.annotator("cubes_in_cup", [])
+        text = annotator.spec_text(annotator.source.spec(3))
+        for required in (
+            "Do not create smooth ramps",
+            "The jaws need not return to their fully open pose",
+            "including failed attempts, slips, releases, retries and reversals",
+            "Explicitly inspect both views of the final shown frame",
+            "not the name of the action phase",
+            "Containment alone does not prove",
+        ):
+            self.assertIn(required, text)
+
+    def test_schema_uses_exact_fact_vocabularies_and_entity_camera_slots(self):
+        spec = synthetic.spec("banana_pot_lid")
+        ids = fact_ids(spec)
+        scope = Scope(facts=[ids[0], ids[2]], boxes=[("lid", "top"), ("pot", "wrist")])
+        schema = answer_schema(spec, scope)
+        self.assertFalse(schema["additionalProperties"])
+
+        variants = schema["properties"]["facts"]["items"]["anyOf"]
+        by_id = {v["properties"]["fact"]["enum"][0]: v for v in variants}
+        for fid in scope.facts:
+            fact = spec.facts[ids.index(fid)]
+            labels = by_id[fid]["properties"]["absolute"]["items"]["properties"]["label"]["enum"]
+            self.assertEqual(labels, [*spec.legal_labels(fact.relation), None])
+
+        box_variants = schema["properties"]["boxes"]["items"]["anyOf"]
+        exact_slots = {(v["properties"]["entity"]["enum"][0],
+                        v["properties"]["camera"]["enum"][0]) for v in box_variants}
+        self.assertEqual(exact_slots, set(scope.boxes))
 
 
 if __name__ == "__main__":
