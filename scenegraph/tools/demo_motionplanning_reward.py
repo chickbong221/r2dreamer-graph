@@ -288,6 +288,7 @@ RULE_WIDTH = 1.9
 TICK_SIZE = 12.5
 LABEL_SIZE = 15.0
 TITLE_SIZE = 15.5
+FIGSIZE = (5.6, 2.8)
 
 
 def figure_title(env_id: str) -> str:
@@ -322,8 +323,19 @@ def percent_ticks(steps: Sequence[int], count: int = 6):
     return positions, labels
 
 
+def fix_margins(fig, margins: Sequence[float]) -> None:
+    """Pin the axes at (left, right, bottom, top) inches from the figure edge."""
+    width, height = fig.get_size_inches()
+    left, right, bottom, top = margins
+    fig.subplots_adjust(left=left / width, right=1 - right / width,
+                        bottom=bottom / height, top=1 - top / height)
+
+
 def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
-                       dpi: int = 300) -> Optional[Path]:
+                       dpi: int = 300,
+                       figsize: Sequence[float] = FIGSIZE,
+                       margins: Optional[Sequence[float]] = None
+                       ) -> Optional[Path]:
     """The per-step reward across one episode.
 
     One vertical rule carries what the reward curve alone cannot say: where the
@@ -360,7 +372,7 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
 
     steps = [s.step for s in trace.steps]
     first = trace.first_success_step()
-    fig, ax = plt.subplots(figsize=(5.6, 2.8))
+    fig, ax = plt.subplots(figsize=tuple(figsize))
 
     # The curve stays in step units. Only the ticks below are relabelled.
     ax.plot(steps, [s.reward for s in trace.steps], color=REWARD_COLOUR,
@@ -401,8 +413,10 @@ def draw_reward_figure(trace: RewardTrace, path: Path, *, title: str = "",
     # JSON sidecar, which is where a caption would be written from anyway.
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(path), dpi=dpi, bbox_inches="tight", pad_inches=0.02,
-                facecolor="white")
+    if margins:
+        fix_margins(fig, margins)
+    fig.savefig(str(path), dpi=dpi, bbox_inches=None if margins else "tight",
+                pad_inches=0.02, facecolor="white")
     plt.close(fig)
     return path
 

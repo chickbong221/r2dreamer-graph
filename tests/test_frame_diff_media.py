@@ -4,6 +4,7 @@ import csv
 import importlib.util
 import pathlib
 import shutil
+import struct
 import tempfile
 import unittest
 
@@ -11,8 +12,9 @@ import numpy as np
 
 from scenegraph.figures.diff_writer import DiffEpisodeWriter
 from scenegraph.tools.plot_frame_diff import (
-    CSV_FIELDS, diff_metrics, draw_episode, draw_panels, episode_rows,
-    first_success_step, load_manifest, shared_tops, write_csv,
+    CSV_FIELDS, diff_metrics, draw_episode, draw_panels, draw_reward,
+    episode_rows, first_success_step, load_manifest, reward_trace, shared_tops,
+    write_csv,
 )
 from scenegraph.tools.render_diff_video import (
     BLOCK, PANELS, GridCanvas, episode_frames, panel_keys, video_records,
@@ -90,6 +92,53 @@ class ChartTest(TempRoot):
             written = draw_panels(panels, self.root / "out" / f"panels_{sharey}",
                                   cols=2, sharey=sharey, metric="changed")
             self.assertTrue(all(p.stat().st_size > 0 for p in written))
+
+
+def _png_size(path):
+    return struct.unpack(">II", path.read_bytes()[16:24])
+
+
+def _png_aspect(path):
+    width, height = _png_size(path)
+    return height / width
+
+
+class RestyleTest(TempRoot):
+    def test_reward_trace_keeps_the_exported_steps(self):
+        episode = _write_episode(self.root)
+        trace = reward_trace(episode_rows(episode, load_manifest(episode)))
+        self.assertEqual([s.step for s in trace.steps], [1, 2, 3])
+        self.assertAlmostEqual(trace.steps[-1].ret, 0.6)
+        self.assertEqual(trace.first_success_step(), 2)
+
+    def test_reward_figure_and_taller_single_camera_figure(self):
+        episode = _write_episode(self.root)
+        rows = episode_rows(episode, load_manifest(episode))
+        written = draw_reward(rows, self.root / "reward" / "A", title="",
+                              figsize=(5.6, 4.2), dpi=60)
+        self.assertEqual([p.suffix for p in written], [".csv", ".png", ".pdf"])
+        wide = draw_episode(rows, self.root / "out" / "wide", title="Task One",
+                            first_success=2, dpi=60)[0]
+        tall = draw_episode(rows, self.root / "out" / "tall", title="",
+                            first_success=2, roles=("wrist",),
+                            figsize=(5.6, 4.2), dpi=60)[0]
+        self.assertGreater(_png_aspect(tall), _png_aspect(wide))
+        panels = draw_panels([("One", rows, 2), ("Two", rows, None)],
+                             self.root / "out" / "panels", roles=("wrist",),
+                             dpi=60)
+        self.assertTrue(all(p.stat().st_size > 0 for p in panels))
+
+    def test_fixed_margins_give_diff_and_reward_one_canvas(self):
+        episode = _write_episode(self.root)
+        rows = episode_rows(episode, load_manifest(episode))
+        margins = (0.85, 0.18, 0.56, 0.1)
+        diff = draw_episode(rows, self.root / "out" / "d", title="",
+                            first_success=2, roles=("wrist",),
+                            figsize=(5.6, 4.2), margins=margins, dpi=50)[0]
+        reward = draw_reward(rows, self.root / "reward" / "r", title="",
+                             figsize=(5.6, 4.2), margins=margins, dpi=50)[1]
+        self.assertEqual(_png_size(diff), (280, 210))
+        self.assertEqual(_png_size(reward), (280, 210))
 
 
 class SharedTopsTest(unittest.TestCase):

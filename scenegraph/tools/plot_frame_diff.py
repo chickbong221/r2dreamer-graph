@@ -12,6 +12,18 @@ Per episode: <out>/<name>.png, .pdf and .csv. With two or more episodes, also
 sum |I_t - I_{t-1}| / (255 * H * W * 3), from the raw diff/ PNGs.
 --metric changed: fraction of pixels whose largest channel difference exceeds
 --threshold (out of 255). The CSV always carries both.
+
+--roles, --figsize, --margins and --no-title restyle the per-episode figure
+(panels keep their titles). --reward-out DIR also draws each episode's per-step
+reward with draw_reward_figure, at the same size, margins and title setting, as
+DIR/<name>.png, .pdf and .csv. With --margins the two figures share one axes
+box, so stacked they keep the success rule in one column:
+
+    python -m scenegraph.tools.plot_frame_diff \
+        data/paper_figures/CloseSubtaskTrain-v0_kitchen_counter_seed0000 \
+        --out data/paper_figures/pixel_diff --roles wrist --no-title \
+        --figsize 5.6 4.2 --margins 0.85 0.18 0.56 0.1 \
+        --reward-out data/paper_figures/reward
 """
 
 from __future__ import annotations
@@ -27,8 +39,9 @@ import numpy as np
 
 from scenegraph.figures.diff_writer import MANIFEST, load_png
 from scenegraph.tools.demo_motionplanning_reward import (
-    CURVE_WIDTH, FONT_STACK, GRID, INK, LABEL_SIZE, RULE_WIDTH, SUCCESS_COLOUR,
-    TICK_SIZE, TITLE_SIZE, percent_ticks,
+    CURVE_WIDTH, FIGSIZE, FONT_STACK, GRID, INK, LABEL_SIZE, RULE_WIDTH,
+    SUCCESS_COLOUR, TICK_SIZE, TITLE_SIZE, RewardTrace, StepRecord,
+    draw_reward_figure, fix_margins, percent_ticks,
 )
 
 ROLES = ("head", "wrist")
@@ -128,11 +141,15 @@ def _style_axes(ax, *, labelsize: float, length: float, width: float,
                    length=length, width=width, pad=pad)
 
 
-def _save(fig, path: Path, dpi: int) -> List[Path]:
+def _save(fig, path: Path, dpi: int,
+          margins: Optional[Sequence[float]] = None) -> List[Path]:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if margins:
+        fix_margins(fig, margins)
     written = []
     for target in (path.with_suffix(".png"), path.with_suffix(".pdf")):
-        fig.savefig(str(target), dpi=dpi, bbox_inches="tight", pad_inches=0.02,
+        fig.savefig(str(target), dpi=dpi,
+                    bbox_inches=None if margins else "tight", pad_inches=0.02,
                     facecolor="white")
         written.append(target)
     return written
@@ -140,13 +157,16 @@ def _save(fig, path: Path, dpi: int) -> List[Path]:
 
 def draw_episode(rows: Sequence[Dict[str, Any]], path: Path, *, title: str,
                  first_success: Optional[int], metric: str = "mad",
+                 roles: Sequence[str] = ROLES,
+                 figsize: Sequence[float] = FIGSIZE,
+                 margins: Optional[Sequence[float]] = None,
                  dpi: int = 300) -> List[Path]:
     """One episode, sized and styled like ``draw_reward_figure``."""
     plt = house_pyplot()
     steps = [row["step"] for row in rows]
-    fig, ax = plt.subplots(figsize=(5.6, 2.8))
+    fig, ax = plt.subplots(figsize=tuple(figsize))
     peak = 0.0
-    for role in ROLES:
+    for role in roles:
         values = [row[f"{role}_{metric}"] for row in rows]
         peak = max(peak, max(values))
         ax.plot(steps, values, color=ROLE_COLOURS[role], linewidth=CURVE_WIDTH,
@@ -174,8 +194,39 @@ def draw_episode(rows: Sequence[Dict[str, Any]], path: Path, *, title: str,
     legend.set_zorder(4)
     for text in legend.get_texts():
         text.set_color(INK)
-    written = _save(fig, path, dpi)
+    written = _save(fig, path, dpi, margins)
     plt.close(fig)
+    return written
+
+
+def reward_trace(rows: Sequence[Dict[str, Any]]) -> RewardTrace:
+    """The rows' per-step reward, keeping each row's own step number."""
+    trace = RewardTrace()
+    ret = discounted = 0.0
+    for index, row in enumerate(r for r in rows if r.get("reward") is not None):
+        reward = float(row["reward"])
+        ret += reward
+        discounted += trace.discount ** index * reward
+        trace.steps.append(StepRecord(
+            step=int(row["step"]), reward=reward, ret=ret,
+            discounted=discounted, success=bool(row["success"]),
+            terminated=False, truncated=False,
+        ))
+    return trace
+
+
+def draw_reward(rows: Sequence[Dict[str, Any]], path: Path, *, title: str,
+                figsize: Sequence[float] = FIGSIZE,
+                margins: Optional[Sequence[float]] = None,
+                dpi: int = 300) -> List[Path]:
+    """The episode's reward figure, as PNG and PDF, and its CSV."""
+    trace = reward_trace(rows)
+    if not trace.steps:
+        raise SystemExit(f"{path.name}: the episode records no rewards")
+    written = [trace.write_csv(path.with_suffix(".csv"))]
+    for target in (path.with_suffix(".png"), path.with_suffix(".pdf")):
+        written.append(draw_reward_figure(trace, target, title=title, dpi=dpi,
+                                          figsize=figsize, margins=margins))
     return written
 
 
@@ -191,7 +242,8 @@ def shared_tops(peaks: Sequence[float], cols: int, sharey: str) -> List[float]:
 
 def draw_panels(episodes: Sequence[Tuple[str, Sequence[Dict[str, Any]], Optional[int]]],
                 path: Path, *, metric: str = "mad", cols: int = 3,
-                sharey: str = "row", dpi: int = 300) -> List[Path]:
+                sharey: str = "row", roles: Sequence[str] = ROLES,
+                dpi: int = 300) -> List[Path]:
     """Small multiples: one panel per episode, head and wrist in each."""
     from matplotlib.lines import Line2D
 
@@ -204,7 +256,7 @@ def draw_panels(episodes: Sequence[Tuple[str, Sequence[Dict[str, Any]], Optional
         rows_n, cols, squeeze=False, sharey=share,
         figsize=(PANEL_WIDTH * cols + 0.55, PANEL_HEIGHT * rows_n + 0.2),
     )
-    peaks = [max(row[f"{role}_{metric}"] for row in rows for role in ROLES)
+    peaks = [max(row[f"{role}_{metric}"] for row in rows for role in roles)
              for _, rows, _ in episodes]
     tops = shared_tops(peaks, cols, sharey)
     for index, ax in enumerate(axes.flat):
@@ -213,7 +265,7 @@ def draw_panels(episodes: Sequence[Tuple[str, Sequence[Dict[str, Any]], Optional
             continue
         title, rows, first_success = episodes[index]
         steps = [row["step"] for row in rows]
-        for role in ROLES:
+        for role in roles:
             ax.plot(steps, [row[f"{role}_{metric}"] for row in rows],
                     color=ROLE_COLOURS[role], linewidth=PANEL_LINEWIDTH,
                     solid_capstyle="round", solid_joinstyle="round", zorder=3)
@@ -233,7 +285,7 @@ def draw_panels(episodes: Sequence[Tuple[str, Sequence[Dict[str, Any]], Optional
             ax.set_ylabel(METRIC_LABELS[metric], fontsize=PANEL_LABEL_SIZE,
                           color=INK, labelpad=4)
     handles = [Line2D([], [], color=ROLE_COLOURS[role], linewidth=PANEL_LINEWIDTH,
-                      label=ROLE_LABELS[role]) for role in ROLES]
+                      label=ROLE_LABELS[role]) for role in roles]
     legend_band = 0.10 / rows_n
     fig.tight_layout(rect=(0, legend_band, 1, 1), w_pad=1.1, h_pad=1.2)
     bottom = min(ax.get_position().y0 for ax in axes.flat if ax.get_visible())
@@ -262,9 +314,15 @@ def run(args) -> int:
         rows = episode_rows(episode, manifest, args.threshold)
         success = first_success_step(manifest)
         csv_path = write_csv(rows, out / f"{name}.csv")
-        figures = draw_episode(rows, out / name, title=title,
+        chart_title = "" if args.no_title else title
+        figures = draw_episode(rows, out / name, title=chart_title,
                                first_success=success, metric=args.metric,
-                               dpi=args.dpi)
+                               roles=args.roles, figsize=args.figsize,
+                               margins=args.margins, dpi=args.dpi)
+        if args.reward_out:
+            figures += draw_reward(rows, Path(args.reward_out) / name,
+                                   title=chart_title, figsize=args.figsize,
+                                   margins=args.margins, dpi=args.dpi)
         panels.append((title, rows, success))
         means = {role: float(np.mean([r[f"{role}_{args.metric}"] for r in rows]))
                  for role in ROLES}
@@ -276,7 +334,8 @@ def run(args) -> int:
     if len(panels) > 1:
         for target in draw_panels(panels, out / "pixel_diff_panels",
                                   metric=args.metric, cols=args.cols,
-                                  sharey=args.sharey, dpi=args.dpi):
+                                  sharey=args.sharey, roles=args.roles,
+                                  dpi=args.dpi):
             print(f"wrote {target}", flush=True)
     return 0
 
@@ -295,6 +354,19 @@ def parse_args(argv=None):
     p.add_argument("--cols", type=int, default=3,
                    help="panels per row in the multi-episode figure; 0 is one row")
     p.add_argument("--sharey", choices=("all", "row", "none"), default="row")
+    p.add_argument("--roles", nargs="+", choices=ROLES, default=list(ROLES),
+                   help="cameras to draw; the CSV always carries both")
+    p.add_argument("--figsize", nargs=2, type=float, default=list(FIGSIZE),
+                   metavar=("W", "H"),
+                   help="per-episode figure size in inches")
+    p.add_argument("--margins", nargs=4, type=float, default=None,
+                   metavar=("LEFT", "RIGHT", "BOTTOM", "TOP"),
+                   help="fixed margins in inches instead of a tight crop, so "
+                        "the diff and reward figures stack with aligned axes")
+    p.add_argument("--no-title", action="store_true",
+                   help="leave the per-episode figures untitled")
+    p.add_argument("--reward-out", default="",
+                   help="also write each episode's reward figure and CSV here")
     p.add_argument("--dpi", type=int, default=300)
     return p.parse_args(argv)
 

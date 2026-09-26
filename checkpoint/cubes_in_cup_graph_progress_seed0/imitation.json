@@ -1,0 +1,158 @@
+{
+  "graph_enabled": true,
+  "stage": "imitation",
+  "env_id": "so101/cubes_in_cup",
+  "feature_dim": 5632,
+  "dataset_identity": {
+    "dataset": "data/sim_vla_real/cubes_in_cup/demos.h5",
+    "episodes": 44
+  },
+  "normalization_identity": {
+    "mode": "mean_std",
+    "fields": [
+      "actions",
+      "proprio"
+    ],
+    "statistics": "70040ca9e554bbebb6d996f20f9c828663dcd725",
+    "dataset": {
+      "env_id": "so101/cubes_in_cup",
+      "episodes": 44,
+      "control_mode": "joint_position_target",
+      "action_dim": 6,
+      "proprio_names": [
+        "shoulder_pan.pos",
+        "shoulder_lift.pos",
+        "elbow_flex.pos",
+        "wrist_flex.pos",
+        "wrist_roll.pos",
+        "gripper.pos"
+      ],
+      "repo_revision": "unknown"
+    }
+  },
+  "pretrained_revision": "d9f33c94a60fb382c90dea2164c96845bd955e28",
+  "config": {
+    "model": {
+      "rep_loss": "dreamer",
+      "graph": {
+        "enabled": true,
+        "n_max": 8,
+        "e_max": 168,
+        "n_cams": 2
+      },
+      "progress": {
+        "enabled": true,
+        "beta": 0.05,
+        "schedule_dir": "sim_vla/configs/real/schedules",
+        "configs": "scenegraph/configs",
+        "beta_warmup_start": 400000,
+        "beta_warmup_end": 700000
+      }
+    },
+    "data": {
+      "root": "data/sim_vla_real",
+      "name": "demos.h5",
+      "sequence_length": 64,
+      "burn_in": 8,
+      "batch_size": 16,
+      "ignore_terminations": true,
+      "normalization": "mean_std",
+      "seed": 0
+    },
+    "pretrain": {
+      "world_lr": 0.0001,
+      "imitation_lr": 0.0001,
+      "world_warmup_steps": 1000,
+      "world_final_lr": 1e-05,
+      "imitation_warmup_steps": 1000,
+      "imitation_final_lr": 2.5e-06
+    },
+    "online": {
+      "train_ratio": 64,
+      "precision": "bfloat16",
+      "imagination_microbatch": 16,
+      "critic_warmup": 150,
+      "profile": false,
+      "actor_lr": null,
+      "world_lr": null,
+      "critic_lr": null,
+      "progress_lr": null,
+      "demo_anchor": 0.0,
+      "anchor_windows": 8,
+      "anchor_rows": 64,
+      "anchor_microbatch": 16,
+      "grad_report_every": 50,
+      "return_norm": false,
+      "progress_warmup_start": null,
+      "progress_warmup_end": null,
+      "chunk_size": 5,
+      "num_envs": 16,
+      "reconfiguration_freq": null
+    },
+    "actor": {
+      "pretrained": "lerobot/smolvla_base",
+      "revision": "d9f33c94a60fb382c90dea2164c96845bd955e28",
+      "lerobot_version": "0.4.4",
+      "chunk_size": 0,
+      "execute": 5,
+      "flow_steps": 5,
+      "state_tokens": 1,
+      "state_token_mode": "embedding"
+    },
+    "wandb": {
+      "enabled": true,
+      "project": "sim_vla",
+      "entity": "",
+      "group": "",
+      "name": "",
+      "mode": "online",
+      "tags": []
+    },
+    "diagnostics": {
+      "record_graphs": false
+    },
+    "eval": {
+      "episodes": 0,
+      "max_steps": 150,
+      "seeds_start": 900000
+    },
+    "task": {
+      "env_id": "so101/cubes_in_cup",
+      "instruction": "Pick up each cube and place it into the cup.",
+      "dataset": "data/sim_vla_real/cubes_in_cup/demos.h5",
+      "source": {
+        "lerobot": "real_robot/outputs/source",
+        "graphs": "real_robot/scene_graphs/cubes_in_cup"
+      },
+      "progress_schedules": [
+        {
+          "schedule": "cubes_in_cup_red.json",
+          "weight": 0.5
+        },
+        {
+          "schedule": "cubes_in_cup_blue.json",
+          "weight": 0.5
+        }
+      ]
+    },
+    "experiment": {
+      "task": "cubes_in_cup",
+      "arm": "graph_progress",
+      "data": "real"
+    },
+    "runtime": {
+      "model_config": "/home/duongnm2/projects/r2dreamer-graph-real/configs/model/size50M_graph_simple.yaml"
+    },
+    "device": "cuda"
+  },
+  "step": 20000,
+  "extra": {
+    "progress_head": {
+      "architecture": "networks.ProgressHead",
+      "output": "sigmoid_0_1",
+      "objective": "masked_huber_delta_0.1",
+      "stage_1a": "joint_with_world_model"
+    },
+    "progress_model_scale": 1.0
+  }
+}
